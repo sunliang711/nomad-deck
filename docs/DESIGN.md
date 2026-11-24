@@ -467,17 +467,24 @@ nomad-deck/
 1. **Job 列表与详情**：按集群、Namespace、类型（`service`/`batch`/`system`/`sysbatch` + Periodic 标识）、状态过滤；详情页展示 Task Groups、Allocations、部署状态、健康检查与事件时间线。
 2. **双模式 Job 编排工作台（可视化动态编排 + 原生 HCL 源码）**：
    - **可视化动态编排模式（Visual Builder）**：
-     - 基于结构化 `JobSpec` JSON 模型提供嵌套式动态卡片编辑，后端统一使用 **`hashicorp/hcl/v2/hclwrite`** 以 HCL Token 编码渲染标准 HCL（不做字符串拼接，天然正确处理引号、插值与 heredoc）：
-       - **Job 级**：基本信息（Job ID、Namespace、类型 `service`/`batch`/`system`/`sysbatch`、Datacenters、Priority）、`periodic` 定时调度、`update` 滚动发布策略；
-       - **Group 级（支持动态增删多个）**：副本数 `count`、`network`（网络模式与动态端口映射）、`volume`（Host Volume / CSI 卷声明）、`service`（Nomad / Consul 服务注册及 HTTP/TCP 健康检查）、`restart` 重启策略；
-       - **Task 级（每个 Group 下支持动态增删多个）**：驱动配置（`docker` / `exec` / `raw_exec`、镜像、命令、参数、端口）、`env` 动态键值对、`volume_mount` 卷挂载映射、`resources`（CPU/内存）、`vault` 与 `identity`（Workload Identity 取密）、`template`（配置文件与机密渲染模板）。
-     - **跨字段联动防呆**：`volume_mount` 下拉联动当前 Group 已声明的 `volume`（声明 Host Volume 时联动展示目标集群 Client 节点已配置的 Host Volume 列表）；`service.port` 与 Task 端口下拉联动当前 Group `network` 已定义的端口名；`vault` / `identity` 下拉联动该 Nomad 集群在「集群联动」中已打通的 Vault Role。
-     - **受限 AST 校验的附加 HCL 槽位**：Job、Group、Task 卡片底部各提供折叠式「附加原生 HCL 片段」输入框；后端使用 `hashicorp/hcl/v2` 将该片段解析为严格限定在对应层级的 AST，拒绝语法错误、闭合括号越界以及与可视化表单已托管属性/唯一块（如 `network`/`vault`/`identity`）冲突的定义；最终 Plan 与 Apply 始终针对完整渲染结果执行。
+     - 基于结构化 `JobSpec` JSON 模型提供嵌套式动态卡片编辑，后端统一使用 **`hashicorp/hcl/v2/hclwrite`** 以 HCL Token 编码渲染标准 HCL（不做字符串拼接，天然正确处理引号、插值与 heredoc），最低覆盖以下全部层级的可视化动态块与配置项：
+       - **顶层（Root 级）**：支持动态增删多个 `variable "<name>"` 块（`type`、`default`、`description`），供下游字段通过 `var.<name>` 引用，并在 Plan/Apply 时支持填写变量覆盖值（`hcl2.vars`）。
+       - **Job 级**：基本信息（Job ID、Namespace、Region、Node Pool、类型 `service`/`batch`/`system`/`sysbatch`、Datacenters、Priority）、动态增删多个 `constraint` 块（`attribute`、`operator`、`value`）、`periodic` 定时调度、`update` 滚动发布策略。
+       - **Group 级（支持动态增删多个）**：副本数 `count`、动态增删 `constraint` 块、`network` 块（`mode` 如 `bridge`/`host` + 动态增删多个 `port "<label>"` 的 `to`/`static`）、`volume "<name>"` 块（`type`、`source`、`read_only`）、`service` 块（`name`、`port`、`provider`、`address_mode` + 动态增删多个 `check` 的 `name`/`type`/`path`/`port`/`interval`/`timeout`）、`restart` 块（`attempts`、`interval`、`delay`、`mode`）、`reschedule` 块（`attempts`、`interval`、`delay`、`delay_function`、`unlimited`）、`update` 块（`max_parallel`、`health_check`、`min_healthy_time`、`healthy_deadline`、`auto_revert`）、`ephemeral_disk` 块（`size`、`migrate`、`sticky`）。
+       - **Task 级（每个 Group 下支持动态增删多个）**：
+         - **生命周期**：`lifecycle` 块（`hook` 如 `prestart`/`poststart`/`poststop`、`sidecar` 布尔开关），完整支持初始化任务与 Sidecar 容器；
+         - **驱动与容器配置（`config`）**：支持 `docker` / `exec` / `raw_exec`；Docker 驱动覆盖 `image`、`force_pull`、`command`、`args`、`ports`、`network_mode`、`privileged`、`auth`、快捷 `volumes` 列表、动态增删多个结构化 `mount` 块（`type`、`source`、`target`、`readonly` 及嵌套 `bind_options { propagation }`）与 `logging` 块（`type` 及嵌套 `config { max-size, max-file }`）；
+         - **环境与存储**：`env` 动态键值对、`volume_mount` 块（`volume`、`destination`、`read_only`、`propagation_mode`）；
+         - **资源与日志**：`resources` 块（`cpu`、`memory`、`memory_max`）、`logs` 块（`max_files`、`max_file_size`）、`restart` 块（Task 级覆盖）；
+         - **Task 级服务注册**：支持在 Task 级动态增删 `service` 块（`name`、`port`、`provider`、`address_mode` + 动态增删 `check` 的 `name`/`type`/`path`/`port`/`interval`/`timeout`）；
+         - **机密与模板**：`vault` 块（`role`、`cluster`、`change_mode`、`env`）、动态增删多个 `identity` 块（`name`、`aud`、`file`、`ttl`）、动态增删多个 `template` 块（`destination`、`data`、`env`、`perms`、`change_mode`、`left_delimiter`/`right_delimiter`/`splay`）。
+     - **跨字段联动防呆**：`volume_mount` 下拉联动当前 Group 已声明的 `volume`（声明 Host Volume 时联动展示目标集群 Client 节点已配置的 Host Volume 列表）；Group/Task 级 `service.port`、`check.port` 与 Task `config.ports` 下拉联动当前 Group `network` 已定义的端口名；`vault` / `identity` 下拉联动该 Nomad 集群在「集群联动」中已打通的 Vault Role。
+     - **受限 AST 校验的附加 HCL 槽位**：Job、Group、Task 卡片底部各提供折叠式「附加原生 HCL 片段」输入框；后端使用 `hashicorp/hcl/v2` 将该片段解析为严格限定在对应层级的 AST，拒绝语法错误、闭合括号越界以及与可视化表单已托管属性/唯一块（如 `network`/`vault`/`identity`/`lifecycle`）冲突的定义；最终 Plan 与 Apply 始终针对完整渲染结果执行。
    - **原生 HCL 源码模式**：基于 CodeMirror 6 提供完整 HCL 语法高亮、模板加载、一键调用 `/v1/jobs/parse` 与 `/v1/validate/job` 校验，满足任意复杂 HCL2 语法需求。
    - **双模式权威源、漂移检测与受控反解**：
      - **可视化 → HCL（无损切换）**：随时一键转为 HCL 源码继续编辑高级语法；
      - **权威表示与现网漂移检测**：每次提交在 `job_revisions` 记录 `edit_mode`、`renderer_version`、`form_spec_json`、`hcl_content`、`hcl_sha256`、`remote_job_version` 与 `eval_id`。再次打开现网 Job 编辑前，先比对 Nomad 现网 Job 版本与最近一次本地记录：若现网曾被 CLI 或外部修改导致漂移，禁止静默回填旧 `form_spec_json`，须由管理员选择以现网 HCL 编辑或重新解析现网定义；
-     - **外部/手写 HCL → 可视化（本地 HCL2 AST 先检 + 语义映射）**：调用 `parse-to-visual` 时，后端先通过 **`hashicorp/hcl/v2`** 解析原始 HCL 语法树，精确识别注释、`variable`、`locals`、`dynamic` 块、表达式及表单未覆盖的高级块并逐条列出位置与差异，再结合 Nomad `/v1/jobs/parse` 生成表单模型；存在无法等价保留的语法时明确提示保留 HCL 模式或经管理员确认后转换。
+     - **外部/手写 HCL → 可视化（本地 HCL2 AST 先检 + 语义映射）**：调用 `parse-to-visual` 时，后端先通过 **`hashicorp/hcl/v2`** 解析原始 HCL 语法树，将顶层 `variable` 及上述受支持块直接映射进可视化模型，同时精确识别注释、`locals`、`dynamic` 块、复杂表达式及表单未覆盖的高级块并逐条列出位置与差异，再结合 Nomad `/v1/jobs/parse` 校验语义一致性；存在无法等价保留的语法时明确提示保留 HCL 模式或经管理员确认后转换。
    - **Docker Compose 导入**：粘贴或上传 `docker-compose.yml`，由后端使用纯 Go（`gopkg.in/yaml.v3`）解析转换（不依赖控制面宿主机安装 Docker CLI），同时产出标准 HCL 与可视化 `JobSpec`。明确转换映射与阻断规则：
      - 每个 Compose `service` 映射为一个独立 Nomad `group` + `task`；
      - 端口：`target` 映射为动态端口（`to = target`），`published:target` 映射为静态宿主端口（`static = published, to = target`），当 `replicas > 1` 且含静态端口时给出端口冲突告警；
@@ -589,7 +596,7 @@ nomad-deck/
 6. **集群联动（Integrations）**：Nomad ↔ Vault JWT Workload Identity 配置列表（含 `bound_claims` 权限边界配置）、Plan 预览、一键双向 Apply、可视化四段式链路体检图（含端到端 JWT Login 验证）、一键生成示例 Job。
 7. **Nomad Job 中心**：
    - Job 列表与详情（Allocation 状态、资源、事件、实时日志终端）；
-   - 双模式 Job 创建/编辑工作台：可视化动态编排器（嵌套增删 `group`/`task`/`network`/`volume`/`volume_mount`/`service`/`env`/`template`/`vault` 块 + 跨字段联动下拉 + AST 校验的附加原生 HCL 片段 + 右侧实时 HCL 预览）与原生 HCL CodeMirror 编辑器，支持模板保存、现网漂移检测、Compose 导入（含阻断级校验）、本地 HCL2 AST 预检+受控反解、Validate → 绑定 `JobModifyIndex` 的 Plan Diff 预览 → Apply；
+   - 双模式 Job 创建/编辑工作台：可视化动态编排器（覆盖顶层 `variable`、Job/Group 级 `constraint`/`update`、Group 级 `network`/`port`/`volume`/`service`/`check`/`restart`/`reschedule`/`ephemeral_disk`、Task 级 `lifecycle`（Sidecar）、Docker `config`（含 `mount`/`bind_options`/`logging`/`force_pull`/`network_mode`/`volumes`）、`env`/`volume_mount`/`resources`（含 `memory_max`）/`logs`/`service`/`check`/`vault`/`identity`/`template` 动态增删 + 跨字段联动下拉 + AST 校验的附加原生 HCL 片段 + 右侧实时 HCL 预览）与原生 HCL CodeMirror 编辑器，支持模板保存、现网漂移检测、Compose 导入（含阻断级校验）、本地 HCL2 AST 预检+受控反解、Validate → 绑定 `JobModifyIndex` 的 Plan Diff 预览 → Apply；
    - 启动/停止/重启/Purge、历史版本 Diff 与一键回滚、导出 HCL。
 8. **运维任务中心（Operations）**：所有长耗时任务的时间线、逐节点步骤状态、崩溃后待核对任务操作与可回放的脱敏终端日志。
 9. **定时任务（Schedules）**：内置与自定义定时任务列表、Cron 表达式与防重入/漏执行策略编辑、启停开关、立即执行与关联 `operation_task_id` 的历史记录。
@@ -618,6 +625,6 @@ nomad-deck/
 - [ ] **Vault 集群全流程**：在 UI 部署 3 节点 TLS + Raft Vault 集群（验证 Swap 预检与 `LimitCORE=0`）→ 初始化并验证 Shamir 两阶段 Raft 加入成功、Unseal Keys/Root Token/可续租 Admin Token 加密托管 → 手动安全封存节点验证自动解封抑制生效、解除抑制后自动解封恢复 → 验证单节点扩容 Join、证书续期、安全缩容 Remove（含仲裁门禁拦截）、升级前快照与兼容校验 → 验证支持嵌套路径与 CAS 冲突保护的 KV v2 编辑 → 验证 Raft 快照创建/下载与恢复状态机。
 - [ ] **Nomad 集群全流程**：在 UI 部署 3 节点 Nomad 集群（验证纯 Server 跑 `nomad` 用户、Client 跑 `root` 用户、专属 SAN 与 `public_api_url` 证书、版本代际原子软链配置）→ 验证单节点扩容 Join、证书续期、`server_client` 双角色缩容（等待 Drain 完成 + Raft `remove-peer`）、仲裁门禁拦截多数派停服、升级前快照与熔断策略 → 验证集群锁/主机产品锁互斥及模拟控制面崩溃后进入 `needs_reconcile` 核对恢复 → 验证 Nomad `GET /v1/operator/snapshot` 备份与恢复。
 - [ ] **Nomad + Vault 联动**：在 Nomad 与 Vault 均启用自签 TLS 的前提下创建联动配置（含 `bound_claims` 限制 Namespace）→ Plan 预览（验证 mTLS 冲突检测、Auth Mount 归属隔离与单点入口告警）→ Apply 双向打通（Nomad CA 写入 Vault `jwks_ca_pem`、完整 JWT Role 参数、滚动重启 Nomad）→ Doctor 四段式体检并验证真实 JWT Login 成功，且越权 Namespace Job 被 Vault 拒绝。
-- [ ] **Job 全生命周期**：分别通过可视化动态编排器（动态增删 `group`/`task`/`volume`/`service`/`env`/`vault` 块、AST 校验的附加 HCL 片段、验证现网漂移检测与回填）、纯 Go Compose 导入（含阻断项校验）与原生 HCL 编辑器（含本地 HCL2 AST 差异警告）提交 Job → 验证绑定 `JobModifyIndex` 的并发冲突保护与 Plan Diff 后下发 → 经 SSE 实时查看 Allocation 日志 → 停止/重新启动/修改版本并回滚/Purge 删除。
+- [ ] **Job 全生命周期**：分别通过可视化动态编排器（覆盖顶层 `variable`、`constraint`、`reschedule`、`update`、`lifecycle` Sidecar、Docker `mount`/`bind_options`/`logging`、`resources.memory_max`、Group/Task 级 `service`/`check`、`volume`/`volume_mount`、`env`/`template`/`vault`/`identity` 块与 AST 校验附加片段，验证现网漂移检测与回填）、纯 Go Compose 导入（含阻断项校验）与原生 HCL 编辑器（含本地 HCL2 AST 差异警告）提交 Job → 验证绑定 `JobModifyIndex` 的并发冲突保护与 Plan Diff 后下发 → 经 SSE 实时查看 Allocation 日志 → 停止/重新启动/修改版本并回滚/Purge 删除。
 - [ ] **定时任务与审计**：验证防重入、手动触发与关联 `operation_task_id` 的健康巡检、CA/客户端/节点证书检查、Vault Token 续租与 Raft 快照任务均成功；验证审计日志完整且步骤日志、SSE 流与审计均无明文私钥/Token/Unseal Key 泄露。
 - [ ] **环境迁移还原**：二次验密导出加密 `.ndbundle`（含 `operation_task_steps`）→ 在全新空实例启动 `nomad-deck`（不同 `master.key`）→ 上传迁移包完成绑定 `preview_token` 的预检并在维护屏障下执行 `replace` 还原 → 验证历史会话经 `session_epoch` 失效且自动任务默认暂停防双活 → 点击「激活控制面」后正常连接全部主机、集群、触发解封与管理 Job；验证 `merge` 模式同步重写 SQL 外键与 `cron_jobs.payload_json` 内嵌引用。

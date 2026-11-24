@@ -119,6 +119,9 @@ func (s *Service) connect(ctx context.Context, m *db.ClusterNode) (*db.Node, *ss
 	if err != nil {
 		return nil, nil, err
 	}
+	if s.Hosts == nil {
+		return nil, nil, errors.New("SSH is not available")
+	}
 	c, err := s.Hosts.Connect(ctx, n)
 	if err != nil {
 		return nil, nil, fmt.Errorf("SSH %s: %w", n.Name, err)

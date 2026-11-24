@@ -15,6 +15,7 @@ import (
 	"nomad-deck/internal/netx"
 	"nomad-deck/internal/ops"
 	"nomad-deck/internal/release"
+	"nomad-deck/internal/vault"
 	"nomad-deck/internal/version"
 )
 
@@ -26,6 +27,7 @@ type API struct {
 	Proxy          *netx.Manager
 	Ops            *ops.Engine
 	Releases       *release.Provider
+	Vault          *vault.Service
 	Log            *slog.Logger
 	AllowedOrigins map[string]bool
 	TrustedProxies []netip.Prefix
@@ -76,6 +78,19 @@ func (a *API) Handler() http.Handler {
 			r.Get("/operations/{id}", a.getOperation)
 			r.Get("/operations/{id}/stream", a.streamOperation)
 
+			r.Get("/clusters", a.listClusters)
+			r.Get("/clusters/{id}", a.getCluster)
+			r.Get("/clusters/{id}/status", a.clusterStatus)
+			r.Get("/clusters/{id}/gate", a.clusterGate)
+			r.Get("/clusters/{id}/snapshots", a.listSnapshots)
+			r.Get("/vault/{id}/key-generations", a.vaultKeyGenerations)
+			r.Get("/vault/{id}/auth", a.vaultListAuth)
+			r.Get("/vault/{id}/policies", a.vaultListPolicies)
+			r.Get("/vault/{id}/policies/{name}", a.vaultGetPolicy)
+			r.Get("/vault/{id}/kv/mounts", a.vaultKVMounts)
+			r.Get("/vault/{id}/kv/list", a.vaultKVList)
+			r.Get("/vault/{id}/kv/metadata", a.vaultKVMetadata)
+
 			r.Group(func(r chi.Router) {
 				r.Use(a.requireAdmin)
 				r.Get("/admins", a.listAdmins)
@@ -98,6 +113,45 @@ func (a *API) Handler() http.Handler {
 				r.Post("/nodes/{id}/push-key", a.pushNodeKey)
 				r.Post("/nodes/{id}/test", a.testNode)
 				r.Post("/nodes/{id}/reset-fingerprint", a.resetNodeFingerprint)
+
+				r.Post("/clusters", a.createCluster)
+				r.Delete("/clusters/{id}", a.deleteCluster)
+				r.Post("/clusters/{id}/nodes", a.addClusterNodes)
+				r.Post("/clusters/{id}/preflight", a.clusterPreflight)
+				r.Post("/clusters/{id}/deploy", a.deployCluster)
+				r.Post("/clusters/{id}/nodes/{node_id}/join", a.joinClusterNode)
+				r.Post("/clusters/{id}/nodes/{node_id}/remove", a.removeClusterNode)
+				r.Post("/clusters/{id}/nodes/{node_id}/service/{action}", a.clusterNodeService)
+				r.Post("/clusters/{id}/upgrade/plan", a.upgradePlan)
+				r.Post("/clusters/{id}/upgrade", a.upgradeCluster)
+				r.Post("/clusters/{id}/certs/renew", a.renewCerts)
+				r.Post("/clusters/{id}/ca/rotate", a.rotateCA)
+				r.Put("/clusters/{id}/credentials", a.supplyCredentials)
+				r.Post("/clusters/{id}/reconcile", a.reconcileCluster)
+				r.Put("/clusters/{id}/maintenance", a.setMaintenance)
+				r.Post("/clusters/{id}/uninstall/plan", a.uninstallPlan)
+				r.Post("/clusters/{id}/uninstall", a.uninstallCluster)
+				r.Post("/clusters/{id}/doctor", a.doctorCluster)
+				r.Post("/clusters/{id}/snapshots", a.createSnapshot)
+				r.Post("/clusters/{id}/snapshots/upload", a.uploadSnapshot)
+				r.Post("/clusters/{id}/snapshots/{snapshot_id}/download", a.downloadSnapshot)
+				r.Post("/clusters/{id}/snapshots/{snapshot_id}/restore", a.restoreSnapshot)
+				r.Delete("/clusters/{id}/snapshots/{snapshot_id}", a.deleteSnapshot)
+
+				r.Post("/vault/{id}/init", a.vaultInit)
+				r.Post("/vault/{id}/unseal", a.vaultUnseal)
+				r.Post("/vault/{id}/seal", a.vaultSeal)
+				r.Put("/vault/{id}/custody", a.vaultCustody)
+				r.Post("/vault/{id}/custody/backup", a.vaultBackup)
+				r.Post("/vault/{id}/custody/recover-token", a.vaultRecoverToken)
+				r.Post("/vault/{id}/rekey", a.vaultRekey)
+				r.Post("/vault/{id}/auth", a.vaultEnableAuth)
+				r.Delete("/vault/{id}/auth", a.vaultDisableAuth)
+				r.Put("/vault/{id}/policies/{name}", a.vaultPutPolicy)
+				r.Delete("/vault/{id}/policies/{name}", a.vaultDeletePolicy)
+				r.Get("/vault/{id}/kv/item", a.vaultKVRead)
+				r.Put("/vault/{id}/kv/item", a.vaultKVWrite)
+				r.Delete("/vault/{id}/kv/item", a.vaultKVDelete)
 
 				r.Put("/settings", a.putSettings)
 				r.Put("/settings/proxy", a.putProxy)

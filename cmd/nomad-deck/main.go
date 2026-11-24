@@ -30,6 +30,7 @@ import (
 const usage = `用法：
   nomad-deck [serve] [--config 路径] [--data-dir 目录] [--listen 地址]
   nomad-deck admin reset-password --username 用户名 [--password-stdin] [--config 路径] [--data-dir 目录]
+  nomad-deck offline-backup decrypt [--passphrase-stdin] <备份文件>
   nomad-deck version
 `
 
@@ -57,6 +58,8 @@ func run(args []string) error {
 			return errors.New("未知的 admin 子命令\n" + usage)
 		}
 		return resetPassword(args[1:])
+	case "offline-backup":
+		return offlineBackup(args, os.Stdin, os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return nil

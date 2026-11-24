@@ -484,3 +484,90 @@ func TestServiceSnapshotRestore(t *testing.T) {
 	}
 	e.mustSucceed(s.Restore(ctx, testActor, id, imp.ID, RestoreInput{}))
 }
+
+func TestServiceBusinessAndDoctor(t *testing.T) {
+	e := newSvcEnv(t, 1)
+	ctx := context.Background()
+	s := e.s
+	id := e.cluster.ID
+	e.mustSucceed(s.Init(ctx, testActor, id, InitInput{KeyShares: 1, KeyThreshold: 1}))
+	clu, _ := s.loadCluster(ctx, s.DB.Reader, id)
+	admin, _, _ := s.adminClient(ctx, clu)
+	if err := admin.Request(ctx, "POST", "sys/mounts/apps/prod/kv", map[string]any{"type": "kv", "options": map[string]any{"version": "2"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	mounts, err := s.KVMounts(ctx, id)
+	if err != nil || len(mounts) != 1 || mounts[0].Path != "apps/prod/kv" || mounts[0].Version != 2 {
+		t.Fatalf("mounts: %+v %v", mounts, err)
+	}
+	zero, one := 0, 1
+	if _, err := s.KVWrite(ctx, testActor, id, "apps/prod/kv", "svc/db", map[string]any{"p": "1"}, nil); err == nil {
+		t.Fatal("v2 write without cas must be rejected")
+	}
+	if _, err := s.KVWrite(ctx, testActor, id, "apps/prod/kv", "svc/db", map[string]any{"p": "1"}, &zero); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.KVWrite(ctx, testActor, id, "apps/prod/kv", "svc/db", map[string]any{"p": "x"}, &zero); err == nil ||
+		!strings.Contains(err.Error(), "CAS") {
+		t.Fatalf("stale cas must conflict: %v", err)
+	}
+	if _, err := s.KVWrite(ctx, testActor, id, "apps/prod/kv", "svc/db", map[string]any{"p": "2"}, &one); err != nil {
+		t.Fatal(err)
+	}
+	if sec, err := s.KVRead(ctx, testActor, id, "apps/prod/kv", "svc/db", 1); err != nil || sec.Data["p"] != "1" {
+		t.Fatalf("read v1: %+v %v", sec, err)
+	}
+	if keys, err := s.KVList(ctx, id, "apps/prod/kv", "svc"); err != nil || len(keys) != 1 || keys[0] != "db" {
+		t.Fatalf("list: %v %v", keys, err)
+	}
+	if md, err := s.KVMetadata(ctx, id, "apps/prod/kv", "svc/db"); err != nil || md["current_version"].(float64) != 2 {
+		t.Fatalf("metadata: %v %v", md, err)
+	}
+	if err := s.KVDelete(ctx, testActor, id, "apps/prod/kv", "svc/db", "destroy", []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.KVDelete(ctx, testActor, id, "apps/prod/kv", "svc/db", "soft-delete", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.KVDelete(ctx, testActor, id, "apps/prod/kv", "svc/db", "delete-metadata", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.KVList(ctx, id, "apps/prod/kv", "../etc"); err == nil {
+		t.Fatal("traversal must be rejected")
+	}
+	if err := s.PutPolicy(ctx, testActor, id, "app-read", `path "apps/prod/kv/data/*" { capabilities = ["read"] }`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutPolicy(ctx, testActor, id, AdminPolicyName, `path "*" {}`); err == nil {
+		t.Fatal("the managed admin policy must be protected")
+	}
+	if ps, _ := s.ListPolicies(ctx, id); !strings.Contains(strings.Join(ps, ","), "app-read") {
+		t.Fatalf("policies: %v", ps)
+	}
+	if err := s.DeletePolicy(ctx, testActor, id, "app-read"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnableAuth(ctx, testActor, id, "userpass", "userpass", "people"); err != nil {
+		t.Fatal(err)
+	}
+	if as, _ := s.ListAuth(ctx, id); len(as) != 2 {
+		t.Fatalf("auth: %+v", as)
+	}
+	if err := s.DisableAuth(ctx, testActor, id, "token"); err == nil {
+		t.Fatal("token auth must be protected")
+	}
+	if err := s.DisableAuth(ctx, testActor, id, "userpass"); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.Doctor(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := map[string]string{}
+	for _, c := range rep.Checks {
+		status[c.Name] = c.Status
+	}
+	if status["api"] != "OK" || status["admin_token"] != "OK" || status["raft"] != "OK" || status["audit_device"] != "OK" || status["ssh"] != "FAIL" {
+		t.Fatalf("doctor: %+v", rep.Checks)
+	}
+}

@@ -21,6 +21,11 @@ import (
 	"nomad-deck/internal/config"
 	"nomad-deck/internal/crypto"
 	"nomad-deck/internal/db"
+	"nomad-deck/internal/hosts"
+	"nomad-deck/internal/netx"
+	"nomad-deck/internal/ops"
+	"nomad-deck/internal/release"
+	"nomad-deck/internal/sshx"
 	"nomad-deck/internal/version"
 )
 
@@ -35,6 +40,9 @@ type App struct {
 	DB     *db.DB
 	Audit  *audit.Recorder
 	Auth   *auth.Service
+	Hosts  *hosts.Service
+	Ops    *ops.Engine
+	Pool   *sshx.Pool
 	API    *api.API
 	ready  atomic.Bool
 }
@@ -69,7 +77,18 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 	}
 	rec := &audit.Recorder{DB: d, Log: log}
 	authSvc := auth.NewService(d, keys, rec, log, cfg.DataDir)
-	app := &App{Config: cfg, Log: log, Keys: keys, DB: d, Audit: rec, Auth: authSvc}
+	pool := sshx.NewPool(db.IntSetting(ctx, d.Reader, "ssh.max_concurrency", 10))
+	engine := ops.NewEngine(d, log, cfg.DataDir)
+	recovered, err := engine.Recover(ctx)
+	if err != nil {
+		d.Close()
+		return nil, fmt.Errorf("recover tasks: %w", err)
+	}
+	for _, t := range recovered {
+		log.Warn("unfinished task after restart", "task", t.ID, "action", t.Action, "status", t.Status)
+	}
+	hostSvc := &hosts.Service{DB: d, Keys: keys, Audit: rec, Pool: pool, LocalMachineID: hosts.ReadLocalMachineID()}
+	app := &App{Config: cfg, Log: log, Keys: keys, DB: d, Audit: rec, Auth: authSvc, Hosts: hostSvc, Ops: engine, Pool: pool}
 	origins, err := AllowedOrigins(cfg)
 	if err != nil {
 		d.Close()
@@ -80,7 +99,8 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 		pr, _ := config.ParsePrefix(p)
 		trusted = append(trusted, pr)
 	}
-	app.API = &api.API{DB: d, Auth: authSvc, Log: log, AllowedOrigins: origins, TrustedProxies: trusted,
+	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: &netx.Manager{DB: d, Keys: keys}, Ops: engine,
+		Releases: &release.Provider{DB: d, CacheDir: filepath.Join(cfg.DataDir, "cache", "releases")}, Log: log, AllowedOrigins: origins, TrustedProxies: trusted,
 		HTTPS: cfg.TLS.Mode != config.TLSModeProxy || isHTTPS(cfg), Ready: &app.ready}
 	return app, nil
 }
@@ -91,7 +111,10 @@ func isHTTPS(cfg *config.Config) bool {
 }
 
 // Close releases resources.
-func (a *App) Close() error { return a.DB.Close() }
+func (a *App) Close() error {
+	a.Pool.Close()
+	return a.DB.Close()
+}
 
 // Run serves HTTP(S) until ctx is cancelled.
 func (a *App) Run(ctx context.Context) error {

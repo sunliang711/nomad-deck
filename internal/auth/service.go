@@ -532,3 +532,8 @@ func (s *Service) ClearIPLockouts() {
 	s.ipFailures = map[string]*ipState{}
 	s.ipMu.Unlock()
 }
+
+// VerifyPassword performs a second verification of the caller's password.
+func (s *Service) VerifyPassword(p *Principal, current string) error {
+	return s.verifyActorPassword(p, current)
+}

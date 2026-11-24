@@ -355,3 +355,18 @@ func orJSON(s, def string) string {
 	}
 	return s
 }
+
+// SetClusterAdminToken stores the encrypted management token together with
+// the init state (one statement, so the secret is never persisted without
+// the state that says it may be in use).
+func SetClusterAdminToken(ctx context.Context, q Querier, id, enc, state string, now time.Time) error {
+	_, err := q.ExecContext(ctx, `UPDATE clusters SET admin_token_encrypted = ?, init_state = ?, updated_at = ? WHERE id = ?`,
+		enc, state, FormatTime(now), id)
+	return err
+}
+
+// SetClusterGossipKey stores the encrypted gossip key.
+func SetClusterGossipKey(ctx context.Context, q Querier, id, enc string, now time.Time) error {
+	_, err := q.ExecContext(ctx, `UPDATE clusters SET gossip_key_encrypted = ?, updated_at = ? WHERE id = ?`, enc, FormatTime(now), id)
+	return err
+}

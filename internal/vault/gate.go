@@ -7,19 +7,6 @@ import (
 	"nomad-deck/internal/db"
 )
 
-// GateResult is the outcome of the Raft quorum gate for one node.
-type GateResult struct {
-	Allowed          bool   `json:"allowed"`
-	Reason           string `json:"reason"`
-	Target           string `json:"target"`
-	TargetHealthy    bool   `json:"target_healthy"`
-	TargetVoter      bool   `json:"target_voter"`
-	Voters           int    `json:"voters"`
-	HealthyVoters    int    `json:"healthy_voters"`
-	FailureTolerance int    `json:"failure_tolerance"`
-	SingleNode       bool   `json:"single_node"`
-}
-
 // gate evaluates whether target may go down: a healthy voter needs a
 // failure tolerance of at least one; an unhealthy target needs the other
 // healthy voters to form a majority. A single-node cluster needs explicit

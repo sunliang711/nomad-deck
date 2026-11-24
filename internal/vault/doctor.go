@@ -13,23 +13,6 @@ import (
 	"nomad-deck/internal/sshx"
 )
 
-// Check is one Doctor finding.
-type Check struct {
-	Node    string `json:"node,omitempty"`
-	Name    string `json:"name"`
-	Status  string `json:"status"` // OK | WARN | FAIL
-	Message string `json:"message"`
-	Hint    string `json:"hint,omitempty"`
-}
-
-// DoctorReport is the result of a Doctor run.
-type DoctorReport struct {
-	Cluster string    `json:"cluster"`
-	RanAt   time.Time `json:"ran_at"`
-	Summary string    `json:"summary"`
-	Checks  []Check   `json:"checks"`
-}
-
 const doctorScript = `printf 'active=%s\n' "$(systemctl is-active vault.service 2>/dev/null)"
 printf 'user=%s\n' "$(systemctl show vault.service -p User --value 2>/dev/null)"
 printf 'limitcore=%s\n' "$(systemctl show vault.service -p LimitCORE --value 2>/dev/null)"

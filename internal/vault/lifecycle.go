@@ -180,13 +180,6 @@ func (s *Service) rolling(ctx context.Context, t *ops.Task, cl *cluster, title s
 
 // ---- Scale out ----
 
-// JoinInput adds a node to an initialized cluster.
-type JoinInput struct {
-	AdvertiseAddr string `json:"advertise_addr"`
-	UseProxy      *bool  `json:"use_proxy"`
-	ConfirmSwap   bool   `json:"confirm_swap"`
-}
-
 // NodeJoin installs Vault on a new host and joins it with the two-phase
 // Shamir protocol (Init is never called on the new node).
 func (s *Service) NodeJoin(ctx context.Context, actor audit.Actor, clusterID, nodeID string, in JoinInput) (*db.OperationTask, error) {
@@ -578,14 +571,6 @@ func (s *Service) runRotateCA(ctx context.Context, t *ops.Task, clusterID string
 
 // ---- Upgrade ----
 
-// UpgradePlan is the dry-run preview of a rolling upgrade.
-type UpgradePlan struct {
-	Check   release.UpgradeCheck `json:"check"`
-	Order   []string             `json:"order"`
-	Current string               `json:"current_version"`
-	Target  string               `json:"target_version"`
-}
-
 // PlanUpgrade previews an upgrade.
 func (s *Service) PlanUpgrade(ctx context.Context, clusterID, version string) (*UpgradePlan, error) {
 	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
@@ -605,14 +590,6 @@ func (s *Service) PlanUpgrade(ctx context.Context, clusterID, version string) (*
 		p.Order = append(p.Order, m.NodeName+"（"+s.nodeRole(ctx, cl, m)+"）")
 	}
 	return p, nil
-}
-
-// UpgradeInput starts a rolling upgrade.
-type UpgradeInput struct {
-	Version       string `json:"version"`
-	UseProxy      *bool  `json:"use_proxy"`
-	Confirm       bool   `json:"confirm"`
-	ConfirmSingle bool   `json:"confirm_single_node"`
 }
 
 // Upgrade performs the rolling upgrade: pre-upgrade snapshot, standbys one
@@ -760,13 +737,6 @@ func (s *Service) upgradeNode(ctx context.Context, t *ops.Task, cl *cluster, mem
 
 // ---- Uninstall ----
 
-// UninstallPlan lists what an uninstall removes.
-type UninstallPlan struct {
-	Nodes     []string `json:"nodes"`
-	Snapshots int      `json:"snapshots"`
-	Warnings  []string `json:"warnings"`
-}
-
 // PlanUninstall previews an uninstall.
 func (s *Service) PlanUninstall(ctx context.Context, clusterID string) (*UninstallPlan, error) {
 	if _, err := s.loadCluster(ctx, s.DB.Reader, clusterID); err != nil {
@@ -873,23 +843,6 @@ func (s *Service) SetMaintenance(ctx context.Context, actor audit.Actor, cluster
 	}
 	return s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.maintenance", ResourceType: "cluster",
 		ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"on": on, "previous_reason": cl.MaintenanceReason}})
-}
-
-// ReconcileStep is the observed state of one remote step.
-type ReconcileStep struct {
-	TaskID string `json:"task_id"`
-	Action string `json:"action"`
-	Node   string `json:"node"`
-	Unit   string `json:"unit"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
-}
-
-// ReconcileReport is the outcome of a reconciliation.
-type ReconcileReport struct {
-	Steps    []ReconcileStep `json:"steps"`
-	Resolved bool            `json:"resolved"`
-	Message  string          `json:"message"`
 }
 
 // Reconcile inspects remote steps of tasks interrupted by a control plane

@@ -13,6 +13,7 @@ import (
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/hosts"
 	"nomad-deck/internal/netx"
+	"nomad-deck/internal/nomad"
 	"nomad-deck/internal/ops"
 	"nomad-deck/internal/release"
 	"nomad-deck/internal/vault"
@@ -28,6 +29,7 @@ type API struct {
 	Ops            *ops.Engine
 	Releases       *release.Provider
 	Vault          *vault.Service
+	Nomad          *nomad.Service
 	Log            *slog.Logger
 	AllowedOrigins map[string]bool
 	TrustedProxies []netip.Prefix

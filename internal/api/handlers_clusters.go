@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"nomad-deck/internal/cluster"
 	"nomad-deck/internal/db"
+	"nomad-deck/internal/nomad"
 	"nomad-deck/internal/vault"
 )
 
@@ -67,11 +70,41 @@ func memberOf(m *db.ClusterNode) memberView {
 		Config: json.RawMessage(m.NodeConfigJSON), CertExpiresAt: fmtTime(m.CertExpiresAt), LastSyncedAt: fmtTime(m.LastSyncedAt)}
 }
 
+func strictJSON(body []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
+}
+
 func taskResponse(w http.ResponseWriter, t *db.OperationTask) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"task": t})
 }
 
-// clusterOfType loads a cluster and checks its type is handled.
+// driver loads the cluster of the request and returns the driver of its type.
+func (a *API) driver(w http.ResponseWriter, r *http.Request) (cluster.Driver, *db.Cluster, bool) {
+	c, err := db.GetCluster(r.Context(), a.DB.Reader, chi.URLParam(r, "id"))
+	if errors.Is(err, db.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "集群不存在")
+		return nil, nil, false
+	}
+	if err != nil {
+		a.writeErr(w, r, err)
+		return nil, nil, false
+	}
+	var d cluster.Driver
+	switch c.Type {
+	case "vault":
+		d = a.Vault.Driver()
+	case "nomad":
+		d = a.Nomad.Driver()
+	default:
+		writeError(w, http.StatusNotImplemented, "not_implemented", "不支持的集群类型 "+c.Type)
+		return nil, nil, false
+	}
+	return d, c, true
+}
+
+// vaultCluster loads a cluster and checks it is a Vault cluster.
 func (a *API) vaultCluster(w http.ResponseWriter, r *http.Request) (*db.Cluster, bool) {
 	c, err := db.GetCluster(r.Context(), a.DB.Reader, chi.URLParam(r, "id"))
 	if errors.Is(err, db.ErrNotFound) {
@@ -83,7 +116,7 @@ func (a *API) vaultCluster(w http.ResponseWriter, r *http.Request) (*db.Cluster,
 		return nil, false
 	}
 	if c.Type != "vault" {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "该集群类型的此操作尚未提供")
+		writeError(w, http.StatusBadRequest, "wrong_cluster_type", "该操作只适用于 Vault 集群")
 		return nil, false
 	}
 	return c, true
@@ -141,18 +174,40 @@ func (a *API) getCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) createCluster(w http.ResponseWriter, r *http.Request) {
-	var in struct {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "请求体过大或无法读取")
+		return
+	}
+	var kind struct {
 		Type string `json:"type"`
-		vault.CreateInput
 	}
-	if !decodeJSON(w, r, &in) {
+	if err := json.Unmarshal(body, &kind); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "请求体不是合法的 JSON")
 		return
 	}
-	if in.Type != "vault" {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "当前只支持创建 Vault 集群")
+	var c *db.Cluster
+	switch kind.Type {
+	case "vault":
+		var in vault.CreateInput
+		if err = strictJSON(body, &struct {
+			Type string `json:"type"`
+			*vault.CreateInput
+		}{CreateInput: &in}); err == nil {
+			c, err = a.Vault.CreateCluster(r.Context(), a.actor(r), in)
+		}
+	case "nomad":
+		var in nomad.CreateInput
+		if err = strictJSON(body, &struct {
+			Type string `json:"type"`
+			*nomad.CreateInput
+		}{CreateInput: &in}); err == nil {
+			c, err = a.Nomad.CreateCluster(r.Context(), a.actor(r), in)
+		}
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_argument", "type 需为 vault 或 nomad")
 		return
 	}
-	c, err := a.Vault.CreateCluster(r.Context(), a.actor(r), in.CreateInput)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -161,10 +216,11 @@ func (a *API) createCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deleteCluster(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	if err := a.Vault.DeleteUndeployed(r.Context(), a.actor(r), chi.URLParam(r, "id")); err != nil {
+	if err := d.DeleteUndeployed(r.Context(), a.actor(r), chi.URLParam(r, "id")); err != nil {
 		a.writeErr(w, r, err)
 		return
 	}
@@ -172,10 +228,11 @@ func (a *API) deleteCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) clusterStatus(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	rep, err := a.Vault.StatusDetail(r.Context(), chi.URLParam(r, "id"))
+	rep, err := d.Status(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -185,15 +242,16 @@ func (a *API) clusterStatus(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) addClusterNodes(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Nodes []vault.MemberInput `json:"nodes"`
+		Nodes []cluster.MemberInput `json:"nodes"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	if err := a.Vault.AddMembers(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.Nodes); err != nil {
+	if err := d.AddMembers(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.Nodes); err != nil {
 		a.writeErr(w, r, err)
 		return
 	}
@@ -207,29 +265,31 @@ func (a *API) clusterPreflight(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	issues, err := a.Vault.Preflight(r.Context(), chi.URLParam(r, "id"), in.ConfirmSwap)
+	issues, err := d.Preflight(r.Context(), chi.URLParam(r, "id"), in.ConfirmSwap)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
 	}
 	if issues == nil {
-		issues = []vault.PreflightIssue{}
+		issues = []cluster.PreflightIssue{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"issues": issues})
 }
 
 func (a *API) deployCluster(w http.ResponseWriter, r *http.Request) {
-	var in vault.DeployInput
+	var in cluster.DeployInput
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	t, err := a.Vault.Deploy(r.Context(), a.actor(r), chi.URLParam(r, "id"), in)
+	t, err := d.Deploy(r.Context(), a.actor(r), chi.URLParam(r, "id"), in)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -238,14 +298,15 @@ func (a *API) deployCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) joinClusterNode(w http.ResponseWriter, r *http.Request) {
-	var in vault.JoinInput
+	var in cluster.JoinInput
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	t, err := a.Vault.NodeJoin(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "node_id"), in)
+	t, err := d.NodeJoin(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "node_id"), in)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -254,10 +315,11 @@ func (a *API) joinClusterNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) removeClusterNode(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	t, err := a.Vault.NodeRemove(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "node_id"))
+	t, err := d.NodeRemove(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "node_id"))
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -272,10 +334,11 @@ func (a *API) clusterNodeService(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	t, err := a.Vault.NodeService(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "node_id"),
+	t, err := d.NodeService(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "node_id"),
 		chi.URLParam(r, "action"), in.ConfirmSingle)
 	if err != nil {
 		a.writeErr(w, r, err)
@@ -285,10 +348,11 @@ func (a *API) clusterNodeService(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) clusterGate(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	res, err := a.Vault.CheckGate(r.Context(), chi.URLParam(r, "id"), r.URL.Query().Get("node_id"))
+	res, err := d.CheckGate(r.Context(), chi.URLParam(r, "id"), r.URL.Query().Get("node_id"))
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -303,10 +367,11 @@ func (a *API) upgradePlan(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	p, err := a.Vault.PlanUpgrade(r.Context(), chi.URLParam(r, "id"), in.Version)
+	p, err := d.PlanUpgrade(r.Context(), chi.URLParam(r, "id"), in.Version)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -315,14 +380,15 @@ func (a *API) upgradePlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) upgradeCluster(w http.ResponseWriter, r *http.Request) {
-	var in vault.UpgradeInput
+	var in cluster.UpgradeInput
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	t, err := a.Vault.Upgrade(r.Context(), a.actor(r), chi.URLParam(r, "id"), in)
+	t, err := d.Upgrade(r.Context(), a.actor(r), chi.URLParam(r, "id"), in)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -337,10 +403,11 @@ func (a *API) renewCerts(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	t, err := a.Vault.RenewCerts(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.ConfirmSingle)
+	t, err := d.RenewCerts(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.ConfirmSingle)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -356,10 +423,11 @@ func (a *API) rotateCA(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
+	d, _, ok := a.driver(w, r)
+	if !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
 		return
 	}
-	t, err := a.Vault.RotateCA(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.ConfirmSingle)
+	t, err := d.RotateCA(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.ConfirmSingle)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -369,16 +437,32 @@ func (a *API) rotateCA(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) supplyCredentials(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		vault.CredentialsInput
-		CurrentPassword string `json:"current_password"`
+		UnsealKeys      []string `json:"unseal_keys"`
+		RootToken       string   `json:"root_token"`
+		Mode            string   `json:"mode"`
+		ManagementToken string   `json:"management_token"`
+		ConfirmName     string   `json:"confirm_name"`
+		CurrentPassword string   `json:"current_password"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
+	_, c, ok := a.driver(w, r)
+	if !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
 		return
 	}
-	if err := a.Vault.SupplyCredentials(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.CredentialsInput); err != nil {
+	if c.Type == "nomad" {
+		t, err := a.Nomad.SupplyCredentials(r.Context(), a.actor(r), c.ID,
+			nomad.CredentialsInput{Mode: in.Mode, ManagementToken: in.ManagementToken, ConfirmName: in.ConfirmName})
+		if err != nil {
+			a.writeErr(w, r, err)
+			return
+		}
+		taskResponse(w, t)
+		return
+	}
+	if err := a.Vault.SupplyCredentials(r.Context(), a.actor(r), c.ID,
+		vault.CredentialsInput{UnsealKeys: in.UnsealKeys, RootToken: in.RootToken}); err != nil {
 		a.writeErr(w, r, err)
 		return
 	}
@@ -386,10 +470,11 @@ func (a *API) supplyCredentials(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) reconcileCluster(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	rep, err := a.Vault.Reconcile(r.Context(), a.actor(r), chi.URLParam(r, "id"))
+	rep, err := d.Reconcile(r.Context(), a.actor(r), chi.URLParam(r, "id"))
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -404,10 +489,11 @@ func (a *API) setMaintenance(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	if err := a.Vault.SetMaintenance(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.Enabled); err != nil {
+	if err := d.SetMaintenance(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.Enabled); err != nil {
 		a.writeErr(w, r, err)
 		return
 	}
@@ -415,10 +501,11 @@ func (a *API) setMaintenance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) uninstallPlan(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	p, err := a.Vault.PlanUninstall(r.Context(), chi.URLParam(r, "id"))
+	p, err := d.PlanUninstall(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -434,10 +521,11 @@ func (a *API) uninstallCluster(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
+	d, _, ok := a.driver(w, r)
+	if !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
 		return
 	}
-	t, err := a.Vault.Uninstall(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.ConfirmName)
+	t, err := d.Uninstall(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.ConfirmName)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -446,10 +534,11 @@ func (a *API) uninstallCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) doctorCluster(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	rep, err := a.Vault.Doctor(r.Context(), chi.URLParam(r, "id"))
+	rep, err := d.Doctor(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -460,10 +549,11 @@ func (a *API) doctorCluster(w http.ResponseWriter, r *http.Request) {
 // ---- Snapshots ----
 
 func (a *API) listSnapshots(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	snaps, err := a.Vault.ListSnapshots(r.Context(), chi.URLParam(r, "id"))
+	snaps, err := d.ListSnapshots(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -472,10 +562,11 @@ func (a *API) listSnapshots(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) createSnapshot(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	t, err := a.Vault.CreateSnapshot(r.Context(), a.actor(r), chi.URLParam(r, "id"))
+	t, err := d.CreateSnapshot(r.Context(), a.actor(r), chi.URLParam(r, "id"))
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -493,7 +584,7 @@ func (a *API) downloadSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	c, ok := a.vaultCluster(w, r)
+	d, c, ok := a.driver(w, r)
 	if !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
 		return
 	}
@@ -504,7 +595,7 @@ func (a *API) downloadSnapshot(w http.ResponseWriter, r *http.Request) {
 	sid := chi.URLParam(r, "snapshot_id")
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s.ndsnap"`, c.Name, sid))
-	if err := a.Vault.WriteArchive(r.Context(), a.actor(r), c.ID, sid, in.Passphrase, w); err != nil {
+	if err := d.WriteArchive(r.Context(), a.actor(r), c.ID, sid, in.Passphrase, w); err != nil {
 		a.Log.Error("snapshot download failed", "err", err)
 	}
 }
@@ -512,7 +603,7 @@ func (a *API) downloadSnapshot(w http.ResponseWriter, r *http.Request) {
 // uploadSnapshot accepts multipart form data: a "passphrase" field
 // followed by the archive in a "file" part.
 func (a *API) uploadSnapshot(w http.ResponseWriter, r *http.Request) {
-	c, ok := a.vaultCluster(w, r)
+	d, c, ok := a.driver(w, r)
 	if !ok {
 		return
 	}
@@ -542,7 +633,7 @@ func (a *API) uploadSnapshot(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, "invalid_argument", "passphrase 字段必须位于 file 之前")
 				return
 			}
-			snap, err := a.Vault.ImportArchive(r.Context(), a.actor(r), c.ID, readCloser{part}, pass)
+			snap, err := d.ImportArchive(r.Context(), a.actor(r), c.ID, readCloser{part}, pass)
 			if err != nil {
 				a.writeErr(w, r, err)
 				return
@@ -560,16 +651,17 @@ func (r readCloser) Close() error               { return r.p.Close() }
 
 func (a *API) restoreSnapshot(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		vault.RestoreInput
+		cluster.RestoreInput
 		CurrentPassword string `json:"current_password"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
+	d, _, ok := a.driver(w, r)
+	if !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
 		return
 	}
-	t, err := a.Vault.Restore(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "snapshot_id"), in.RestoreInput)
+	t, err := d.Restore(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "snapshot_id"), in.RestoreInput)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -578,10 +670,11 @@ func (a *API) restoreSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	if err := a.Vault.DeleteSnapshot(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "snapshot_id")); err != nil {
+	if err := d.DeleteSnapshot(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "snapshot_id")); err != nil {
 		a.writeErr(w, r, err)
 		return
 	}
@@ -924,10 +1017,11 @@ func (a *API) rollbackNodeConfig(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if _, ok := a.vaultCluster(w, r); !ok {
+	d, _, ok := a.driver(w, r)
+	if !ok {
 		return
 	}
-	t, err := a.Vault.RollbackGeneration(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "node_id"), in.ConfirmSingle)
+	t, err := d.RollbackGeneration(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "node_id"), in.ConfirmSingle)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return

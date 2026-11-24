@@ -176,12 +176,6 @@ func setMemberConfig(m *db.ClusterNode, mc MemberConfig) {
 
 // ---- Create ----
 
-// MemberInput adds a host to a cluster.
-type MemberInput struct {
-	NodeID        string `json:"node_id"`
-	AdvertiseAddr string `json:"advertise_addr"`
-}
-
 // CreateInput creates a Vault cluster.
 type CreateInput struct {
 	Name              string        `json:"name"`

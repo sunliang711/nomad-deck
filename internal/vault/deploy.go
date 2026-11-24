@@ -25,14 +25,6 @@ import (
 
 // ---- Preflight ----
 
-// PreflightIssue is one problem found before changing hosts.
-type PreflightIssue struct {
-	NodeID   string `json:"node_id"`
-	Node     string `json:"node"`
-	Severity string `json:"severity"` // block | confirm | warn
-	Message  string `json:"message"`
-}
-
 func (s *Service) preflight(ctx context.Context, members []*db.ClusterNode, confirmSwap bool) ([]PreflightIssue, error) {
 	var out []PreflightIssue
 	for _, m := range members {
@@ -389,13 +381,6 @@ func (s *Service) fetchArtifacts(ctx context.Context, t *ops.Task, hc *httpClien
 }
 
 // ---- Deploy ----
-
-// DeployInput starts a deployment.
-type DeployInput struct {
-	Version     string `json:"version"`
-	UseProxy    *bool  `json:"use_proxy"`
-	ConfirmSwap bool   `json:"confirm_swap"`
-}
 
 // Preflight returns the deployment preflight report without changing anything.
 func (s *Service) Preflight(ctx context.Context, clusterID string, confirmSwap bool) ([]PreflightIssue, error) {

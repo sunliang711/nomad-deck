@@ -243,12 +243,6 @@ func (s *Service) ImportArchive(ctx context.Context, actor audit.Actor, clusterI
 
 // ---- Restore ----
 
-// RestoreInput starts or resumes a restore.
-type RestoreInput struct {
-	Force        bool   `json:"force"`
-	ResumeTaskID string `json:"resume_task_id"`
-}
-
 type restoreIntent struct {
 	Phase      string `json:"phase"`
 	SnapshotID string `json:"snapshot_id"`

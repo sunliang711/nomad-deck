@@ -23,6 +23,7 @@ import (
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/hosts"
 	"nomad-deck/internal/netx"
+	"nomad-deck/internal/nomad"
 	"nomad-deck/internal/ops"
 	"nomad-deck/internal/release"
 	"nomad-deck/internal/sshx"
@@ -45,6 +46,7 @@ type App struct {
 	Ops    *ops.Engine
 	Pool   *sshx.Pool
 	Vault  *vault.Service
+	Nomad  *nomad.Service
 	API    *api.API
 	ready  atomic.Bool
 }
@@ -102,7 +104,9 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 	releases := &release.Provider{DB: d, CacheDir: filepath.Join(cfg.DataDir, "cache", "releases")}
 	vaultSvc := &vault.Service{DB: d, Keys: keys, Audit: rec, Hosts: hostSvc, Ops: engine, Releases: releases, Proxy: proxy,
 		DataDir: cfg.DataDir, Log: log}
-	app := &App{Config: cfg, Log: log, Keys: keys, DB: d, Audit: rec, Auth: authSvc, Hosts: hostSvc, Ops: engine, Pool: pool, Vault: vaultSvc}
+	nomadSvc := &nomad.Service{DB: d, Keys: keys, Audit: rec, Hosts: hostSvc, Ops: engine, Releases: releases, Proxy: proxy,
+		DataDir: cfg.DataDir, Log: log}
+	app := &App{Config: cfg, Log: log, Keys: keys, DB: d, Audit: rec, Auth: authSvc, Hosts: hostSvc, Ops: engine, Pool: pool, Vault: vaultSvc, Nomad: nomadSvc}
 	origins, err := AllowedOrigins(cfg)
 	if err != nil {
 		d.Close()
@@ -113,7 +117,7 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 		pr, _ := config.ParsePrefix(p)
 		trusted = append(trusted, pr)
 	}
-	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc,
+	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc, Nomad: nomadSvc,
 		Log: log, AllowedOrigins: origins, TrustedProxies: trusted,
 		HTTPS: cfg.TLS.Mode != config.TLSModeProxy || isHTTPS(cfg), Ready: &app.ready}
 	return app, nil

@@ -551,6 +551,8 @@ func orEmpty(m map[string]string) map[string]string {
 	return m
 }
 
+var reUnsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+
 // InstallArtifact relays a verified artifact to a host and installs it as
 // root at dest (decompressing and verifying SHA-256 on the host).
 func (s *Service) InstallArtifact(ctx context.Context, c *sshx.Client, opID string, a *release.Artifact, dest, mode string, rateLimit int64) error {
@@ -559,7 +561,9 @@ func (s *Service) InstallArtifact(ctx context.Context, c *sshx.Client, opID stri
 		return err
 	}
 	defer f.Close()
-	name := strings.NewReplacer("+", "_").Replace(a.PayloadName)
+	// Staging names must be plain identifiers; package file names carry
+	// characters such as "+" and "~".
+	name := reUnsafeName.ReplaceAllString(a.PayloadName, "_")
 	if a.Gzipped {
 		name += ".gz"
 	}

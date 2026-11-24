@@ -52,16 +52,18 @@ it-vault: it-vault-hosts
 		nomad-deck-linux-host:it -test.run TestE2EVaultCluster -test.v -test.timeout 60m
 
 # End-to-end Nomad test: five disposable hosts and the test binary in a
-# sixth container on the same network.
+# sixth container on the same network. Docker and containerd state live on
+# volumes because overlayfs cannot be stacked on the container's root.
 IT_NOMAD_HOSTS := nn1 nn2 nn3 nn4 nn5
 
 it-nomad-hosts:
 	docker build -q -t nomad-deck-linux-host:it test/linux-host
 	docker network inspect nd-nomad-it >/dev/null 2>&1 || docker network create nd-nomad-it >/dev/null
 	for n in $(IT_NOMAD_HOSTS); do \
-		docker rm -f $$n >/dev/null 2>&1 || true; \
+		docker rm -f -v $$n >/dev/null 2>&1 || true; \
 		docker run -d --name $$n --hostname $$n --network nd-nomad-it --privileged --cgroupns=host \
-			-v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock nomad-deck-linux-host:it >/dev/null; \
+			-v /sys/fs/cgroup:/sys/fs/cgroup:rw -v /var/lib/docker -v /var/lib/containerd \
+			--tmpfs /run --tmpfs /run/lock nomad-deck-linux-host:it >/dev/null; \
 		docker exec $$n sh -c 'rm -f /etc/machine-id /var/lib/dbus/machine-id && systemd-machine-id-setup >/dev/null 2>&1'; \
 	done
 

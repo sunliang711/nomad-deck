@@ -183,3 +183,20 @@ func orDefault(s, def string) string {
 	}
 	return s
 }
+
+// UpdateNodeDocker stores the Docker Engine state and host-level settings.
+func UpdateNodeDocker(ctx context.Context, q Querier, id, mode, status, version, configJSON string, now time.Time) error {
+	_, err := q.ExecContext(ctx, `UPDATE nodes SET docker_mode = ?, docker_status = ?, docker_version = ?, docker_config_json = ?,
+		updated_at = ? WHERE id = ?`, mode, status, version, orDefault(configJSON, "{}"), FormatTime(now), id)
+	return err
+}
+
+// NomadClusterOfNode returns the Nomad cluster a host belongs to ("" if none).
+func NomadClusterOfNode(ctx context.Context, q Querier, nodeID string) (string, error) {
+	var id string
+	err := q.QueryRowContext(ctx, `SELECT cluster_id FROM cluster_nodes WHERE node_id = ? AND cluster_type = 'nomad'`, nodeID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}

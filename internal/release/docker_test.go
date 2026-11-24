@@ -312,3 +312,14 @@ func TestDockerLiveIndex(t *testing.T) {
 		t.Logf("%s: %d versions, newest %s -> %s", target, len(versions), versions[0], strings.Join(names, " "))
 	}
 }
+
+func TestArmoredRPMKey(t *testing.T) {
+	k, err := (&Docker{}).ArmoredRPMKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kr, err := readArmoredKeys(k)
+	if err != nil || len(kr) != 1 {
+		t.Fatalf("rpm key: %v %d", err, len(kr))
+	}
+}

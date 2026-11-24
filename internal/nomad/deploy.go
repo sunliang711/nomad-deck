@@ -296,6 +296,37 @@ func (s *Service) installCNI(ctx context.Context, t *ops.Task, nc *cluster.NodeC
 type artifacts struct {
 	nomad map[string]*release.Artifact
 	cni   map[string]*release.Artifact
+	// docker holds the Docker packages for clients that get Docker
+	// installed automatically, by member ID.
+	docker map[string][]*release.Artifact
+	// dockerVersion is the version those packages belong to.
+	dockerVersion string
+}
+
+// autoDocker returns the cluster default Docker version when clients
+// without Docker get it installed automatically ("" otherwise).
+func autoDocker(cl *nomadCluster) string {
+	var dc DockerConfig
+	_ = json.Unmarshal(cl.Settings.DockerDefaults, &dc)
+	if dc.AutoInstall {
+		return dc.Version
+	}
+	return ""
+}
+
+// dockerLocksFor adds exclusive Docker host locks for clients that will
+// get Docker installed automatically.
+func (s *Service) dockerLocksFor(ctx context.Context, cl *nomadCluster, ms []*db.ClusterNode) []ops.LockReq {
+	if autoDocker(cl) == "" {
+		return nil
+	}
+	var out []ops.LockReq
+	for _, m := range clients(ms) {
+		if n, err := db.GetNode(ctx, s.DB.Reader, m.NodeID); err == nil && (n.DockerMode == "absent" || n.DockerMode == "") {
+			out = append(out, ops.LockReq{Key: ops.HostLock(m.NodeID, "docker"), Mode: ops.Exclusive})
+		}
+	}
+	return out
 }
 
 func needsCNI(ms []*db.ClusterNode) bool {
@@ -318,7 +349,8 @@ func (s *Service) fetchArtifacts(ctx context.Context, t *ops.Task, hc *cluster.H
 	if hc.UseProxy {
 		step.Logf("经系统代理 %s 下载", hc.ProxyAddr)
 	}
-	a := &artifacts{nomad: map[string]*release.Artifact{}, cni: map[string]*release.Artifact{}}
+	a := &artifacts{nomad: map[string]*release.Artifact{}, cni: map[string]*release.Artifact{}, docker: map[string][]*release.Artifact{},
+		dockerVersion: autoDocker(cl)}
 	err = func() error {
 		for _, m := range members {
 			n, err := db.GetNode(ctx, s.DB.Reader, m.NodeID)
@@ -341,6 +373,17 @@ func (s *Service) fetchArtifacts(ctx context.Context, t *ops.Task, hc *cluster.H
 					return err
 				}
 				a.cni[n.Arch] = art
+			}
+			if IsClient(m.Role) && a.dockerVersion != "" && (n.DockerMode == "absent" || n.DockerMode == "") {
+				if _, err := dockerTarget(n); err != nil {
+					step.Logf("%s：%v，跳过自动安装 Docker", n.Name, err)
+					continue
+				}
+				arts, err := s.fetchDocker(ctx, step, hc, n, a.dockerVersion)
+				if err != nil {
+					return err
+				}
+				a.docker[m.ID] = arts
 			}
 		}
 		return nil
@@ -494,7 +537,7 @@ func (s *Service) Deploy(ctx context.Context, actor audit.Actor, clusterID strin
 		return nil, err
 	}
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.deploy", TargetType: "cluster", TargetID: cl.ID,
-		Locks: memberLocks(cl.ID, members), TriggeredBy: actor.Name,
+		Locks: append(memberLocks(cl.ID, members), s.dockerLocksFor(ctx, cl, members)...), TriggeredBy: actor.Name,
 		Params: map[string]any{"version": in.Version, "use_proxy": hc.UseProxy, "proxy": hc.ProxyAddr},
 		Run: func(ctx context.Context, t *ops.Task) error {
 			return s.runDeploy(ctx, t, cl.ID, in.Version, hc)
@@ -588,6 +631,16 @@ func (s *Service) installNode(ctx context.Context, t *ops.Task, gi *genInput, m 
 			return err
 		}
 	}
+	if arts := arts.docker[m.ID]; len(arts) > 0 {
+		nc.Step.Logf("主机未安装 Docker，按集群默认配置自动安装 Docker %s", artsVersion(arts))
+		d, err := s.loadDockerHost(ctx, m.NodeID)
+		if err != nil {
+			return err
+		}
+		if err := s.installDockerOn(ctx, t, nc, d, arts, artsVersion(arts)); err != nil {
+			return fmt.Errorf("自动安装 Docker 失败：%w", err)
+		}
+	}
 	if IsClient(m.Role) && len(mc.HostVolumes) > 0 {
 		if _, err := nc.Run(ctx, HostVolumeScript(mc.HostVolumes)); err != nil {
 			return fmt.Errorf("create host volume directories: %w", err)
@@ -672,4 +725,14 @@ func (s *Service) finishDeploy(ctx context.Context, t *ops.Task, clusterID strin
 	}
 	_, _ = s.StatusDetail(ctx, clusterID)
 	return nil
+}
+
+// artsVersion returns the Docker Engine version of a package set.
+func artsVersion(arts []*release.Artifact) string {
+	for _, a := range arts {
+		if a.Product == "docker-ce" {
+			return reVersionIn.FindString(a.Version)
+		}
+	}
+	return ""
 }

@@ -294,7 +294,7 @@ func (s *Service) NodeJoin(ctx context.Context, actor audit.Actor, clusterID, no
 	}
 	members := mustMembers(ctx, s, clusterID)
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.node_join", TargetType: "cluster", TargetID: clusterID,
-		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name,
+		Locks: append(memberLocks(clusterID, members), s.dockerLocksFor(ctx, cl, []*db.ClusterNode{m})...), TriggeredBy: actor.Name,
 		Params: map[string]any{"node_id": nodeID, "role": in.Role, "use_proxy": hc.UseProxy, "version": cl.Settings.Version},
 		Run: func(ctx context.Context, t *ops.Task) error {
 			err := s.runJoin(ctx, t, cl.ID, m.ID, hc)

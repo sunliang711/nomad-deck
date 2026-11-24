@@ -92,6 +92,7 @@ func (a *API) Handler() http.Handler {
 			r.Get("/vault/{id}/kv/mounts", a.vaultKVMounts)
 			r.Get("/vault/{id}/kv/list", a.vaultKVList)
 			r.Get("/vault/{id}/kv/metadata", a.vaultKVMetadata)
+			r.Get("/nodes/{id}/docker", a.getDocker)
 			r.Get("/nomad/{id}/namespaces", a.nomadListNamespaces)
 			r.Get("/nomad/{id}/node-pools", a.nomadListNodePools)
 			r.Get("/nomad/{id}/acl/policies", a.nomadListPolicies)
@@ -179,6 +180,13 @@ func (a *API) Handler() http.Handler {
 				r.Delete("/nomad/{id}/acl/roles/{role_id}", a.nomadDeleteRole)
 				r.Post("/nomad/{id}/acl/tokens", a.nomadCreateToken)
 				r.Delete("/nomad/{id}/acl/tokens/{accessor_id}", a.nomadRevokeToken)
+
+				r.Post("/nodes/{id}/docker/{action}", a.dockerAction)
+				r.Put("/nodes/{id}/docker/config", a.putDockerConfig)
+				r.Post("/nodes/{id}/docker/proxy-test", a.dockerProxyTest)
+				r.Post("/clusters/{id}/docker/upgrade/plan", a.clusterDockerPlan)
+				r.Post("/clusters/{id}/docker/upgrade", a.clusterDockerUpgrade)
+				r.Put("/clusters/{id}/docker/defaults", a.putDockerDefaults)
 
 				r.Put("/settings", a.putSettings)
 				r.Put("/settings/proxy", a.putProxy)

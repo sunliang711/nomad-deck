@@ -694,3 +694,25 @@ func debVersionParts(v string) (upstream, revision string) {
 	}
 	return v, ""
 }
+
+// ArmoredRPMKey returns the armored public key that signs Docker's RPMs,
+// for "rpm --import" on hosts (with overridden keys, every configured block).
+func (d *Docker) ArmoredRPMKey() (string, error) {
+	const begin = "-----BEGIN PGP PUBLIC KEY BLOCK-----"
+	if d.ArmoredKeys != "" {
+		return d.ArmoredKeys, nil
+	}
+	for _, chunk := range strings.Split(builtinDockerKeys, begin)[1:] {
+		block := begin + chunk
+		kr, err := openpgp.ReadArmoredKeyRing(strings.NewReader(block))
+		if err != nil {
+			return "", err
+		}
+		for _, e := range kr {
+			if strings.ToUpper(hex.EncodeToString(e.PrimaryKey.Fingerprint)) == DockerKeyFingerprints["rpm"] {
+				return strings.TrimSpace(block) + "\n", nil
+			}
+		}
+	}
+	return "", errors.New("built-in Docker RPM signing key not found")
+}

@@ -1,0 +1,28 @@
+# Binaries & build artifacts
+/bin/
+/dist/
+/nomad-deck
+*.exe
+*.test
+*.out
+
+# Local runtime data & secrets
+/data/
+*.db
+*.db-shm
+*.db-wal
+master.key
+*.ndbundle
+.env
+.env.local
+
+# Frontend
+/web/node_modules/
+/web/dist/
+/internal/ui/dist/
+
+# OS & editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

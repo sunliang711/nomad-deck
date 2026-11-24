@@ -27,6 +27,7 @@
 4. **Vault Unseal Keys 由平台加密托管**：Vault 初始化产出的 Unseal Keys 由控制面主密钥加密落库并按代际保留，日常 API 调用使用初始化后派生的专用 Admin Policy Token，初始化完成后即吊销 Root Token，应急时凭托管的 Unseal Keys 临时生成；支持在 UI 中一键解封、滚动升级后自动解封及可选的巡检自动解封，避免在 Vault 节点磁盘明文存放解封密钥。
 5. **预留 Consul 扩展位（可选）**：核心数据模型、集群驱动接口、联动模型与前端路由均预留 `consul` 类型接口；`v1.0.0` 聚焦 Nomad + Vault，Consul 作为后续按需启用的可选扩展。
 6. **一次性发版（`v1.0.0`）**：全部既定功能在 `v1.0.0` 统一交付并完成端到端验收，不拆分多阶段灰度发布。
+7. **支持的产品版本下限**：Nomad `1.7.0` 及以上（Nomad ↔ Vault 联动依赖的 Workload Identity 与 `default_identity` 配置、Job Actions 均自该版本提供），Vault `1.15.0` 及以上。部署、扩容与升级的版本选择列表只展示满足下限的版本；部署前检查与 Doctor 对低于下限的节点给出 `FAIL`。少数依赖更高版本的能力（如动态 Host Volume 需 Nomad `1.10` 及以上）按集群实际版本自动启用或隐藏。
 
 ---
 
@@ -41,6 +42,7 @@
 | **定时任务** | `robfig/cron/v3` | 内置运维巡检、证书监控、自动解封巡检与 Raft 快照定时调度（支持防重入与漏执行策略） |
 | **实时推送** | SSE（Server-Sent Events）为主，WebSocket 仅用于交互式终端 | SSE 统一用于单向实时推流（SSH 运维任务日志、`journalctl` 节点日志、Nomad Allocation 日志、Nomad 运行态变化），绑定会话可即时撤销；只有 Nomad Exec 与 Job Actions 的双向终端使用 WebSocket，并以一次性票据与严格同源校验防范跨站劫持 |
 | **前端可视化组件** | `xterm.js`、轻量图表库 | 浏览器内交互式终端；资源利用实时折线与拓扑容量条 |
+| **灾备备份目标** | `github.com/pkg/sftp`、`minio/minio-go/v7` | 控制面灾备包写入 SFTP 与 S3 兼容对象存储 |
 | **唯一 ID 与配置解析** | `oklog/ulid/v2`、`BurntSushi/toml`、`gopkg.in/yaml.v3`、`hashicorp/hcl/v2` | 时间有序 ID；极简 TOML 启动配置；纯 Go 解析 Compose YAML；官方 HCL2 AST 解析与 `hclwrite` 编码渲染 |
 | **前端技术栈** | React 18 + TypeScript + Vite + Tailwind CSS + `lucide-react` + CodeMirror 6（HCL 编辑） | 编译后通过 `go:embed` 直接打入后端二进制 |
 | **服务监听与发布** | 默认监听 `0.0.0.0:8555`（HTTPS）、GitHub Releases | 单端口同时承载 Web 管理端、REST API 与 SSE；控制面从 GitHub Release 拉取新版本完成自更新 |
@@ -117,6 +119,7 @@
   - 二进制版本目录：`/opt/nomad-deck/vault/bin/versions/vault-<ver>`，原子软链 `/opt/nomad-deck/vault/bin/vault` 与 `/usr/local/bin/vault`
   - 配置与证书：`/opt/nomad-deck/vault/etc/config.hcl`（Raft 模式下显式配置 `disable_mlock = true`、`api_addr` 与 `cluster_addr`）、`/opt/nomad-deck/vault/etc/tls/{ca.crt,server.crt,server.key}`
   - 数据目录：`/opt/nomad-deck/vault/data/raft/`
+  - 审计日志：`/opt/nomad-deck/vault/logs/audit.log`（Vault 文件审计设备输出，由托管的 logrotate 配置按大小轮转，轮转后向 Vault 发送 `SIGHUP` 重新打开文件）
   - 操作锁标记：`/opt/nomad-deck/vault/.op.lock`（语义同 Nomad；按产品分别存放，与「主机产品级锁」一一对应，同一主机上的 Nomad 与 Vault 任务互不覆盖）
   - systemd 单元：`/etc/systemd/system/vault.service`（以低权系统用户 `vault` 运行并显式设置 `LimitCORE=0` 禁止 core dump；因 Raft 模式启用 `disable_mlock = true`，Vault 主机部署预检要求禁用 Swap 或采用明确批准的加密 Swap；不安装本地明文自动解封单元，解封由 NomadDeck 控制面通过 API 完成）
 
@@ -168,6 +171,7 @@ nomad-deck/
 | `id` | TEXT PK | ULID |
 | `username` | TEXT UNIQUE | 管理员用户名 |
 | `password_hash` | TEXT | Argon2id 密码哈希 |
+| `role` | TEXT | 账号角色：`admin`（全部权限）/ `viewer`（只读运维），权限边界见 5.1 |
 | `is_disabled` | INTEGER | 账号停用标记（`0` 启用 / `1` 停用；停用时立即吊销该账号全部会话） |
 | `failed_attempts` | INTEGER | 连续登录失败次数 |
 | `locked_until` | TEXT | 防爆破锁定截止时间（可空） |
@@ -179,7 +183,7 @@ nomad-deck/
 ### 4.2 `system_settings`（系统全局设置）
 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- |
-| `key` | TEXT PK | 配置键（如 `release.mirror_url`、`release.download_mode`、`release.pgp_public_key`、`ssh.timeout_sec`、`ssh.max_concurrency`、`proxy.url`、`audit.retention_days`、`ops.retention_days`、`snapshot.dir`、`auth.session_ttl_hours`、`auth.session_idle_minutes`、`cron.timezone`、`defaults.nomad_version`、`defaults.vault_version`、`release.cni_checksums`、`upgrade.max_minor_skip`、`nomad.stats_interval_seconds`、`nomad.exec_idle_minutes`、`nomad.exec_max_minutes`、`observability.grafana_url_template`、`self_update.channel`、`self_update.schedule`、`self_update.last_result`、`control_plane.activated`） |
+| `key` | TEXT PK | 配置键（如 `release.mirror_url`、`release.download_mode`、`release.pgp_public_key`、`ssh.timeout_sec`、`ssh.max_concurrency`、`proxy.url`、`audit.retention_days`、`ops.retention_days`、`snapshot.dir`、`auth.session_ttl_hours`、`auth.session_idle_minutes`、`cron.timezone`、`defaults.nomad_version`、`defaults.vault_version`、`release.cni_checksums`、`upgrade.max_minor_skip`、`nomad.stats_interval_seconds`、`nomad.exec_idle_minutes`、`nomad.exec_max_minutes`、`observability.grafana_url_template`、`self_update.channel`、`self_update.schedule`、`self_update.last_result`、`self_update.backup_retention`、`backup.enabled`、`backup.passphrase`、`backup.targets`、`backup.include_history`、`control_plane.activated`） |
 | `value` | TEXT | JSON 序列化配置值（含敏感项的设置使用 `is_secret=1` 并存入加密值） |
 | `is_secret` | INTEGER | `0` 明文 / `1` AES-256-GCM 密文 |
 | `updated_at` | TEXT | 更新时间 |
@@ -211,6 +215,7 @@ nomad-deck/
 | `swap_enabled` | INTEGER | 探测得到的宿主机 Swap 启用状态（`0` 已禁用 / `1` 已启用，用于 Vault 节点安全预检） |
 | `docker_status` | TEXT | 探测得到的 Docker Engine 状态（`running` / `installed_stopped` / `absent`）及版本，用于启用 Docker 驱动的 Client 节点预检 |
 | `machine_id` | TEXT | 探测得到的 `/etc/machine-id`（用于拒绝把控制面宿主机自身纳管为集群节点） |
+| `time_sync` | TEXT | 探测得到的时间同步状态（`synced` / `unsynced` / `unknown`）及与控制面的时钟偏差，用于证书签发与 JWT 校验前置检查 |
 | `host_key_fingerprint` | TEXT | 首次信任（TOFU）记录的远端主机公钥指纹 |
 | `os_info` | TEXT | 探测到的系统信息（发行版/内核） |
 | `arch` | TEXT | 探测到的 CPU 架构（`amd64` / `arm64`） |
@@ -263,7 +268,7 @@ nomad-deck/
 | `installed_version` | TEXT | 当前运行二进制版本 |
 | `kept_versions_json` | TEXT | 节点磁盘保留的历史版本列表 |
 | `service_status` | TEXT | `active` / `inactive` / `failed` / `unknown` |
-| `raft_role` | TEXT | `leader` / `follower` / `standby` / `none` |
+| `raft_role` | TEXT | Nomad Server：`leader` / `follower`；Vault：`active`（HA 主节点，同时为 Raft Leader）/ `standby`（Raft Follower）/ `performance_standby`（预留）；非 Raft 成员为 `none` |
 | `is_voter` | INTEGER | Raft 节点是否具备投票权（`0` / `1`） |
 | `is_sealed` | INTEGER | Vault 节点级密封状态（`0` 已解封 / `1` 已密封 / `NULL` 非 Vault 或未知） |
 | `node_config_json` | TEXT | 节点级特化配置（Nomad Client 的 Docker/CNI/raw_exec/denylist/host_volumes/meta、节点证书 SAN 等） |
@@ -290,7 +295,7 @@ nomad-deck/
 | `last_unsealed_at` | TEXT | 最近一次解封时间 |
 | `updated_at` | TEXT | 更新时间 |
 
-`vault_unseal_key_generations`（Unseal Key 代际表）：`cluster_id` FK、`generation`、`key_shares`、`key_threshold`、`unseal_keys_encrypted`（AES-256-GCM 加密的 Unseal Keys JSON 数组）、`state`（`pending_verification` / `active` / `retired`）、`created_at`、`activated_at`、`retired_at`，主键为 `(cluster_id, generation)`。同一集群任一时刻仅有一个 `active` 代际；退役代际继续保留，供恢复 Rekey 之前生成的 Raft 快照时解封使用。
+`vault_unseal_key_generations`（Unseal Key 代际表）：`cluster_id` FK、`generation`、`key_shares`、`key_threshold`、`unseal_keys_encrypted`（AES-256-GCM 加密的 Unseal Keys JSON 数组）、`rekey_verification_nonce`（仅 `pending_verification` 状态下保存 Rekey 验证所需的 nonce，激活后清空）、`state`（`pending_verification` / `active` / `retired`）、`created_at`、`activated_at`、`retired_at`，主键为 `(cluster_id, generation)`。同一集群任一时刻仅有一个 `active` 代际；退役代际继续保留，供恢复 Rekey 之前生成的 Raft 快照时解封使用。
 
 ### 4.8 `cluster_integrations` 与 `integration_roles`（集群联动与工作负载 Role）
 | 字段 | 类型 | 说明 |
@@ -314,7 +319,7 @@ nomad-deck/
 
 ### 4.9 `job_templates` 与 `job_revisions`（Nomad Job 模板与版本历史）
 - `job_templates`：`id`、`cluster_id`（可空表示跨集群通用模板）、`name`、`job_id`、`namespace`、`edit_mode`（`visual` / `hcl`）、`renderer_version`、`form_spec_json`（可视化动态编排结构 JSON，可空）、`hcl_content`、`hcl_sha256`、`source_type`（`visual` / `hcl` / `compose` / `imported`）、`description`、`created_at`、`updated_at`。
-- `job_revisions`：`id`、`cluster_id`、`namespace`、`job_id`、`revision_no`、`source`（由 NomadDeck 发起的变更来源：`workbench` 编排工作台提交 / `scale` 扩缩副本数 / `revert` 版本回滚）、`edit_mode`（`visual` / `hcl`）、`renderer_version`、`form_spec_json`（可空）、`hcl_content`、`hcl_sha256`、`remote_job_version`、`eval_id`、`submit_status`（`submitted` / `in_doubt` / `confirmed` / `failed`）、`plan_summary`、`submitted_by`、`created_at`（支持现网漂移检测、版本对比与按权威表示回填；回滚优先使用 Nomad 原生 Job 版本，本表负责保存每个 Nomad 版本对应的可视化编排结构与原始 HCL，并在 Nomad 已回收旧版本时作为重新提交的来源）。
+- `job_revisions`：`id`、`cluster_id`、`namespace`、`job_id`、`revision_no`、`source`（由 NomadDeck 发起的变更来源：`workbench` 编排工作台提交 / `scale` 扩缩副本数 / `revert` 版本回滚）、`edit_mode`（`visual` / `hcl`）、`renderer_version`、`form_spec_json`（可空）、`hcl_content`、`hcl_sha256`、`remote_job_version`、`eval_id`、`submit_status`（`submitted` / `in_doubt` / `confirmed` / `failed`）、`plan_summary`、`count_overridden_json`（扩缩后 HCL 中无法原位改写 `count` 的 Group 及其现网副本数，可空）、`submitted_by`、`created_at`（支持现网漂移检测、版本对比与按权威表示回填；回滚优先使用 Nomad 原生 Job 版本，本表负责保存每个 Nomad 版本对应的可视化编排结构与原始 HCL，并在 Nomad 已回收旧版本时作为重新提交的来源）。
 
 ### 4.10 `operation_tasks` 与 `operation_task_steps`（异步运维任务与步骤追踪）
 - `operation_tasks`：`id`、`action`（如 `nomad.install`、`nomad.upgrade`、`vault.init`、`vault.unseal`、`cluster.node_join`、`cluster.node_remove`、`cluster.cert_renew`、`cluster.gossip_rotate`、`vault.rekey`、`integration.apply`、`cluster.uninstall`、`snapshot.restore`、`system.self_update`）、`target_type`、`target_id`、`lock_mode`（`exclusive` / `shared`）、`remote_op_id`（写入目标机 `/opt/nomad-deck/<product>/.op.lock` 的幂等标识，同时作为远端临时 systemd 单元名 `nomad-deck-op-<remote_op_id>-<step>` 的组成部分）、`intent_json`（结构化执行意图与步骤检查点，用于崩溃后核对，不含明文凭据）、`status`（`pending` / `running` / `success` / `failed` / `rolled_back` / `interrupted` / `needs_reconcile` / `cancelled`）、`params_redacted_json`、`triggered_by`、`started_at`、`finished_at`、`error_message`。
@@ -346,7 +351,7 @@ nomad-deck/
 | `id` | TEXT PK | ULID |
 | `actor_id` / `actor_name` | TEXT | 操作管理员或 `system:cron` |
 | `client_ip` | TEXT | 请求来源 IP |
-| `action` | TEXT | 动作标识（如 `auth.login`、`admin.create`、`ssh_key.generate`、`node.create`、`nomad.upgrade`、`vault.unseal`、`vault.rekey`、`job.submit`、`job.purge`、`migration.export`、`migration.import`、`system.self_update`、`system.master_key_rotate`） |
+| `action` | TEXT | 动作标识（如 `auth.login`、`admin.create`、`admin.role_change`、`ssh_key.generate`、`node.create`、`nomad.upgrade`、`vault.unseal`、`vault.rekey`、`job.submit`、`job.purge`、`migration.export`、`migration.import`、`system.self_update`、`system.master_key_rotate`） |
 | `resource_type` / `resource_id` / `resource_name` | TEXT | 目标资源信息 |
 | `request_summary_json` | TEXT | 经强制脱敏处理的参数摘要 |
 | `operation_task_id` | TEXT | 关联的长任务 ID（可空，方便从审计直接跳转看完整执行日志） |
@@ -371,15 +376,19 @@ nomad-deck/
    - **主密钥轮换**：在停止服务的状态下于本机执行 `nomad-deck master-key rotate` 子命令，读取当前主密钥与新主密钥，在单一 SQLite 事务内重新加密全部 `_encrypted` 列与 `is_secret=1` 的系统设置，并重新包裹全部快照文件头中的数据密钥（快照正文无需重写）；密文携带主密钥版本前缀，轮换中途失败时事务整体回滚、旧主密钥继续有效。轮换完成后写入审计日志。
 3. **首次初始化安全（Setup Wizard + 一次性 Setup Token）**：
    - 当 `admins` 表为空时，控制面启动即生成一次性随机 **Setup Token**（仅输出至本地终端并写入权限 `0600` 的 `setup.token`，默认仅建议经本地或受控网络访问）。
-   - `POST /api/v1/auth/setup` 在单一 `BEGIN IMMEDIATE` 事务内原子完成“校验并消耗 Setup Token → 断言 `COUNT(admins) == 0` → 创建首个管理员账号 → 生成默认 Ed25519 SSH 密钥对 → 写入默认下载模式与代理配置”，消除公网抢注与并发创建多个初始管理员的窗口。
+   - `POST /api/v1/auth/setup` 在单一 `BEGIN IMMEDIATE` 事务内原子完成“校验并消耗 Setup Token → 断言 `COUNT(admins) == 0` → 创建首个 `admin` 角色账号 → 生成默认 Ed25519 SSH 密钥对 → 写入默认下载模式与代理配置”，消除公网抢注与并发创建多个初始管理员的窗口。
 4. **认证、CSRF、会话撤销与 SSE 生命周期**：
    - 密码采用 Argon2id 哈希；生产环境强制经 HTTPS 访问，登录态使用 `Secure + HttpOnly + SameSite=Lax` Cookie 承载随机会话令牌，服务端在 `admin_sessions` 中保存其哈希并逐请求校验（含绝对过期 `auth.session_ttl_hours` 与空闲过期 `auth.session_idle_minutes`）。
    - 会话按设备独立管理：登出只删除当前会话；修改密码时保留当前会话并删除该账号其他会话；停用账号删除其全部会话；管理员可在「账号与会话」页查看并注销任意会话；迁移导入整表清空会话。
-   - 所有变更类请求强制校验 `Origin`/`Referer` 及与会话绑定的 CSRF Token（`X-CSRF-Token`），严格限制带凭据 CORS 仅允许同源或显式白名单。
+   - 所有变更类请求强制校验 `Origin`/`Referer` 及与会话绑定的 CSRF Token（`X-CSRF-Token`），严格限制带凭据 CORS 仅允许同源或显式白名单。同源判定以启动配置 `server.public_url`（浏览器访问管理端使用的外部地址，如 `https://deck.example.com`）为准，不信任请求自带的 `Host`；未配置时默认取监听地址与本机主机名，以反向代理方式部署（`tls.mode = proxy`）时必须配置。
    - 活跃 SSE 连接与交互式终端 WebSocket 均绑定 `session_id`，会话被删除或过期时主动断开对应的 SSE 流与终端，并对单会话并发流数量、缓冲区大小与慢消费者实施上限保护。WebSocket 仅用于交互式终端，其票据与同源校验机制见 5.7。
    - 同一账号或来源 IP 连续失败达阈值（默认 5 次）触发指数退避锁定，并写入审计日志。
-5. **管理员账号管理与本机救援**：
-   - 全部管理员权限对等（`v1.0.0` 不区分角色）。已登录管理员可新增、停用、启用其他管理员账号或为其重置密码，所有操作二次验证当前管理员密码并写入审计；系统禁止停用最后一个启用状态的管理员。
+5. **账号角色、账号管理与本机救援**：
+   - **两种角色**：
+     - `admin`：全部权限，包括所有变更操作、交互式终端、Variables 原文查看、Allocation 文件下载、Vault 离线备份与迁移/灾备导出、账号管理与系统设置；
+     - `viewer`（只读运维）：可查看仪表盘、主机、集群、Job 与运行态工作台全部视图（含运行端口、资源利用、Allocation 日志、文件列表与文本预览、Evaluation）、运维任务日志、定时任务历史与审计日志；不能执行任何变更操作，不能打开交互式终端或运行 Job Action，不能查看 Variables 原文、下载文件或快照，不能导出备份、迁移包或离线密钥，看不到系统设置中的敏感项。
+   - 权限在服务端按接口强制校验：所有变更类接口与上述敏感读取接口要求 `admin` 角色，`viewer` 调用时返回 403；前端只做隐藏按钮的体验优化，不作为权限依据。
+   - Setup 向导创建的首个账号为 `admin`。`admin` 可新增账号并指定角色、修改他人角色、停用或启用账号、为他人重置密码，所有操作二次验证当前密码并写入审计；系统禁止停用或降级最后一个启用状态的 `admin`。
    - 全部管理员遗忘密码时，在控制面宿主机本机执行 `nomad-deck admin reset-password --username <name>` 子命令重置密码、解除锁定并清空该账号会话；该命令要求能读取数据目录与主密钥，执行结果写入审计日志。
 6. **敏感凭据与日志保护边界**：
    - 所有 API 响应永不返回明文私钥、Unseal Keys 或管理 Token（仅返回是否已配置、指纹、前缀或更新时间）；Vault 离线紧急备份与环境迁移导出均须二次复核当前管理员密码，且授权严格绑定当次导出参数与范围。
@@ -393,7 +402,7 @@ nomad-deck/
      - 自动解封与手动解封按共享模式加集群锁、按独占模式加对应主机产品锁，因此快照备份或体检期间节点意外密封仍能被及时解封，而升级、恢复等独占任务进行期间由该任务自身负责解封。
    - 跨集群任务（如 Nomad ↔ Vault 联动 Apply）按固定 `cluster_id` 字典序加锁避免死锁。
    - **远端步骤脱离 SSH 会话执行**：SSH 会话断开时，远端会话内的进程默认随之终止。因此所有可能超过数秒的远端步骤（下载解压、安装、配置切换、服务重启与验活脚本）均通过 `systemd-run --unit=nomad-deck-op-<remote_op_id>-<step>` 作为临时 systemd 单元执行，控制面通过 SSH 跟随该单元的日志与退出状态；控制面崩溃或网络中断不会中止远端步骤，重连后可按单元名查询其运行状态、退出码与完整日志。
-   - 控制面启动时扫描残留的 `running` 任务，将其标记为 `needs_reconcile` 并将关联集群置为 `maintenance_mode=1`（`maintenance_reason=needs_reconcile`），**不盲目释放锁**。管理员或恢复核对流程通过 SSH 读取目标机 `/opt/nomad-deck/<product>/.op.lock`（比对 `remote_op_id`），查询对应临时单元的状态与退出码，并结合远端服务与 Raft 实时状态判定步骤是已完成、仍在运行还是已失败，再执行安全补偿与解锁。
+   - 控制面启动时扫描残留的 `running` 任务（`system.self_update` 任务除外，它由新版本的就绪确认或自动回退流程收尾，见 5.12），将其标记为 `needs_reconcile` 并将关联集群置为 `maintenance_mode=1`（`maintenance_reason=needs_reconcile`），**不盲目释放锁**。管理员或恢复核对流程通过 SSH 读取目标机 `/opt/nomad-deck/<product>/.op.lock`（比对 `remote_op_id`），查询对应临时单元的状态与退出码，并结合远端服务与 Raft 实时状态判定步骤是已完成、仍在运行还是已失败，再执行安全补偿与解锁。
 
 ### 5.2 纯 Go SSH + SFTP 远端执行与节点纳管
 
@@ -405,7 +414,8 @@ nomad-deck/
 2. **连接安全、命令边界与环境探测**：
    - 首次连接采用 TOFU 策略记录目标机 Host Key 指纹；后续连接强制比对，如主机重装导致指纹变化，UI 明确告警并允许管理员确认后重置。
    - **提权命令与文件信任边界**：所有远端 SSH 命令均采用固定模板执行，严禁直接拼接未校验用户输入；版本号、路径、服务名、卷名与日志参数均通过严格白名单正则校验、POSIX 单引号转义并附加 `--` 选项终结符。通过 `sudo` 落位敏感文件前，先传入受保护的 `0700` staging 目录，由特权步骤校验其为普通文件、非符号链接且 SHA256 与预期一致，再执行同文件系统 `fsync` + `mv -Tf`（`rename`）原子替换。
-   - 连通性测试同时自动探测：Linux 发行版、CPU 架构（`amd64`/`arm64`）、`systemctl`/`journalctl`/`tar`/`unzip` 可用性、当前用户免密 `sudo` 权限（`sudo_ready`）、SELinux 状态（`selinux_mode`）、Swap 启用状态（`swap_enabled`）、Docker Engine 安装与运行状态及版本（`docker_status`）、`machine_id` 以及 `/opt/nomad-deck` 可写性。
+   - 连通性测试同时自动探测：Linux 发行版、CPU 架构（`amd64`/`arm64`）、`systemctl`/`journalctl`/`tar`/`unzip` 可用性、当前用户免密 `sudo` 权限（`sudo_ready`）、SELinux 状态（`selinux_mode`）、Swap 启用状态（`swap_enabled`）、Docker Engine 安装与运行状态及版本（`docker_status`）、`machine_id`、时间同步状态（`time_sync`，读取 systemd-timesyncd 或 chrony 的同步标记，并比较目标机与控制面的时钟偏差）以及 `/opt/nomad-deck` 可写性。
+   - **时间同步前置检查**：TLS 证书有效期与 Workload Identity JWT 校验都依赖准确时钟。部署、扩容、证书签发与联动 Apply 前，目标节点未同步或与控制面偏差超过 30 秒时拦截并展示配置指引；健康巡检持续检测并在偏差超限时告警。
    - **Docker Engine 由主机运维方预先安装**：NomadDeck 不安装、不升级 Docker Engine，只负责 Nomad Docker 驱动配置。节点启用 Docker 驱动时，部署与配置变更前置检查要求 `docker_status=running`，否则拦截并展示安装指引。
    - 若普通用户未配置免密 `sudo`，UI 展示明确的 `sudoers` 配置指引并在发起需提权的运维任务前拦截；若目标机处于 SELinux `enforcing` 或开启防火墙，在节点详情和部署前预检中给出上下文标签与端口放行提示（Nomad `4646/4647/4648`、Vault `8200/8201` 及业务端口）；Vault 节点预检发现未加密 Swap 开启时阻断生产部署或要求显式确认。
 3. **可信校验、原子分发与下载中转**：
@@ -430,7 +440,9 @@ nomad-deck/
      5. 先启动全部 Server 并等待 Leader 选出，随后以**控制面预生成 Secret** 的方式完成 ACL Bootstrap：
         - 控制面本地生成随机 UUID 作为 Management Token Secret，加密写入 `clusters.admin_token_encrypted` 并将 `init_state` 置为 `init_in_doubt`，两者在同一事务内落库；
         - 调用 `/v1/acl/bootstrap` 并在请求体 `BootstrapSecret` 中携带该 Secret；
-        - 无论调用是否收到响应，均以该 Secret 调用 `/v1/acl/token/self` 确认：成功即置为 `initialized`；返回 ACL 未初始化则重新执行 Bootstrap；返回“已初始化”而该 Secret 无效，说明集群已被其他来源 Bootstrap，保持 `init_in_doubt` 并转入受控恢复。
+        - 无论调用是否收到响应，均按以下顺序确认结果（ACL 尚未初始化与已被他人初始化时，任意未知 Token 调用 `/v1/acl/token/self` 都返回相同的拒绝，无法据此区分，因此以再次 Bootstrap 的结果判定）：
+          1. 以该 Secret 调用 `/v1/acl/token/self`，成功即置为 `initialized`；
+          2. 失败时以同一 Secret 再次调用 `/v1/acl/bootstrap`：成功即置为 `initialized`；返回“ACL 已初始化”（附 reset index）说明集群已被其他来源 Bootstrap，保持 `init_in_doubt` 并转入受控恢复；网络错误则保持 `init_in_doubt` 并按退避重试本确认流程。
         - 由于 Secret 在调用前已经持久化，“Bootstrap 成功但凭据未保存”的窗口不存在。受控恢复入口提供两种方式：补录已有 Management Token；或按 Nomad 官方重置流程，读取 Bootstrap 失败响应中的 reset index，经 SSH 写入 Leader 数据目录下的 `server/acl-bootstrap-reset` 文件后重新执行上述 Bootstrap。
      6. 启动全部 Client，通过 Nomad HTTP API 验证所有节点进入 `ready` 状态。
 2. **统一 Raft 仲裁门禁、扩缩容、证书轮换与配置变更**：
@@ -473,6 +485,7 @@ nomad-deck/
      3. 将 Admin Token 加密写入 `vault_secrets_custody.admin_token_encrypted` 并记录 `admin_token_expires_at`；
      4. 以新 Admin Token 验证可用后吊销 Root Token，并清空 `bootstrap_root_token_encrypted`。
      任一步骤中断时集群保持 `init_in_doubt`，恢复流程按暂存材料从中断处继续执行。常态下系统内不存在长期有效的 Root Token。
+   - **启用 Vault 审计设备**：初始化完成后立即启用文件审计设备，写入各节点 `/opt/nomad-deck/vault/logs/audit.log`，同时下发 logrotate 配置。Vault 在全部审计设备都写入失败时会拒绝服务请求，因此部署前检查要求日志所在分区预留足够空间，健康巡检与 Doctor 监测该分区使用率（默认超过 80% 告警），审计设备异常时在仪表盘告警。管理员可在 Vault 管理页追加 syslog 等第二审计设备作为冗余。
    - **运维 Token 生命周期与应急恢复**：内置定时任务每 6 小时续租一次 Admin Token，`token_period` 远大于续租间隔，控制面短时停机不会导致 Token 过期；续租失败立即告警。Token 已失效时，**禁止静默提权**，仅允许管理员显式发起应急恢复并二次验密：控制面使用当前代际 Unseal Keys 走 Vault `generate-root` 流程生成临时 Root Token，用其重新签发 orphan Admin Token 后立即吊销该临时 Root Token，全过程写入审计。
 3. **节点级托管解封与安全封存抑制**：
    - **手动一键解封与安全封存**：UI 展示每台 Vault 节点独立的 `is_sealed` 状态，提供单节点/全集群解封与手动安全封存（Seal）按钮；所有解封与探测始终直连目标节点 `cluster_nodes.api_addr`（不经统一 VIP/LB）。
@@ -480,7 +493,7 @@ nomad-deck/
    - **离线紧急备份**：二次验密后导出当前代际 Unseal Keys 的离线备份文件（以管理员设置的备份口令经 Argon2id + AES-256-GCM 加密），附带不依赖 NomadDeck 的人工解封说明：在任意装有 Vault CLI 的机器上解密备份，逐台对 Vault 节点执行 `vault operator unseal` 并提交阈值数量的密钥。备份文件记录集群名称与密钥代际，Rekey 后界面提示重新导出。
 4. **Unseal Key 轮换（Rekey）**：
    - 管理员二次验密后发起，控制面以 `require_verification=true` 调用 Rekey 接口并提交当前代际的阈值数量密钥；
-   - 收到新密钥后立即作为新代际写入 `vault_unseal_key_generations`（`state=pending_verification`），此时 Vault 仍使用旧密钥；
+   - 收到新密钥后立即作为新代际写入 `vault_unseal_key_generations`（`state=pending_verification`），同时保存 Vault 返回的 `verification_nonce`（验证阶段必须携带），此时 Vault 仍使用旧密钥；
    - 随后以新密钥完成 Rekey 验证，验证通过后 Vault 切换为新密钥，控制面在同一事务内将新代际置为 `active`、旧代际置为 `retired` 并递增 `seal_generation`；
    - 若新密钥落库前中断，新密钥因未经验证而从未生效，控制面取消本次 Rekey 后可安全重试；若落库后、验证前中断，恢复流程以已落库的新密钥继续验证。旧代际密钥持续保留，用于恢复 Rekey 之前生成的快照。
 5. **日常运维、仲裁门禁、扩缩容、证书续期、升级与 KV v2 治理**：
@@ -544,8 +557,8 @@ nomad-deck/
      - 卷：`bind` 挂载映射为 Docker mount，命名卷强制要求管理员在向导中绑定目标 Host Volume / CSI 卷（禁止静默降级为无持久保证的节点临时目录）；
      - 关键字段阻断：对无原生等价的 `secrets`、`configs` 与仅含 `build` 无 `image` 的服务标记为**阻断级错误**（需人工在表单/HCL 补齐后方可提交），对 `depends_on`、`healthcheck`、`networks`、`profiles` 生成结构化告警。
 3. **Plan-Apply 绑定、防并发覆盖与版本回滚**：
-   - `jobs/plan` 先经 `/v1/jobs/parse` 把渲染后的 HCL（连同变量覆盖值）解析为 Nomad Job JSON，再对该 JSON 执行 Plan，返回结构化 Diff、本次审阅的内容摘要 `plan_hash`（Job JSON + Namespace 的 SHA256）以及当前现网 `JobModifyIndex`；控制面在内存中按 `plan_hash` 缓存该 Job JSON（默认 15 分钟有效）；
-   - `jobs/apply` 只携带 `plan_hash` 与 `JobModifyIndex`，控制面提交缓存中**与审阅时完全相同的 Job JSON**，不重新解析 HCL（避免 HCL 函数、变量或解析器差异导致审阅内容与提交内容不一致）；提交至 Nomad 时开启 `EnforceIndex=true` 防止审阅与提交之间被他人并发覆盖（冲突或缓存过期返回 409 要求重新 Plan）；提交前写入 `job_revisions`（`submit_status=in_doubt`），收到 Nomad 响应后回写 `remote_job_version`、`eval_id` 与 `confirmed`，支持提交途中断网时的状态对账。
+   - Plan 接口（`job-ops/plan`）先经 `/v1/jobs/parse` 把渲染后的 HCL（连同变量覆盖值）解析为 Nomad Job JSON，再对该 JSON 执行 Plan，返回结构化 Diff、本次审阅的内容摘要 `plan_hash`（Job JSON + Namespace 的 SHA256）以及当前现网 `JobModifyIndex`；控制面在内存中按 `plan_hash` 缓存该 Job JSON（默认 15 分钟有效）；
+   - Apply 接口（`job-ops/apply`）只携带 `plan_hash` 与 `JobModifyIndex`，控制面提交缓存中**与审阅时完全相同的 Job JSON**，不重新解析 HCL（避免 HCL 函数、变量或解析器差异导致审阅内容与提交内容不一致）；提交至 Nomad 时开启 `EnforceIndex=true` 防止审阅与提交之间被他人并发覆盖（冲突或缓存过期返回 409 要求重新 Plan）；提交前写入 `job_revisions`（`submit_status=in_doubt`），收到 Nomad 响应后回写 `remote_job_version`、`eval_id` 与 `confirmed`，支持提交途中断网时的状态对账。
    - **版本回滚**：回滚到 Nomad 仍保留的历史版本时，调用 Nomad 原生 Revert 接口并携带 `EnforcePriorVersion` 防止并发；回滚完成后按目标版本对应的 `job_revisions` 记录恢复可视化编排结构。Nomad 只保留有限数量的历史版本，目标版本已被回收时，改为以 `job_revisions` 中保存的 HCL 走完整的 Plan → Apply 流程重新提交。
 4. **生命周期控制**：
    - **启动 / 恢复**：对已停止（`dead`）的 Job 一键重新提交/启动；
@@ -557,7 +570,7 @@ nomad-deck/
 
 ### 5.7 Nomad 运行态工作台（原生 Web UI 常用能力集成）
 
-NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能力，管理员无需另行登录原生 UI。全部请求由控制面携带该集群托管的 Management Token 代理至 Nomad HTTP API，浏览器不接触任何 Nomad Token；全部变更类操作写审计。Nomad 原生 UI 保持开启并保留跨链接，作为企业版专属功能（Sentinel、资源配额、Optimize 等）的入口。依赖较新 Nomad 版本的能力（如原始提交源码需 1.6 及以上、Job Actions 需 1.7 及以上、动态 Host Volume 需 1.10 及以上）按集群实际版本自动启用或隐藏。
+NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能力，管理员无需另行登录原生 UI。全部请求由控制面携带该集群托管的 Management Token 代理至 Nomad HTTP API，浏览器不接触任何 Nomad Token；全部变更类操作写审计。Nomad 原生 UI 保持开启并保留跨链接，作为企业版专属功能（Sentinel、资源配额、Optimize 等）的入口。高于版本下限（Nomad 1.7）的能力（如动态 Host Volume 需 1.10 及以上）按集群实际版本自动启用或隐藏。
 
 1. **实时刷新机制**：
    - 列表与详情数据由控制面以 Nomad 阻塞查询（`index` + `wait` 参数）感知变化，再经 SSE 推送到浏览器；同一集群的同一查询被多个浏览器订阅时共享一个上游阻塞查询，订阅全部断开 60 秒后回收。
@@ -574,7 +587,9 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
    - **Evaluations**：该 Job 的 Evaluation 列表，展开查看触发原因、状态与调度失败详情（资源不足的维度、被约束排除的节点数及原因），用于排查 Allocation 未能放置的原因。
    - **服务（Services）**：该 Job 注册的 Nomad 原生服务，以及每个实例的地址、端口、标签与健康检查结果。
    - **Periodic 与 Parameterized**：Periodic Job 展示下次触发时间并支持立即触发（`periodic/force`）与查看历次子 Job；Parameterized Job 依据 `meta_required`、`meta_optional` 与 `payload` 要求生成派发表单（Payload 支持文本与文件上传，并提示 Nomad 的 16 KiB 上限），派发后跳转到生成的子 Job。
-   - **扩缩副本数**：在 Task Group 卡片上直接调整 `count`（Job 定义了 `scaling` 块时限制在 `min` 与 `max` 之间），经 `/v1/job/:id/scale` 提交并填写原因；提交后读取 Nomad 生成的新 Job 版本写入 `job_revisions`（来源标记为 `scale`，可视化模式同步更新 `count`），不会被判定为外部漂移。
+   - **扩缩副本数**：在 Task Group 卡片上直接调整 `count`（Job 定义了 `scaling` 块时限制在 `min` 与 `max` 之间），经 `/v1/job/:id/scale` 提交并填写原因；提交后读取 Nomad 生成的新 Job 版本写入 `job_revisions`（来源标记为 `scale`），不会被判定为外部漂移。由于 Nomad 重新提交 Job 时以定义中的 `count` 为准，保存的编排内容必须同步，否则下一次 Apply 会撤销扩缩结果：
+     - 可视化模式同步更新 `form_spec_json` 中的 `count` 并重新渲染 HCL；
+     - HCL 模式下，若该 Group 的 `count` 为字面量，使用 `hclwrite` 原位改写该属性（不改动其余内容）；若为变量或表达式无法安全改写，则写入 `job_revisions.count_overridden_json`，再次编辑该 Job 时显著提示“本次提交将把副本数恢复为定义值”，Plan 的 Diff 中同时高亮该项。
 4. **Task Group 视图**：组内全部 Allocation、组内运行中 Allocation 的 CPU 与内存实际用量合计及其与申请量的对比、Volume 请求、扩缩副本数入口与 Scaling 事件历史。
 5. **Allocation 与 Task 视图**：
    - **基本信息**：所在 Client 节点、Datacenter、客户端状态与期望状态、所属 Job 版本、状态描述、重调度链（前驱与后继 Allocation 及原因）、抢占信息。
@@ -583,13 +598,13 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
    - **Task 状态与事件**：各 Task 的生命周期类型（prestart、sidecar、poststart、poststop）、状态、重启次数与完整事件时间线（镜像拉取、启动失败原因、OOM、被信号终止等）。
    - **健康检查**：Nomad 原生服务检查结果（`/v1/allocation/:id/checks`）及 Deployment 健康判定。
    - **日志**：stdout/stderr、尾部历史、实时跟随、关键字过滤与下载，机制见 5.6。
-   - **文件浏览**：经 `/v1/client/fs/ls` 与 `/v1/client/fs/stat` 浏览 Allocation 目录（`alloc/`、`<task>/local/`、`<task>/secrets/` 等）；文本文件在线预览（经 `/v1/client/fs/readat` 读取，单次预览上限 1 MiB），任意文件可流式下载；`secrets/` 目录下文件的预览与下载须二次确认并写审计。
+   - **文件浏览**：经 `/v1/client/fs/ls` 与 `/v1/client/fs/stat` 浏览 Allocation 目录（`alloc/`、`<task>/local/`、`<task>/secrets/` 等）；文本文件在线预览（经 `/v1/client/fs/readat` 读取，单次预览上限 1 MiB），文件可流式下载，下载写审计。Nomad 拒绝经文件接口读取 `secrets/` 目录下的文件内容，界面对该目录只列出文件名、大小与修改时间，并说明需通过交互式终端在 Task 内查看。
    - **操作**：重启单个 Task、重启 Allocation 内全部 Task、停止 Allocation（由调度器重新放置）、向 Task 发送信号，均写审计。
 6. **交互式终端（Exec）与 Job Actions**：
    - 在 Task 上打开浏览器内终端，默认命令 `/bin/sh`，可改为其他命令；Job 中 `action` 块定义的预置动作以按钮列出，点击后在同一终端组件中执行并展示输出。
    - Nomad 的 Exec 与 Action 接口基于 WebSocket，这是 NomadDeck 中唯一使用 WebSocket 的场景。控制面在浏览器与 Nomad 之间双向转发数据帧，并施加以下约束：
      - 浏览器先通过受 CSRF 保护的 `POST` 申请一次性 Exec 票据（绑定会话、集群、Allocation、Task 与命令，30 秒内有效，仅可使用一次），再携带票据发起 WebSocket 升级；
-     - 升级请求严格校验 `Origin` 与管理端同源，并校验票据所属会话与当前会话一致；
+     - 升级请求严格校验 `Origin` 与 `server.public_url` 同源，并校验票据所属会话与当前会话一致；
      - 会话被注销或过期时立即关闭其全部终端；单会话并发终端数（默认 5）、空闲超时（默认 15 分钟）与最长时长（默认 4 小时）均有上限；
      - 审计记录终端的开始与结束时间、集群、Allocation、Task、命令与时长，不记录键盘输入与终端输出（可能包含机密）；
      - 每个集群可在集群配置中关闭 Exec（`clusters.config_json` 的 `exec_enabled`，默认开启），Client 托管配置同时提供 Nomad 侧的 `disable_remote_exec` 开关。
@@ -615,21 +630,26 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 | `vault_token_renew` | `0 */6 * * *`（每 6 小时） | 续租各 Vault 集群的 orphan 周期性运维 Admin Token 并刷新 `admin_token_expires_at`；续租失败时立即告警，不自动执行 `generate-root` 应急流程 |
 | `vault_auto_unseal_watch` | `*/2 * * * *`（每 2 分钟） | 扫描开启 `auto_unseal_by_deck`、未处于维护模式且 `unseal_suppressed_reason` 为空的 Vault 集群，逐台直连 `api_addr` 探测并自动解封 Sealed 节点 |
 | `raft_snapshot_backup` | `0 3 * * *`（每日 03:00） | 以共享模式加集群锁，对已启用的 Nomad / Vault 集群执行 Raft Snapshot 导出（**Nomad 使用 `GET /v1/operator/snapshot`，Vault 使用 `GET /v1/sys/storage/raft/snapshot`**），校验 HTTP 200 与流完整性后加密落盘并写入 `cluster_snapshots`（记录 `product_version`、`seal_generation`、`credential_generation`）；按保留份数轮转清理时与下载/恢复任务互斥 |
+| `control_plane_backup` | `30 1 * * *`（每日 01:30） | 生成以备份口令加密的控制面灾备包（`.ndbundle`），写入全部已配置的备份目标并回读校验，按目标轮转清理（见 5.10） |
 | `self_update_check` | `0 */6 * * *`（每 6 小时） | 查询 NomadDeck 自身 GitHub Release 最新正式版，有新版本时在仪表盘与「版本与升级」页提示；仅检查不安装 |
 | `cleanup_audit_logs` | `0 2 * * *`（每日 02:00） | 清理超过保留天数（默认 90 天）的审计日志 |
 | `cleanup_operation_logs` | `30 2 * * *`（每日 02:30） | 清理超过保留天数（默认 60 天）的运维任务步骤日志与 Cron 执行记录 |
 
-> **Raft 快照安全恢复协议**：快照恢复通过独立异步状态机执行——① 校验快照 `product_version` 兼容性，并按快照 `seal_generation` 在 `vault_unseal_key_generations` 中定位对应代际的密钥，找不到时拒绝恢复（普通恢复使用 Nomad `PUT /v1/operator/snapshot` / Vault `POST /v1/sys/storage/raft/snapshot`；快照代际与当前代际不同时须使用 Vault `snapshot-force` 强制恢复，该操作独立授权）；恢复完成后以快照对应代际的密钥解封，并将该代际重新置为 `active`、`seal_generation` 回退为该代际号；② 集群进入 `maintenance_mode=1`（`snapshot_restore`），暂停变更操作、巡检与自动解封；③ 执行恢复并轮询等待 Leader 重选、Vault 节点重载/解封完成及所有 Raft Peers 追平；④ 恢复完成后自动重验托管凭据、Raft 成员及集群联动状态（若凭据或配置因回滚到旧快照而漂移，保持维护态并引导核对/补录凭据与重刷联动），全部通过后退出维护态。
+> **Raft 快照安全恢复协议**：快照恢复通过独立异步状态机执行——① 校验快照 `product_version` 兼容性，并按快照 `seal_generation` 在 `vault_unseal_key_generations` 中定位对应代际的密钥，找不到时拒绝恢复（普通恢复使用 Nomad `PUT /v1/operator/snapshot` / Vault `POST /v1/sys/storage/raft/snapshot`；快照代际与当前代际不同时须使用 Vault `snapshot-force` 强制恢复，该操作独立授权）；恢复完成后以快照对应代际的密钥解封，并将该代际重新置为 `active`、`seal_generation` 回退为该代际号；② 集群进入 `maintenance_mode=1`（`snapshot_restore`），暂停变更操作、巡检与自动解封；③ 执行恢复并轮询等待 Leader 重选、Vault 节点重载/解封完成及所有 Raft Peers 追平；④ 恢复完成后自动重验托管凭据、Raft 成员及集群联动状态：
+>    - Vault 的托管 Admin Token 在旧快照中可能尚未签发或已被吊销。由于系统常态下不保留 Root Token，恢复状态机检测到 Admin Token 无效时，自动使用快照对应代际的 Unseal Keys 执行 `generate-root` 生成临时 Root Token，重新签发 orphan Admin Token 并立即吊销临时 Root Token（该步骤属于本次已授权的恢复操作，全程写入审计）；
+>    - Nomad 管理 Token 在旧快照中无效时，保持维护态并引导管理员补录或按 5.3 的受控重置流程恢复；
+>    - 集群联动的 JWT Auth Mount、Role 与 Policy 若因回到旧快照而缺失或不一致，标记联动为 `drifted` 并引导重新 Apply；
+>    - 全部通过后退出维护态。
 
 > **自定义定时任务**：同时支持管理员新增自定义定时任务（支持类型：指定集群 Raft 快照、指定节点/集群 Doctor 体检、指定 Nomad 集群 Job 全量导出备份、静态 Vault JWKS 公钥同步）。Nomad 业务层的 Periodic Job 归口在「Job 管理」页面展示与触发，与平台运维定时任务职责清晰分离。
 
 ### 5.9 审计日志与强制脱敏
 
-- **全覆盖**：登录/登出/改密、管理员账号新增/停用/重置密码与会话注销、本机重置密码与主密钥轮换、SSH 密钥管理、节点增删与公钥推送、集群创建/部署/扩缩容/证书续期与 CA 轮换/Gossip 密钥轮换/凭据补录/配置修改/启停/升级/卸载/维护态切换/快照恢复、Nomad Namespace/Node Pool/ACL Policy/ACL Role/ACL Token 管理、Nomad 运行态操作（Deployment Promote/Fail/暂停、扩缩副本数、Periodic 立即触发、Parameterized 派发、Allocation 停止与 Task 重启及发送信号、Client 节点调度资格/Drain/Purge、CSI 卷注销、Variables 增删改与查看原文、`secrets/` 文件预览与下载、交互式终端与 Job Action 的开始与结束）、Vault 初始化/Root Token 吊销/解封/手动封存/Rekey/应急签发运维 Token/策略与密钥操作、集群联动与 Role 下发、Job 提交/启停/重启/回滚/Purge、定时任务修改与触发、迁移导出/导入与控制面激活、控制面自更新/预约升级/版本回退、系统设置修改全部强制写审计。
+- **全覆盖**：登录/登出/改密、账号新增/角色变更/停用/重置密码与会话注销、`viewer` 越权调用被拒绝、本机重置密码与主密钥轮换、SSH 密钥管理、节点增删与公钥推送、集群创建/部署/扩缩容/证书续期与 CA 轮换/Gossip 密钥轮换/凭据补录/配置修改/启停/升级/卸载/维护态切换/快照恢复、Nomad Namespace/Node Pool/ACL Policy/ACL Role/ACL Token 管理、Nomad 运行态操作（Deployment Promote/Fail/暂停、扩缩副本数、Periodic 立即触发、Parameterized 派发、Allocation 停止与 Task 重启及发送信号、Client 节点调度资格/Drain/Purge、CSI 卷注销、Variables 增删改与查看原文、Allocation 文件下载、交互式终端与 Job Action 的开始与结束）、Vault 初始化/Root Token 吊销/解封/手动封存/Rekey/应急签发运维 Token/策略与密钥操作、集群联动与 Role 下发、Job 提交/启停/重启/回滚/Purge、定时任务修改与触发、迁移导出/导入与控制面激活、控制面自更新/预约升级/版本回退、系统设置修改全部强制写审计。
 - **关联追溯**：涉及异步运维任务的操作，审计记录直接关联 `operation_task_id`，管理员可在审计详情页一键展开查看每台节点的脱敏命令输出与回滚轨迹。
 - **强制脱敏**：请求体、命令参数与实时日志流在落盘和推送前统一经脱敏器过滤（匹配 `token`、`password`、`passphrase`、`secret`、`private_key`、`unseal_key`、`gossip_key`、`authorization`、PEM 私钥块及敏感 CLI 参数），全部替换为 `<redacted>`。
 
-### 5.10 环境迁移（导出与导入还原）
+### 5.10 环境迁移与控制面灾备备份
 
 采用**口令加密的可移植迁移包（`.ndbundle`）**，实现跨机器灾备重建与环境一键复制，消除直接拷贝 SQLite 与 `master.key` 的耦合风险（大体积 Raft 快照文件不打入迁移包，支持在快照管理页下载可移植口令加密快照归档并在目标环境上传登记恢复）：
 
@@ -641,9 +661,16 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
    - **导出二次验密**：导出包含全部生产级敏感凭据（SSH 私钥、集群 CA 与客户端私钥、Gossip 密钥、Nomad Management Token、Vault 各代际 Unseal Keys 与 Admin Token、代理凭据），**强制要求复核当前管理员登录密码**（授权仅绑定本次导出参数与范围），再使用管理员输入的临时迁移口令经 **Argon2id + AES-256-GCM** 整包加密输出 `.ndbundle`。
    - **导入预检绑定**：新环境上传 `.ndbundle` 并输入迁移口令 → 解密校验完整性 → 返回 **Dry-Run 预检报告**及一次性 `preview_token`（绑定包 SHA256、还原策略与当前数据库状态版本）；`import/apply` 强制校验 `preview_token` 防止包或目标库状态变化。
    - **全局维护屏障与还原策略**：执行 `import/apply` 前强制进入全局维护状态（拒绝新变更、暂停 Cron、断言无运行中 `operation_tasks`）：
-     - `replace`（整库灾难恢复，推荐）：在单一 SQLite 事务内清空目标表并完整保留原 ULID 与外键关系还原，同时清理本机不存在对应文件的过期 `cluster_snapshots` 索引；
+     - `replace`（整库灾难恢复，推荐）：在单一 SQLite 事务内仅清空**迁移包中包含的表**并完整保留原 ULID 与外键关系还原，迁移包未包含的表（如未勾选的 `admins`、`audit_logs`）保持目标库现状，同时清理本机不存在对应文件的过期 `cluster_snapshots` 索引；
+     - **登录账号提示**：由于导入后会话全部失效，Dry-Run 预检报告明确列出导入后可用于登录的账号——迁移包含 `admins` 时为包内账号（使用源环境的密码），否则为目标库现有账号；若导入后不存在任何启用状态的 `admin` 角色账号，预检直接拒绝该导入。
      - `merge`（增量合并）：按外键依赖顺序（`ssh_keys` → `nodes` → `clusters` → `cluster_nodes` / `vault_secrets_custody` / `vault_unseal_key_generations` → `cluster_integrations` → `integration_roles` → `job_templates` / `cron_jobs`）导入，维护完整的 `old_id -> target_id` 映射表，**不仅重写 SQL 外键，还按结构化规则重写 JSON 字段内嵌引用**（如 `cron_jobs.payload_json` 中的 `cluster_id`/`node_id`）；强绑定的 `vault_secrets_custody`、`vault_unseal_key_generations` 与 `cluster_nodes` 仅跟随所属集群整组一致处理，`integration_roles` 跟随所属联动整组处理。
    - **重加密、会话隔离与防双活安全接管**：所有敏感字段使用目标环境自身的主密钥重新加密写入；事务内**清空 `admin_sessions`，提交后立即断开所有已建立的 SSE 流**，导入前后的任何会话均不能继续使用；清空内存 SSH/API 客户端缓存后，**`replace` 还原默认保持 `cron_jobs` 与 `auto_unseal_by_deck` 处于暂停待命态**，避免源、目标两个控制面同时巡检与解封同一集群，待管理员下线旧控制面后手动点击「激活控制面」恢复自动调度，并全流程写入审计日志。
+3. **控制面定时灾备备份**：
+   - 控制面数据库保存着集群 CA 私钥、Nomad 管理 Token、全部代际 Unseal Keys 与 SSH 私钥，宿主机磁盘损坏将导致这些材料全部丢失（Vault 离线紧急备份只覆盖 Unseal Keys）。因此内置定时任务 `control_plane_backup` 按计划生成灾备包。
+   - 灾备包采用与迁移包相同的 `.ndbundle` 格式，固定包含全部核心配置表与 `admins`（可选包含其余历史数据），以管理员设置的**备份口令**经 Argon2id + AES-256-GCM 加密。备份口令以 `is_secret=1` 存入系统设置供定时任务使用，同时必须由管理员另行保管——控制面宿主机损毁后，只能凭该口令解开灾备包。
+   - 备份目标支持本机目录（默认 `data/backups/scheduled/`）、SFTP（复用 SSH 密钥库）与 S3 兼容对象存储，可同时配置多个；每个目标独立按份数轮转（默认保留 14 份），上传后回读校验 SHA256。生产环境要求至少配置一个异地目标，未配置时仪表盘持续告警。
+   - 启用备份、修改备份口令或目标均需二次验密并写审计；每次备份的结果、大小、目标与校验值记录在定时任务执行历史中，连续失败时仪表盘告警。
+   - 灾备恢复即在新宿主机上执行一次 `replace` 迁移导入（上传灾备包并输入备份口令），流程与防双活约束同本节第 2 项。Raft 快照不进入灾备包，按快照管理页的可移植归档另行保存。
 
 ### 5.11 Consul 可选扩展预留
 
@@ -657,17 +684,18 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 
 1. **部署形态与目录**：
    - 推荐以 systemd 服务方式部署在独立 Linux 宿主机，基础目录为 `/opt/nomad-deck-control`（与被管节点的 `/opt/nomad-deck` 区分）：
-     - 程序版本目录：`/opt/nomad-deck-control/bin/versions/nomad-deck-<ver>`，原子软链 `/opt/nomad-deck-control/bin/nomad-deck` 指向当前版本，默认保留当前版本与上一版本；
+     - 程序版本目录：`/opt/nomad-deck-control/bin/versions/nomad-deck-<ver>`，原子软链 `/opt/nomad-deck-control/bin/nomad-deck` 指向当前版本，`/opt/nomad-deck-control/bin/nomad-deck.prev` 指向上一版本（每次切换时同步更新，供回退单元以固定路径调用），默认保留当前版本与上一版本；
      - 启动配置：`/opt/nomad-deck-control/etc/nomad-deck.toml`；
      - 数据目录：`/opt/nomad-deck-control/data/`（SQLite 数据库、步骤日志、加密快照、升级前数据库备份、`setup.token` 及未使用其他方式提供主密钥时生成的 `master.key`）。
-   - systemd 单元以专用低权用户 `nomad-deck` 运行，`ExecStart` 指向软链路径；配置 `Restart=on-failure` 与 `RestartForceExitStatus=75`（自更新完成后进程以退出码 `75` 退出，由 systemd 立即以新版本拉起）、`StartLimitBurst=5` 与 `StartLimitIntervalSec=120`、`OnFailure=nomad-deck-rollback.service`（见本节第 4 项）、`LoadCredential=master_key:<路径>`，并启用 `ProtectSystem=strict`、`ProtectHome=true`、`PrivateTmp=true`、`NoNewPrivileges=true`，仅放开 `ReadWritePaths=/opt/nomad-deck-control`。
+   - systemd 单元以专用低权用户 `nomad-deck` 运行，`ExecStart` 指向软链路径；采用 `Type=notify`，进程完成 Schema 迁移且 `/readyz` 就绪后才向 systemd 发送就绪通知，并设置 `TimeoutStartSec=180`，启动后卡住、迟迟不就绪同样计为启动失败；配置 `Restart=on-failure`、`RestartSec=3` 与 `RestartForceExitStatus=75`（自更新完成后进程以退出码 `75` 退出，由 systemd 立即以新版本拉起）、`StartLimitBurst=3` 与 `StartLimitIntervalSec=900`、`OnFailure=nomad-deck-rollback.service`（见本节第 4 项）、`LoadCredential=master_key:<路径>`，并启用 `ProtectSystem=strict`、`ProtectHome=true`、`PrivateTmp=true`、`NoNewPrivileges=true`，仅放开 `ReadWritePaths=/opt/nomad-deck-control`。
    - 同时提供容器镜像部署方式。容器内程序文件随镜像固定，**自更新在容器部署与开发模式下禁用**，界面显示当前版本、最新版本与“请更新镜像”的提示；容器部署通过更换镜像版本升级。
 2. **监听端口与 TLS**：
    - 默认监听 `0.0.0.0:8555`，单端口同时承载 Web 管理端、REST API、SSE 流与 `/healthz`、`/readyz` 探针。监听地址可通过启动配置 `listen`、环境变量 `NOMAD_DECK_LISTEN` 或命令行参数 `--listen` 修改（优先级依次升高）。8555 为非特权端口，服务无需 `CAP_NET_BIND_SERVICE`；部署文档提示在宿主机防火墙放行该端口。
    - TLS 模式由启动配置 `tls.mode` 指定：
      - `auto`（默认）：配置了 `tls.cert_file`/`tls.key_file` 时使用该证书；未配置时首次启动在数据目录生成自签证书（SAN 覆盖主机名与全部本机 IP），启动日志与 Setup 向导展示证书 SHA256 指纹供管理员核对；
      - `file`：强制使用指定证书文件，文件缺失时拒绝启动；
-     - `proxy`：由前置反向代理终止 TLS，服务以 HTTP 监听；仅当监听地址为回环地址或配置了 `tls.trusted_proxies` 时允许启用，且仅信任来自这些地址的 `X-Forwarded-Proto` 与 `X-Forwarded-For`，用于判定 HTTPS 与客户端 IP。
+     - `proxy`：由前置反向代理终止 TLS，服务以 HTTP 监听；仅当监听地址为回环地址或配置了 `tls.trusted_proxies` 时允许启用，且仅信任来自这些地址的 `X-Forwarded-Proto` 与 `X-Forwarded-For`，用于判定 HTTPS 与客户端 IP；该模式下必须配置 `server.public_url`，否则拒绝启动。
+   - `server.public_url` 是管理端的外部访问地址，用于 CSRF 与 WebSocket 的同源校验、自签证书 SAN 补充以及告警与审计中的跳转链接。
 3. **版本来源与可信校验**：
    - 新版本来自构建时固化的 NomadDeck GitHub 仓库的 Release，默认只考虑正式版（排除 Draft 与 Pre-release）；系统设置 `self_update.channel` 可切换为 `prerelease` 以包含预发布版本。版本查询与下载统一经过系统设置中的代理 `proxy.url`。
    - 每个 Release 附带各平台程序压缩包、`SHA256SUMS` 及其 Ed25519 签名文件 `SHA256SUMS.sig`。签名私钥仅存在于发布流水线，公钥内置于程序中。自更新依次校验：签名有效 → 目标压缩包的 SHA256 与 `SHA256SUMS` 一致 → 压缩包内程序可执行。任一环节失败即中止，不改动现有安装。仅校验 SHA256 无法防止 Release 被篡改后同时替换程序与摘要，因此签名校验为强制步骤。
@@ -676,10 +704,10 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
    1. **进入升级屏障**：拒绝新的变更类任务并暂停 Cron 派发，等待正在运行的运维任务结束（默认最长 10 分钟，超时则中止升级并解除屏障）。屏障状态持久化在 `self_update.last_result` 中，进程重启后继续生效，直到新版本确认就绪。
    2. **查找与下载**：解析目标版本（`latest` 或指定版本号），确认存在当前平台的程序包与签名摘要文件后下载，界面按阶段展示进度。
    3. **校验与试运行**：完成第 3 项的签名与摘要校验，解压到 `bin/versions/nomad-deck-<ver>`，执行新程序的 `--version` 并确认输出与目标版本一致。
-   4. **升级前数据库备份**：以 SQLite 在线备份生成 `data/backups/pre-upgrade-<from>-<to>.db`（权限 `0600`，与数据库同等敏感），并记录当前 Schema 版本。
-   5. **原子切换与重启**：将 `bin/nomad-deck` 软链原子切换到新版本，在 `self_update.last_result` 中记录 `pending`（含原版本、目标版本、备份文件与原 Schema 版本），写审计后进程以退出码 `75` 退出，由 systemd 拉起新版本。
-   6. **新版本确认**：新进程启动后执行 Schema 迁移，`/readyz` 就绪后把 `self_update.last_result` 置为 `succeeded`、解除升级屏障并恢复 Cron。前端在重启期间把连接失败视为正常等待，轮询版本接口直至实际运行版本等于目标版本后自动刷新页面；5 分钟内未确认时停止等待并提示查看任务日志。
-   - **启动失败自动回退**：新版本若反复启动失败，触发 systemd 启动次数上限后主单元进入失败状态，由 `OnFailure` 拉起 `nomad-deck-rollback.service`（以 root 运行的 oneshot 单元，只调用上一版本程序，不接受任何外部输入）。该服务以上一版本程序执行 `nomad-deck rollback --auto`：仅当 `self_update.last_result` 处于 `pending` 时才动作，将软链切回原版本、用升级前备份恢复数据库、记录失败原因并重新启动主服务；普通的运行期崩溃不会触发回退。新版本未就绪即回退，备份之后不存在需要保留的新数据。
+   4. **升级前数据库备份**：以 SQLite 在线备份生成 `data/backups/pre-upgrade-<from>-<to>.db`（权限 `0600`，与数据库同等敏感），并记录当前 Schema 版本；升级前备份默认保留最近 3 份（系统设置 `self_update.backup_retention`），超出部分在新版本确认就绪后清理。
+   5. **原子切换与重启**：将 `bin/nomad-deck.prev` 指向当前版本、`bin/nomad-deck` 原子切换到新版本，在 `self_update.last_result` 中记录 `pending`（含原版本、目标版本、备份文件、原 Schema 版本与本次 `system.self_update` 任务 ID），写审计后进程以退出码 `75` 退出，由 systemd 拉起新版本。此时该任务在库中仍为 `running`，启动扫描不会把它标记为 `needs_reconcile`。
+   6. **新版本确认**：新进程启动后执行 Schema 迁移，`/readyz` 就绪并向 systemd 发出就绪通知后，把 `self_update.last_result` 置为 `succeeded`、将对应任务置为 `success`、解除升级屏障并恢复 Cron。前端在重启期间把连接失败视为正常等待，轮询版本接口直至实际运行版本等于目标版本后自动刷新页面；5 分钟内未确认时停止等待并提示查看任务日志。
+   - **启动失败自动回退**：新版本若反复崩溃或在 `TimeoutStartSec` 内始终未就绪，触发 systemd 启动次数上限后主单元进入失败状态，由 `OnFailure` 拉起 `nomad-deck-rollback.service`（以 root 运行的 oneshot 单元，`ExecStart` 固定为 `/opt/nomad-deck-control/bin/nomad-deck.prev rollback --auto`，不接受任何外部输入）。上一版本程序仅当 `self_update.last_result` 处于 `pending` 时才动作：将 `bin/nomad-deck` 切回原版本、用升级前备份恢复数据库、把对应任务置为 `rolled_back` 并记录失败原因、解除升级屏障，然后重新启动主服务；普通的运行期崩溃不会触发回退。新版本未就绪即回退，备份之后不存在需要保留的新数据。
 5. **版本回退（手动）**：
    - 已确认成功的升级，在「版本与升级」页可回退到上一版本：两版本 Schema 版本相同时直接切换软链并重启，数据保持不变；Schema 版本不同时界面拒绝回退，并说明只能在本机执行 `nomad-deck rollback --to-backup <文件>`，该命令会用升级前备份覆盖数据库、丢失升级后的全部数据变更，执行前须交互确认。
 6. **预约升级**：
@@ -692,31 +720,34 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 
 ## 6. HTTP API 与实时流规范设计
 
-服务默认监听 `0.0.0.0:8555`。所有管理接口统一前缀 `/api/v1`（除登录与初始化接口外均需校验 Admin 登录态），运维探针暴露 `/healthz` 与 `/readyz`。
+服务默认监听 `0.0.0.0:8555`。所有管理接口统一前缀 `/api/v1`（除登录与初始化接口外均需校验登录态；变更类接口与敏感读取接口还要求 `admin` 角色，见 5.1），运维探针暴露 `/healthz` 与 `/readyz`。
+
+**Nomad Job 的定位规则**：Nomad Job ID 只在 Namespace 内唯一，且 Periodic 与 Parameterized 生成的子 Job ID 含有 `/`（如 `backup/periodic-1700000000`、`render/dispatch-1700000000-ab12cd34`）。因此单个 Job 的接口统一以 `/api/v1/nomad/{cluster_id}/namespaces/{namespace}/jobs/{job_id}` 定位，`job_id` 必须整体做 URL 编码（`/` 编码为 `%2F`），服务端按原始编码路径匹配路由后再解码；不针对单个 Job 的集合操作（渲染、反解、转换、校验、Plan、Apply、导出）统一放在 `/api/v1/nomad/{cluster_id}/job-ops/` 下，与任意 Job ID 都不会冲突。Allocation、Deployment、Evaluation 使用全局唯一 UUID，不需要 Namespace。
 
 | 模块 | 核心接口 | 说明 |
 | :--- | :--- | :--- |
 | **认证与初始化** | `GET /api/v1/auth/status`<br>`POST /api/v1/auth/setup`<br>`POST /api/v1/auth/login`<br>`POST /api/v1/auth/logout`<br>`PUT /api/v1/auth/password`<br>`GET /api/v1/auth/sessions`<br>`DELETE /api/v1/auth/sessions/{session_id}` | 检查是否需初始化、凭一次性 Setup Token 原子创建首个管理员、登录/登出（删除当前会话并断开其 SSE）、修改密码（注销其他会话）、查看与注销会话 |
-| **管理员账号** | `GET/POST /api/v1/admins`<br>`PUT /api/v1/admins/{id}`<br>`POST /api/v1/admins/{id}/reset-password`<br>`POST /api/v1/admins/{id}/{disable\|enable}` | 管理员列表、新增、编辑、重置他人密码、停用/启用（均需二次验密，禁止停用最后一个启用账号） |
+| **账号管理**（`admin`） | `GET/POST /api/v1/admins`<br>`PUT /api/v1/admins/{id}`<br>`PUT /api/v1/admins/{id}/role`<br>`POST /api/v1/admins/{id}/reset-password`<br>`POST /api/v1/admins/{id}/{disable\|enable}` | 账号列表、新增（指定 `admin`/`viewer` 角色）、编辑、修改角色、重置他人密码、停用/启用（均需二次验密，禁止停用或降级最后一个启用的 `admin`） |
 | **总览仪表盘** | `GET /api/v1/dashboard/summary` | 集群数量、节点在线率、Nomad Job 统计、Vault 密封状态、证书临期预警、待核对任务与审计动态 |
 | **SSH 密钥管理** | `GET/POST /api/v1/ssh-keys`<br>`POST /api/v1/ssh-keys/generate`<br>`PUT /api/v1/ssh-keys/{id}/default`<br>`DELETE /api/v1/ssh-keys/{id}` | 列表、导入、生成 Ed25519 密钥对、设为默认、删除（被主机引用时禁止删除） |
-| **主机节点管理** | `GET/POST /api/v1/nodes`<br>`GET/PUT/DELETE /api/v1/nodes/{id}`<br>`POST /api/v1/nodes/{id}/push-key`<br>`POST /api/v1/nodes/{id}/test`<br>`POST /api/v1/nodes/{id}/reset-fingerprint` | 主机增删改查、一次性密码幂等推公钥、SSH 连通与环境探测（架构/sudo/SELinux/Swap）、重置主机指纹 |
+| **主机节点管理** | `GET/POST /api/v1/nodes`<br>`GET/PUT/DELETE /api/v1/nodes/{id}`<br>`POST /api/v1/nodes/{id}/push-key`<br>`POST /api/v1/nodes/{id}/test`<br>`POST /api/v1/nodes/{id}/reset-fingerprint` | 主机增删改查、一次性密码幂等推公钥、SSH 连通与环境探测（架构/sudo/SELinux/Swap/Docker/时间同步/`machine_id`）、重置主机指纹 |
 | **集群与成员编排** | `GET/POST /api/v1/clusters`<br>`GET/PUT/DELETE /api/v1/clusters/{id}`<br>`POST /api/v1/clusters/{id}/nodes`<br>`POST /api/v1/clusters/{id}/nodes/{node_id}/join`<br>`POST /api/v1/clusters/{id}/nodes/{node_id}/remove`<br>`POST /api/v1/clusters/{id}/deploy`<br>`POST /api/v1/clusters/{id}/upgrade/plan`<br>`POST /api/v1/clusters/{id}/upgrade`<br>`POST /api/v1/clusters/{id}/certs/renew`<br>`POST /api/v1/clusters/{id}/ca/rotate`<br>`POST /api/v1/clusters/{id}/gossip/rotate`<br>`PUT /api/v1/clusters/{id}/credentials`<br>`POST /api/v1/clusters/{id}/reconcile`<br>`PUT /api/v1/clusters/{id}/maintenance`<br>`POST /api/v1/clusters/{id}/uninstall/plan`<br>`POST /api/v1/clusters/{id}/uninstall`<br>`POST /api/v1/clusters/{id}/doctor` | 集群创建与纳管节点、单节点扩容 Join 与安全缩容 Remove、一键部署、滚动升级、节点/客户端证书续期、CA 重叠轮换、Nomad Gossip 密钥轮换、管理凭据补录/恢复、崩溃后状态核对与解锁、维护模式开关、卸载、健康体检 |
 | **集群 Raft 快照** | `GET /api/v1/clusters/{id}/snapshots`<br>`POST /api/v1/clusters/{id}/snapshots`<br>`POST /api/v1/clusters/{id}/snapshots/upload`<br>`GET /api/v1/clusters/{id}/snapshots/{snapshot_id}/download`<br>`POST /api/v1/clusters/{id}/snapshots/{snapshot_id}/restore`<br>`DELETE /api/v1/clusters/{id}/snapshots/{snapshot_id}` | 快照列表查询、手动创建加密快照、上传登记可移植快照归档、下载归档、状态机驱动的安全快照恢复（区分标准与 force 模式）、删除过期快照 |
 | **单节点服务与日志** | `POST /api/v1/clusters/{id}/nodes/{node_id}/service/{start\|stop\|restart}`<br>`PUT /api/v1/clusters/{id}/nodes/{node_id}/config`<br>`GET /api/v1/clusters/{id}/nodes/{node_id}/logs/stream` (SSE) | 经仲裁门禁的单节点服务启停重启、托管配置更新（代际目录校验+原子软链+回滚）、实时 `journalctl` 日志流 |
 | **Vault 专有能力** | `POST /api/v1/vault/{cluster_id}/init`<br>`POST /api/v1/vault/{cluster_id}/unseal`<br>`POST /api/v1/vault/{cluster_id}/seal`<br>`PUT /api/v1/vault/{cluster_id}/custody`<br>`POST /api/v1/vault/{cluster_id}/custody/backup`<br>`POST /api/v1/vault/{cluster_id}/custody/recover-token`<br>`POST /api/v1/vault/{cluster_id}/rekey`<br>`GET /api/v1/vault/{cluster_id}/key-generations`<br>`GET/POST/DELETE /api/v1/vault/{cluster_id}/auth`<br>`GET/PUT/DELETE /api/v1/vault/{cluster_id}/policies/{name}`<br>`GET /api/v1/vault/{cluster_id}/kv/mounts`<br>`GET/PUT/DELETE /api/v1/vault/{cluster_id}/kv/item?mount=...&path=...` | 集群初始化并加密托管（初始化后吊销 Root Token）、单节点/全集群一键解封、手动安全封存（写入自动解封抑制）、自动解封开关、二次验密离线备份、经 `generate-root` 应急重签运维 Token、带验证的 Unseal Key 轮换与代际查看（不返回密钥原文）、Auth/Policy 管理、支持嵌套 Mount 路径与 CAS/区分删除语义的 KV 管理 |
 | **Nomad 治理** | `GET/POST/PUT/DELETE /api/v1/nomad/{cluster_id}/namespaces`<br>`GET/POST/PUT/DELETE /api/v1/nomad/{cluster_id}/node-pools`<br>`GET/PUT/DELETE /api/v1/nomad/{cluster_id}/acl/policies/{name}`<br>`GET/POST/PUT/DELETE /api/v1/nomad/{cluster_id}/acl/roles`<br>`GET/POST /api/v1/nomad/{cluster_id}/acl/tokens`<br>`DELETE /api/v1/nomad/{cluster_id}/acl/tokens/{accessor_id}` | Namespace 与 Node Pool 管理、ACL Policy 与 Role 编辑、Client Token 签发（Secret 仅返回一次）与吊销 |
 | **Nomad 运行态：订阅与搜索** | `GET /api/v1/nomad/{cluster_id}/watch?topics=...` (SSE)<br>`GET /api/v1/nomad/{cluster_id}/search?q=...` | 单连接复用的运行态变化订阅（基于共享阻塞查询）、全局模糊搜索 |
-| **Nomad 运行态：Job 视图** | `GET /api/v1/nomad/{cluster_id}/jobs/{job_id}/{summary\|versions\|submission\|deployments\|allocations\|evaluations\|services\|children\|scale}`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/scale`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/periodic/force`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/dispatch`<br>`POST /api/v1/nomad/{cluster_id}/deployments/{deployment_id}/{promote\|fail\|pause\|resume}` | Job 概览、版本 Diff、原始提交源码、Deployment、Allocation、Evaluation、服务、子 Job 与扩缩状态；扩缩副本数、Periodic 立即触发、Parameterized 派发、金丝雀 Promote 与部署 Fail/暂停/恢复 |
+| **Nomad 运行态：Job 视图** | `GET /api/v1/nomad/{cluster_id}/namespaces/{namespace}/jobs/{job_id}/{summary\|versions\|submission\|deployments\|allocations\|evaluations\|services\|children\|scale}`<br>`POST /api/v1/nomad/{cluster_id}/namespaces/{namespace}/jobs/{job_id}/scale`<br>`POST /api/v1/nomad/{cluster_id}/namespaces/{namespace}/jobs/{job_id}/periodic/force`<br>`POST /api/v1/nomad/{cluster_id}/namespaces/{namespace}/jobs/{job_id}/dispatch`<br>`POST /api/v1/nomad/{cluster_id}/deployments/{deployment_id}/{promote\|fail\|pause\|resume}` | Job 概览、版本 Diff、原始提交源码、Deployment、Allocation、Evaluation、服务、子 Job 与扩缩状态；扩缩副本数、Periodic 立即触发、Parameterized 派发、金丝雀 Promote 与部署 Fail/暂停/恢复 |
 | **Nomad 运行态：Allocation** | `GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/stats`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/checks`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/fs/{ls\|stat\|readat\|download}?path=...`<br>`POST /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/{restart\|stop\|signal}`<br>`POST /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/exec-ticket`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/exec?ticket=...` (WebSocket) | Allocation 详情（含运行端口、Task 事件与重调度链）、实时资源用量、健康检查、文件浏览预览与下载、重启/停止/发送信号、申请一次性终端票据、交互式终端与 Job Action 双向转发 |
 | **Nomad 运行态：节点与集群** | `GET /api/v1/nomad/{cluster_id}/clients`<br>`GET /api/v1/nomad/{cluster_id}/clients/{node_id}`<br>`GET /api/v1/nomad/{cluster_id}/clients/{node_id}/stats`<br>`POST /api/v1/nomad/{cluster_id}/clients/{node_id}/{eligibility\|drain\|purge}`<br>`GET /api/v1/nomad/{cluster_id}/servers`<br>`GET /api/v1/nomad/{cluster_id}/topology`<br>`GET /api/v1/nomad/{cluster_id}/evaluations` | Client 节点列表与详情、宿主机实时资源用量、调度资格/Drain/Purge、Server 成员、拓扑容量视图、全局 Evaluation 列表 |
 | **Nomad 运行态：存储与 Variables** | `GET /api/v1/nomad/{cluster_id}/volumes`<br>`GET/DELETE /api/v1/nomad/{cluster_id}/volumes/{volume_id}`<br>`GET /api/v1/nomad/{cluster_id}/plugins`<br>`GET /api/v1/nomad/{cluster_id}/variables?prefix=...`<br>`GET/PUT/DELETE /api/v1/nomad/{cluster_id}/variables/item?path=...&namespace=...`<br>`POST /api/v1/nomad/{cluster_id}/variables/item/reveal?path=...&namespace=...` | CSI 卷与插件、动态 Host Volume、注销 CSI 卷；Variables 路径树浏览、带 `cas` 的增删改、默认遮蔽与审计的原文查看 |
 | **Nomad-Vault 联动** | `GET/POST/PUT/DELETE /api/v1/integrations`<br>`GET/POST/PUT/DELETE /api/v1/integrations/{id}/roles`<br>`POST /api/v1/integrations/{id}/plan`<br>`POST /api/v1/integrations/{id}/apply`<br>`POST /api/v1/integrations/{id}/doctor`<br>`POST /api/v1/integrations/{id}/job-example` | 联动配置与工作负载 Role 管理、变更预览（含作用范围、mTLS 冲突、资源归属与入口高可用检测）、双锁一键下发（仅 Nomad 侧配置变化时滚动重启）、四段式体检与真实 JWT Login 验证、按 Role 生成测试 Job |
-| **Nomad Job 管理** | `GET /api/v1/nomad/{cluster_id}/jobs`<br>`GET /api/v1/nomad/{cluster_id}/jobs/{job_id}`<br>`GET/POST/PUT/DELETE /api/v1/job-templates`<br>`POST /api/v1/nomad/{cluster_id}/jobs/render`<br>`POST /api/v1/nomad/{cluster_id}/jobs/parse-to-visual`<br>`POST /api/v1/nomad/{cluster_id}/jobs/compose-convert`<br>`POST /api/v1/nomad/{cluster_id}/jobs/validate`<br>`POST /api/v1/nomad/{cluster_id}/jobs/plan`<br>`POST /api/v1/nomad/{cluster_id}/jobs/apply`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/{start\|stop\|restart\|purge}`<br>`GET /api/v1/nomad/{cluster_id}/jobs/{job_id}/revisions`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/revert`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/logs/stream` (SSE)<br>`GET /api/v1/nomad/{cluster_id}/jobs/export` | Job 查询与详情、Job 模板管理、可视化 Spec 经 `hclwrite` 渲染 HCL、HCL 本地 AST 预检+受控反解、Compose 转换、校验/绑定 `plan_hash` 与 `JobModifyIndex` 的 Plan-Apply、启动/停止/重启/Purge、现网漂移检测与版本回滚、Allocation 实时日志流、批量导出 HCL |
+| **Nomad Job 管理** | `GET /api/v1/nomad/{cluster_id}/jobs?namespace=...`<br>`GET /api/v1/nomad/{cluster_id}/namespaces/{namespace}/jobs/{job_id}`<br>`GET/POST/PUT/DELETE /api/v1/job-templates`<br>`POST /api/v1/nomad/{cluster_id}/job-ops/{render\|parse-to-visual\|compose-convert\|validate\|plan\|apply}`<br>`POST /api/v1/nomad/{cluster_id}/job-ops/export`<br>`POST /api/v1/nomad/{cluster_id}/namespaces/{namespace}/jobs/{job_id}/{start\|stop\|restart\|purge\|revert}`<br>`GET /api/v1/nomad/{cluster_id}/namespaces/{namespace}/jobs/{job_id}/revisions`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/logs/stream` (SSE) | Job 查询与详情、Job 模板管理、可视化 Spec 经 `hclwrite` 渲染 HCL、HCL 本地 AST 预检+受控反解、Compose 转换、校验/绑定 `plan_hash` 与 `JobModifyIndex` 的 Plan-Apply、启动/停止/重启/Purge、现网漂移检测与版本回滚、Allocation 实时日志流、批量导出 HCL |
 | **运维任务追踪** | `GET /api/v1/operations`<br>`GET /api/v1/operations/{task_id}`<br>`GET /api/v1/operations/{task_id}/stream` (SSE) | 查看历史运维任务、逐节点步骤状态与实时脱敏终端输出流 |
 | **定时任务** | `GET/POST/PUT/DELETE /api/v1/cron-jobs`<br>`POST /api/v1/cron-jobs/{id}/run`<br>`GET /api/v1/cron-jobs/{id}/runs` | 定时任务管理、启停与 Cron/防重入/漏执行策略修改、手动触发、关联 `operation_task_id` 的执行历史查看 |
 | **审计日志** | `GET /api/v1/audit-logs`<br>`GET /api/v1/audit-logs/{id}` | 多条件分页检索（时间、动作、资源、结果、关键字）与脱敏详情查看 |
 | **环境迁移** | `POST /api/v1/migration/export`<br>`POST /api/v1/migration/import/preview`<br>`POST /api/v1/migration/import/apply`<br>`POST /api/v1/migration/activate` | 二次验密加密导出 `.ndbundle`、上传口令预检（签发绑定 `preview_token`）、全局维护屏障下事务导入还原、迁移后显式激活控制面自动调度 |
+| **控制面灾备备份**（`admin`） | `GET/PUT /api/v1/backup/config`<br>`POST /api/v1/backup/targets/test`<br>`POST /api/v1/backup/run`<br>`GET /api/v1/backup/history` | 备份开关、备份口令、目标（本机目录/SFTP/S3 兼容存储）与保留份数配置（二次验密）、目标连通性测试、立即备份、备份历史与校验结果 |
 | **系统设置** | `GET/PUT /api/v1/settings`<br>`GET /api/v1/releases/{nomad\|vault\|cni}` | 全局系统参数管理（含 PGP 公钥、CNI 摘要登记、版本跨度与时区）、拉取官方/镜像源可用版本列表 |
 | **控制面版本与自更新** | `GET /api/v1/system/version`<br>`POST /api/v1/system/self-update`<br>`GET/POST/DELETE /api/v1/system/self-update/schedule`<br>`GET /api/v1/system/self-update/result`<br>`POST /api/v1/system/self-update/rollback` | 当前版本、最新版本、更新说明与自更新可用性（容器/开发模式返回不可用原因）；立即升级到最新版或指定版本（返回运维任务 ID）；预约升级的查询、创建与取消；最近一次升级结果；同 Schema 版本下回退到上一版本 |
 
@@ -727,10 +758,10 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 管理端采用简洁的深/浅色自适应控制台风格，所有操作闭环在浏览器内完成，无需人工 SSH 登录目标节点：
 
 1. **首次初始化向导 / 登录页**：检测未初始化时要求输入本机生成的一次性 Setup Token 引导创建 Admin 账号并生成默认 SSH 密钥；后续进入标准登录页。
-2. **总览仪表盘（Dashboard）**：Nomad/Vault 集群健康卡、主机在线概览、Vault 密封/抑制告警、Vault 运维 Token 续租异常告警、CA/节点/客户端证书到期告警、待核对异常任务提示、Nomad 运行中 Job/Alloc 计数、NomadDeck 新版本提示、最近运维任务与审计动态。
+2. **总览仪表盘（Dashboard）**：Nomad/Vault 集群健康卡、主机在线概览、Vault 密封/抑制告警、Vault 运维 Token 续租异常告警、Vault 审计设备与审计日志分区告警、节点时钟偏差告警、控制面灾备备份失败或缺少异地目标告警、CA/节点/客户端证书到期告警、待核对异常任务提示、Nomad 运行中 Job/Alloc 计数、NomadDeck 新版本提示、最近运维任务与审计动态。
 3. **基础设施（Infrastructure）**：
    - **SSH 密钥库**：生成/导入/复制公钥、一键生成目标机配置命令、查看引用主机；
-   - **主机节点**：主机列表、一键密码推公钥、SSH 探测（系统架构、免密 `sudo`、SELinux 与 Swap 状态展示及配置指引）、主机指纹管理。
+   - **主机节点**：主机列表、一键密码推公钥、SSH 探测（系统架构、免密 `sudo`、SELinux、Swap、Docker、时间同步与 `machine_id` 状态展示及配置指引）、主机指纹管理。
 4. **Nomad 集群**：
    - 集群向导（单机/多节点 Server+Client 拓扑、统一业务入口、显式 TLS/Gossip/ACL 一键配置）；
    - 节点管理（安装、单节点扩容 Join 与安全缩容 Remove、经仲裁门禁的启停重启、托管配置表单：Docker/CNI/Host Volume/Meta/TLS/Telemetry/UI、版本升级与滚动升级向导、节点/客户端证书续期与 CA 轮换、维护态与崩溃核对解锁、凭据应急恢复、Dry-Run 卸载、Doctor 体检）；
@@ -755,9 +786,9 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 8. **运维任务中心（Operations）**：所有长耗时任务的时间线、逐节点步骤状态、崩溃后待核对任务操作与可回放的脱敏终端日志。
 9. **定时任务（Schedules）**：内置与自定义定时任务列表、Cron 表达式与防重入/漏执行策略编辑、启停开关、立即执行与关联 `operation_task_id` 的历史记录。
 10. **审计日志（Audit Logs）**：按动作/资源/结果/时间筛选、查看脱敏操作摘要与关联的运维任务日志。
-11. **环境迁移（Migration）**：向导式导出（二次验密 + 勾选范围 + 设置迁移口令下载 `.ndbundle`）与导入（上传 + 口令解密 → Dry-Run 绑定预检 → 全局维护屏障下选择 `replace`/`merge` 一键还原 → 确认旧实例下线后一键「激活控制面」）。
+11. **环境迁移与灾备（Migration & Backup）**：向导式导出（二次验密 + 勾选范围 + 设置迁移口令下载 `.ndbundle`）与导入（上传 + 口令解密 → Dry-Run 绑定预检，列出导入后可登录的账号 → 全局维护屏障下选择 `replace`/`merge` 一键还原 → 确认旧实例下线后一键「激活控制面」）；灾备备份配置（备份口令、本机/SFTP/S3 目标与连通性测试、保留份数）、立即备份与备份历史，未配置异地目标时持续提示。
 12. **系统设置（Settings）**：下载模式（直连/中转）、镜像源与 PGP 验签公钥、CNI 版本摘要登记、升级版本跨度上限、资源统计采样间隔、交互式终端空闲与最长时长、Grafana 跳转链接模板、HTTP/SOCKS5 代理、时区、默认版本号、SSH 超时与并发度、会话有效期、日志与快照保留天数。
-13. **账号与会话（Accounts）**：当前管理员改密、本人活跃会话列表与注销；管理员账号列表、新增、停用/启用与重置密码。
+13. **账号与会话（Accounts）**：当前账号改密、本人活跃会话列表与注销；（`admin`）账号列表、新增并指定角色、修改角色、停用/启用与重置密码。`viewer` 登录后所有变更按钮、终端入口与敏感操作入口均隐藏，顶部显示“只读”标识。
 14. **版本与升级（Version）**：并排显示当前版本与最新版本及更新说明，提供立即升级（分阶段展示下载、校验、备份、重启、确认，完成后自动刷新页面）、预约升级（目标版本、等待时长、检查间隔、剩余时间与下次检查倒计时）、最近一次升级结果与回退到上一版本；容器部署或开发模式下禁用升级操作并说明原因。
 
 ---
@@ -766,25 +797,26 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 
 本项目按单次完整发布（`v1.0.0`）推进，研发与联调按以下依赖顺序落地：
 
-1. **底座层**：Go 工程骨架、TOML 配置与默认 `0.0.0.0:8555` 监听（`auto`/`file`/`proxy` 三种 TLS 模式）、主密钥多来源加载（systemd 凭据/环境变量/文件）与信封加密、主密钥轮换子命令、Argon2id/TLS/SSH 密钥库、SQLite WAL 读写分离连接池与 Schema 迁移、一次性 Setup Token + Admin 认证（`Secure` Cookie 服务端会话、CSRF/Origin 校验、SSE 会话绑定）、管理员账号管理与本机重置密码、流式审计脱敏中间件。
-2. **远端执行与任务引擎**：纯 Go SSH/SFTP 连接池、TOFU 指纹校验、固定命令模板与参数白名单/受保护 staging 原子落位、幂等一键推公钥、SELinux/免密 `sudo`/Swap/Docker/`machine_id` 探测、PGP 签名+SHA256 双校验预解压中转下载与 CNI 固定摘要校验、异步长任务队列（共享/独占两种模式的集群锁与主机产品锁、远端步骤以临时 systemd 单元执行、按产品分离的 `.op.lock` 崩溃核对与 SSE 实时日志推流）。
-3. **Vault 驱动与托管解封**：Vault 集群部署（TLS + Raft + `disable_mlock` + `LimitCORE=0` + Swap 预检）、`init_in_doubt` 治理与 Shamir 两阶段 Raft 加入、密钥代际托管、orphan 周期性 Admin Token 与 Root Token 吊销、`generate-root` 应急重签、带验证的 Rekey、手动安全封存抑制与节点级解封、离线紧急备份、基于 Autopilot 的统一 Raft 仲裁门禁、单节点扩缩容与证书/CA 轮换、版本跨度校验与升级前快照/熔断、按密钥代际的 Raft 快照安全恢复状态机、Auth/Policy/支持嵌套路径与 CAS 的 KV v2 管理、Doctor 体检。
-4. **Nomad 驱动与集群联动**：Nomad 单机/集群部署（按角色区分 `nomad`/`root` 运行用户、显式 TLS 配置且 `verify_https_client` 默认关闭、专属 SAN 证书、Gossip 与预生成 Secret 的 ACL Bootstrap）、版本代际目录原子软链配置管理、基于 Autopilot 的统一 Raft 仲裁门禁、单节点扩缩容（含 `server_client` 双角色与 Drain 等待）、证书/CA/Gossip 密钥轮换、版本跨度校验升级与熔断、Namespace/ACL Policy/ACL Token 治理、Nomad-Vault 双向 TLS 信任联动（多 Role 模型、`explicit`/`templated` Policy、`role_type="jwt"`、`user_claim_json_pointer`、`bound_claims`、资源归属隔离、仅 Nomad 侧配置变化时滚动重启）及端到端 JWT Login 体检、Consul 扩展接口预留。
-5. **Nomad Job 中心**：Job 列表/详情、基于 `hcl/v2` 的可视化动态编排与受限 AST 附加片段、本地 AST 预检+受控反解、原生 HCL 编辑、纯 Go Compose 转换（含阻断校验）、模板管理、现网漂移检测、按 `plan_hash` 提交审阅时 Job JSON 并绑定 `JobModifyIndex` 的 Validate/Plan/Apply、启停重启与 Purge、基于 Nomad 原生 Revert 的版本回滚、Allocation SSE 实时日志流、HCL 导出；Nomad 运行态工作台（共享阻塞查询的 SSE 订阅、全局搜索、Job 各视图与 Deployment/扩缩/Periodic/Dispatch 操作、运行端口、Task 与节点实时资源统计、Allocation 文件浏览、基于一次性票据的 Exec/Action WebSocket 终端、Client 节点调度资格与 Drain、Server/拓扑/存储/Variables/Evaluation 视图、Node Pool 与 ACL Role 管理）。
-6. **平台运营闭环**：定时任务（含防重入/漏执行/关联 `operation_task_id`、节点级健康巡检、CA/客户端/节点证书告警、Vault Token 续租、自动解封巡检、共享锁模式的 Raft 快照登记与互斥轮转、自更新版本检查、日志清理）、二次验密加密迁移包（`.ndbundle`，含步骤日志文件）导出/绑定预检/全局维护屏障下外键与 JSON 内引用一致还原/防双活激活、系统设置。
-7. **控制面自更新**：GitHub Release 版本查询、Ed25519 签名与 SHA256 校验、升级屏障、升级前数据库备份、软链原子切换与退出码 `75` 重启、新版本就绪确认、启动失败自动回退、手动回退、预约升级；发布流水线产出各平台程序包、`SHA256SUMS` 与 `SHA256SUMS.sig`。
+1. **底座层**：Go 工程骨架、TOML 配置与默认 `0.0.0.0:8555` 监听（`auto`/`file`/`proxy` 三种 TLS 模式）、主密钥多来源加载（systemd 凭据/环境变量/文件）与信封加密、主密钥轮换子命令、Argon2id/TLS/SSH 密钥库、SQLite WAL 读写分离连接池与 Schema 迁移、一次性 Setup Token + Admin 认证（`Secure` Cookie 服务端会话、以 `server.public_url` 为准的 CSRF/Origin 校验、SSE 会话绑定）、`admin`/`viewer` 角色与服务端权限校验、账号管理与本机重置密码、流式审计脱敏中间件。
+2. **远端执行与任务引擎**：纯 Go SSH/SFTP 连接池、TOFU 指纹校验、固定命令模板与参数白名单/受保护 staging 原子落位、幂等一键推公钥、SELinux/免密 `sudo`/Swap/Docker/时间同步/`machine_id` 探测与产品版本下限校验、PGP 签名+SHA256 双校验预解压中转下载与 CNI 固定摘要校验、异步长任务队列（共享/独占两种模式的集群锁与主机产品锁、远端步骤以临时 systemd 单元执行、按产品分离的 `.op.lock` 崩溃核对与 SSE 实时日志推流）。
+3. **Vault 驱动与托管解封**：Vault 集群部署（TLS + Raft + `disable_mlock` + `LimitCORE=0` + Swap 预检 + 文件审计设备与日志轮转）、`init_in_doubt` 治理与 Shamir 两阶段 Raft 加入、密钥代际托管、orphan 周期性 Admin Token 与 Root Token 吊销、`generate-root` 应急重签、保存验证 nonce 的带验证 Rekey、快照恢复后自动重签 Admin Token、手动安全封存抑制与节点级解封、离线紧急备份、基于 Autopilot 的统一 Raft 仲裁门禁、单节点扩缩容与证书/CA 轮换、版本跨度校验与升级前快照/熔断、按密钥代际的 Raft 快照安全恢复状态机、Auth/Policy/支持嵌套路径与 CAS 的 KV v2 管理、Doctor 体检。
+4. **Nomad 驱动与集群联动**：Nomad 单机/集群部署（按角色区分 `nomad`/`root` 运行用户、显式 TLS 配置且 `verify_https_client` 默认关闭、专属 SAN 证书、Gossip 与预生成 Secret 的 ACL Bootstrap）、版本代际目录原子软链配置管理、基于 Autopilot 的统一 Raft 仲裁门禁、单节点扩缩容（含 `server_client` 双角色与 Drain 等待）、证书/CA/Gossip 密钥轮换、版本跨度校验升级与熔断、Namespace/Node Pool/ACL Policy/ACL Role/ACL Token 治理、Nomad-Vault 双向 TLS 信任联动（多 Role 模型、`explicit`/`templated` Policy、`role_type="jwt"`、`user_claim_json_pointer`、`bound_claims`、资源归属隔离、仅 Nomad 侧配置变化时滚动重启）及端到端 JWT Login 体检、Consul 扩展接口预留。
+5. **Nomad Job 中心**：按 Namespace 与 URL 编码 Job ID 定位的接口路由（兼容含 `/` 的子 Job）、Job 列表/详情、基于 `hcl/v2` 的可视化动态编排与受限 AST 附加片段、本地 AST 预检+受控反解、原生 HCL 编辑、纯 Go Compose 转换（含阻断校验）、模板管理、现网漂移检测、按 `plan_hash` 提交审阅时 Job JSON 并绑定 `JobModifyIndex` 的 Validate/Plan/Apply、启停重启与 Purge、基于 Nomad 原生 Revert 的版本回滚、Allocation SSE 实时日志流、HCL 导出；Nomad 运行态工作台（共享阻塞查询的 SSE 订阅、全局搜索、Job 各视图与 Deployment/扩缩（同步编排内容中的 `count`）/Periodic/Dispatch 操作、运行端口、Task 与节点实时资源统计、Allocation 文件浏览、基于一次性票据的 Exec/Action WebSocket 终端、Client 节点调度资格与 Drain、Server/拓扑/存储/Variables/Evaluation 视图）。
+6. **平台运营闭环**：定时任务（含防重入/漏执行/关联 `operation_task_id`、节点级健康巡检、CA/客户端/节点证书告警、Vault Token 续租、自动解封巡检、共享锁模式的 Raft 快照登记与互斥轮转、自更新版本检查、日志清理）、二次验密加密迁移包（`.ndbundle`，含步骤日志文件）导出/绑定预检（含导入后登录账号检查）/全局维护屏障下外键与 JSON 内引用一致还原（未包含的表保持现状）/防双活激活、控制面定时灾备备份（本机/SFTP/S3 目标、轮转与回读校验）、系统设置。
+7. **控制面自更新**：GitHub Release 版本查询、Ed25519 签名与 SHA256 校验、升级屏障、升级前数据库备份与保留上限、软链与 `.prev` 软链原子切换、退出码 `75` 重启、`Type=notify` 就绪确认与启动超时、启动失败自动回退、手动回退、预约升级；发布流水线产出各平台程序包、`SHA256SUMS` 与 `SHA256SUMS.sig`。
 8. **Web 管理端与单二进制打包**：React + Tailwind 全套管理端页面、`go:embed` 静态资源嵌入、Makefile 与 systemd（主服务与回退单元）/Docker 部署产物。
 
 ### 端到端核心验收场景
 
 - [ ] **零配置启动、Setup 防抢注与会话撤销**：全新空目录启动 `nomad-deck`，验证默认在 `8555` 端口以自签证书提供 HTTPS，并自动生成 `master.key`、`setup.token` 与 SQLite；验证以 systemd 凭据提供主密钥时不生成 `master.key`；验证无 Setup Token 拒绝 `/auth/setup`，凭 Token 原子创建首个管理员并生成默认 SSH 密钥；验证登出只使当前设备会话失效、改密注销其他设备会话，被注销会话已建立的 SSE 日志流立即断开；验证变更请求缺少 CSRF/Origin 时被拒绝。
-- [ ] **管理员与本机救援**：新增第二个管理员、停用后其会话立即失效、禁止停用最后一个启用账号；本机执行重置密码子命令后可登录；执行主密钥轮换后全部凭据与快照仍可解密使用。
-- [ ] **节点纳管与隔离约束**：添加 3 台 Linux 主机（验证手动粘贴公钥与临时密码幂等推公钥），完成 SSH 连通性、架构、免密 `sudo`、SELinux、Swap、Docker 与 `machine_id` 探测；验证同一主机无法同时加入两个同类集群（`UNIQUE(node_id, cluster_type)` 生效），控制面宿主机自身无法被纳管。
-- [ ] **Vault 集群全流程**：在 UI 部署 3 节点 TLS + Raft Vault 集群（验证 Swap 预检与 `LimitCORE=0`）→ 初始化并验证 Shamir 两阶段 Raft 加入成功、Unseal Keys 与 orphan Admin Token 加密托管、Root Token 已吊销且库内不存在 → 手动安全封存节点验证自动解封抑制持续生效、解除抑制后自动解封恢复 → 快照备份进行期间封存一个节点，验证自动解封不被阻塞 → 使 Admin Token 失效后经 `generate-root` 应急重签成功且临时 Root Token 已吊销 → 执行 Rekey 并验证新旧代际状态，恢复 Rekey 之前的快照时使用旧代际密钥成功解封 → 验证单节点扩容 Join、证书续期、安全缩容 Remove（含仲裁门禁拦截）、升级前快照与版本跨度校验 → 验证支持嵌套路径与 CAS 冲突保护的 KV v2 编辑。
-- [ ] **Nomad 集群全流程**：在 UI 部署 3 节点 Nomad 集群（验证纯 Server 跑 `nomad` 用户、Client 跑 `root` 用户、专属 SAN 与 `public_api_url` 证书、版本代际原子软链配置、`verify_https_client` 默认关闭且浏览器可直接打开 Nomad 原生 UI）→ 验证 ACL Bootstrap 前 Secret 已落库，并模拟 Bootstrap 响应丢失后经 `/v1/acl/token/self` 确认进入 `initialized` → 验证单节点扩容 Join、证书续期、Gossip 密钥轮换、`server_client` 双角色缩容（等待 Drain 完成 + Raft `remove-peer`）、仲裁门禁拦截多数派停服、升级前快照与熔断策略 → 验证共享/独占锁互斥规则，并在远端步骤执行中杀死控制面进程，验证远端临时单元继续运行、重启后进入 `needs_reconcile` 并按单元状态完成核对恢复 → 验证 Namespace、ACL Policy 与 Client Token 管理 → 验证 Nomad `GET /v1/operator/snapshot` 备份与恢复。
+- [ ] **账号角色与本机救援**：新增一个 `admin` 与一个 `viewer` 账号；验证 `viewer` 能查看全部运行态视图与日志，但调用任意变更接口、打开交互式终端、查看 Variables 原文、下载文件或导出备份均返回 403；停用账号后其会话立即失效，禁止停用或降级最后一个启用的 `admin`；本机执行重置密码子命令后可登录；执行主密钥轮换后全部凭据与快照仍可解密使用。
+- [ ] **节点纳管与隔离约束**：添加 3 台 Linux 主机（验证手动粘贴公钥与临时密码幂等推公钥），完成 SSH 连通性、架构、免密 `sudo`、SELinux、Swap、Docker、时间同步与 `machine_id` 探测，验证时钟偏差超过 30 秒的节点在部署前被拦截；验证同一主机无法同时加入两个同类集群（`UNIQUE(node_id, cluster_type)` 生效），控制面宿主机自身无法被纳管。
+- [ ] **Vault 集群全流程**：在 UI 部署 3 节点 TLS + Raft Vault 集群（验证 Swap 预检与 `LimitCORE=0`）→ 初始化并验证 Shamir 两阶段 Raft 加入成功、Unseal Keys 与 orphan Admin Token 加密托管、Root Token 已吊销且库内不存在 → 手动安全封存节点验证自动解封抑制持续生效、解除抑制后自动解封恢复 → 快照备份进行期间封存一个节点，验证自动解封不被阻塞 → 使 Admin Token 失效后经 `generate-root` 应急重签成功且临时 Root Token 已吊销 → 验证文件审计设备已启用且审计日志按轮转配置切分 → 执行 Rekey 并验证新旧代际状态，在验证阶段前中断控制面后能凭已保存的 nonce 继续完成 Rekey → 恢复 Rekey 之前的快照时使用旧代际密钥成功解封，且快照中不存在的 Admin Token 被自动重签 → 验证单节点扩容 Join、证书续期、安全缩容 Remove（含仲裁门禁拦截）、升级前快照与版本跨度校验 → 验证支持嵌套路径与 CAS 冲突保护的 KV v2 编辑。
+- [ ] **Nomad 集群全流程**：在 UI 部署 3 节点 Nomad 集群（验证纯 Server 跑 `nomad` 用户、Client 跑 `root` 用户、专属 SAN 与 `public_api_url` 证书、版本代际原子软链配置、`verify_https_client` 默认关闭且浏览器可直接打开 Nomad 原生 UI）→ 验证 ACL Bootstrap 前 Secret 已落库，模拟 Bootstrap 响应丢失后经 `/v1/acl/token/self` 确认进入 `initialized`，并模拟集群已被其他 Token 抢先 Bootstrap 时经二次 Bootstrap 判定转入受控恢复 → 验证单节点扩容 Join、证书续期、Gossip 密钥轮换、`server_client` 双角色缩容（等待 Drain 完成 + Raft `remove-peer`）、仲裁门禁拦截多数派停服、升级前快照与熔断策略 → 验证共享/独占锁互斥规则，并在远端步骤执行中杀死控制面进程，验证远端临时单元继续运行、重启后进入 `needs_reconcile` 并按单元状态完成核对恢复 → 验证 Namespace、ACL Policy 与 Client Token 管理 → 验证 Nomad `GET /v1/operator/snapshot` 备份与恢复。
 - [ ] **Nomad + Vault 联动**：在 Nomad 与 Vault 均启用自签 TLS 的前提下创建联动配置，并添加两个分别限制不同 Namespace 的 Role（其中一个使用 `templated` Policy）→ Plan 预览（验证作用范围标识、Auth Mount 归属隔离与单点入口告警；临时开启 `verify_https_client` 时验证 mTLS 冲突检测）→ 首次 Apply 双向打通（Nomad CA 写入 Vault `jwks_ca_pem`、完整 JWT Role 参数、滚动重启 Nomad）→ 再新增一个 Role 并 Apply，验证 Nomad 节点未重启 → Doctor 四段式体检并验证真实 JWT Login 成功，且越权 Namespace Job 被 Vault 拒绝。
 - [ ] **Job 全生命周期**：分别通过可视化动态编排器（覆盖顶层 `variable`、`constraint`、`reschedule`、`update`、`lifecycle` Sidecar、Docker `mount`/`bind_options`/`logging`、`resources.memory_max`、Group/Task 级 `service`/`check`、`volume`/`volume_mount`、`env`/`template`/`vault`/`identity` 块与 AST 校验附加片段，验证现网漂移检测与回填）、纯 Go Compose 导入（含阻断项校验）与原生 HCL 编辑器（含本地 HCL2 AST 差异警告）提交 Job → 验证 Apply 提交的 Job JSON 与 Plan 审阅内容一致、绑定 `JobModifyIndex` 的并发冲突保护与 Plan Diff 后下发 → 经 SSE 实时查看 Allocation 日志 → 停止/重新启动/修改版本并经 Nomad 原生 Revert 回滚（回滚后可视化结构同步恢复）/Purge 删除。
-- [ ] **Nomad 运行态工作台**：在不登录 Nomad 原生 UI 的前提下完成以下验证 → 两个浏览器同时打开同一 Job，验证状态变化实时刷新且控制面对 Nomad 只发起一路阻塞查询 → 验证 Allocation 详情展示的宿主机地址与端口可直接访问服务，Task 实时 CPU/内存折线与 `nomad alloc status -stats` 一致 → 发起带金丝雀的更新并在 Deployments 中 Promote，再对另一次部署执行 Fail → 经 Task Group 卡片扩缩副本数，验证生成 `source=scale` 的版本记录且不被判定为漂移 → 立即触发 Periodic Job 并派发一个 Parameterized Job → 用文件浏览器预览日志文件并下载，验证 `secrets/` 目录需二次确认 → 打开交互式终端执行命令、运行一个 Job Action，验证票据重放与跨站 `Origin` 被拒绝、注销会话后终端立即断开，审计中有开始与结束记录且无输入输出内容 → 对 Client 节点切换调度资格并 Drain，在拓扑视图中观察 Allocation 迁移 → 在 Evaluations 中查看一次资源不足导致的调度失败详情 → 创建、带 `cas` 修改并删除 Variable，验证原文查看写审计 → 查看 CSI 卷/插件与 Server 列表。
+- [ ] **Nomad 运行态工作台**：在不登录 Nomad 原生 UI 的前提下完成以下验证 → 两个浏览器同时打开同一 Job，验证状态变化实时刷新且控制面对 Nomad 只发起一路阻塞查询 → 验证 Allocation 详情展示的宿主机地址与端口可直接访问服务，Task 实时 CPU/内存折线与 `nomad alloc status -stats` 一致 → 发起带金丝雀的更新并在 Deployments 中 Promote，再对另一次部署执行 Fail → 经 Task Group 卡片扩缩副本数，验证生成 `source=scale` 的版本记录且不被判定为漂移，可视化模式与字面量 `count` 的 HCL 模式均已同步、再次 Apply 不会撤销扩缩，`count` 为变量的 HCL 模式在编辑时出现恢复提示 → 立即触发 Periodic Job 并派发一个 Parameterized Job，验证 ID 含 `/` 的子 Job 详情、版本与操作接口均可正常访问，不同 Namespace 下的同名 Job 互不混淆 → 用文件浏览器预览日志文件并下载，验证 `secrets/` 目录只列出文件名且不可读取内容 → 打开交互式终端执行命令、运行一个 Job Action，验证票据重放与跨站 `Origin` 被拒绝、注销会话后终端立即断开，审计中有开始与结束记录且无输入输出内容 → 对 Client 节点切换调度资格并 Drain，在拓扑视图中观察 Allocation 迁移 → 在 Evaluations 中查看一次资源不足导致的调度失败详情 → 创建、带 `cas` 修改并删除 Variable，验证原文查看写审计 → 查看 CSI 卷/插件与 Server 列表。
 - [ ] **定时任务与审计**：验证防重入、手动触发与关联 `operation_task_id` 的健康巡检、CA/客户端/节点证书检查、Vault Token 续租、Raft 快照与自更新版本检查任务均成功；验证审计日志完整且步骤日志、SSE 流与审计均无明文私钥/Token/Unseal Key 泄露。
-- [ ] **环境迁移还原**：二次验密导出加密 `.ndbundle`（含 `operation_task_steps` 与步骤日志文件）→ 在全新空实例启动 `nomad-deck`（不同主密钥）→ 上传迁移包完成绑定 `preview_token` 的预检并在维护屏障下执行 `replace` 还原 → 验证会话表已清空、历史会话全部失效、导入的运维任务日志可正常查看，且自动任务默认暂停防双活 → 点击「激活控制面」后正常连接全部主机、集群、触发解封与管理 Job；验证 `merge` 模式同步重写 SQL 外键与 `cron_jobs.payload_json` 内嵌引用。
-- [ ] **控制面自更新**：发布一个更高版本的 Release，在「版本与升级」页立即升级，验证签名或摘要被篡改时中止且现有安装不变；正常情况下验证升级屏障、升级前数据库备份、软链切换、以退出码 `75` 重启、新版本确认后页面自动刷新；发布一个启动即失败的版本并升级，验证 systemd 触发自动回退、恢复原版本与升级前数据库；验证同 Schema 版本下的手动回退；验证预约升级在等待期内发布新版本后自动完成、超时与取消；验证容器部署下自更新入口禁用。
+- [ ] **环境迁移还原**：二次验密导出加密 `.ndbundle`（含 `operation_task_steps` 与步骤日志文件）→ 在全新空实例启动 `nomad-deck`（不同主密钥）→ 上传迁移包完成绑定 `preview_token` 的预检并在维护屏障下执行 `replace` 还原 → 验证会话表已清空、历史会话全部失效、导入的运维任务日志可正常查看，且自动任务默认暂停防双活 → 点击「激活控制面」后正常连接全部主机、集群、触发解封与管理 Job；验证 `merge` 模式同步重写 SQL 外键与 `cron_jobs.payload_json` 内嵌引用；验证不含 `admins` 的迁移包导入后目标库原有账号保留，且预检正确列出可登录账号。
+- [ ] **控制面灾备备份**：配置备份口令与本机、SFTP 两个目标，立即备份并验证两处均生成灾备包且回读校验通过、超出保留份数后轮转清理；断开 SFTP 目标验证仪表盘告警；在全新宿主机上用灾备包与备份口令执行 `replace` 恢复，验证集群凭据、Unseal Keys 与账号完整可用。
+- [ ] **控制面自更新**：发布一个更高版本的 Release，在「版本与升级」页立即升级，验证签名或摘要被篡改时中止且现有安装不变；正常情况下验证升级屏障、升级前数据库备份、软链切换、以退出码 `75` 重启、新版本确认后页面自动刷新；分别发布一个启动即崩溃的版本与一个启动后始终不就绪的版本并升级，验证两种情况都由 systemd 触发自动回退、恢复原版本与升级前数据库，对应任务记为 `rolled_back` 而非 `needs_reconcile`；验证升级前备份只保留最近 3 份；验证同 Schema 版本下的手动回退；验证预约升级在等待期内发布新版本后自动完成、超时与取消；验证容器部署下自更新入口禁用。

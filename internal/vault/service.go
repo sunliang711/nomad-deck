@@ -546,3 +546,89 @@ func jsonMarshal(v any) (string, error) {
 func pemOf(ca *pki.CA) []byte {
 	return []byte(pki.EncodeCert(ca.Cert.Raw))
 }
+
+// NodeDetail extends NodeStatus with Raft and membership details.
+type NodeDetail struct {
+	NodeStatus
+	AutopilotHealthy bool       `json:"autopilot_healthy"`
+	LastContact      string     `json:"last_contact"`
+	LastIndex        uint64     `json:"last_index"`
+	InstalledVersion string     `json:"installed_version"`
+	VersionMismatch  bool       `json:"version_mismatch"`
+	ConfigGeneration int        `json:"config_generation"`
+	CertExpiresAt    *time.Time `json:"cert_expires_at"`
+	ServiceStatus    string     `json:"service_status"`
+	LastSyncedAt     *time.Time `json:"last_synced_at"`
+}
+
+// StatusReport is the live status detail of a cluster.
+type StatusReport struct {
+	Health             string       `json:"health_status"`
+	InitState          string       `json:"init_state"`
+	Maintenance        bool         `json:"maintenance_mode"`
+	MaintenanceReason  string       `json:"maintenance_reason"`
+	ActiveNode         string       `json:"active_node"`
+	Versions           []string     `json:"versions"`
+	VersionsConsistent bool         `json:"versions_consistent"`
+	Voters             int          `json:"voters"`
+	HealthyVoters      int          `json:"healthy_voters"`
+	FailureTolerance   *int         `json:"failure_tolerance"`
+	RaftError          string       `json:"raft_error,omitempty"`
+	Nodes              []NodeDetail `json:"nodes"`
+}
+
+// StatusDetail probes the cluster and adds autopilot data per node.
+func (s *Service) StatusDetail(ctx context.Context, clusterID string) (*StatusReport, error) {
+	nodes, health, err := s.SyncStatus(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	rep := &StatusReport{Health: health, InitState: cl.InitState, Maintenance: cl.MaintenanceMode,
+		MaintenanceReason: cl.MaintenanceReason, Versions: []string{}, Nodes: []NodeDetail{}}
+	var ap *AutopilotState
+	if cl.InitState == db.InitInitialized {
+		if admin, _, err := s.adminClient(ctx, cl); err != nil {
+			rep.RaftError = err.Error()
+		} else if ap, err = admin.AutopilotState(ctx); err != nil {
+			rep.RaftError = err.Error()
+		} else {
+			ft := ap.FailureTolerance
+			rep.FailureTolerance, rep.Voters = &ft, len(ap.Voters)
+			for _, sv := range ap.Servers {
+				if sv.Healthy && (sv.Status == "voter" || sv.Status == "leader") {
+					rep.HealthyVoters++
+				}
+			}
+		}
+	}
+	seen := map[string]bool{}
+	for i, ns := range nodes {
+		m := members[i]
+		d := NodeDetail{NodeStatus: ns, InstalledVersion: m.InstalledVersion, ConfigGeneration: memberConfig(m).ConfigGeneration,
+			CertExpiresAt: tp(m.CertExpiresAt), ServiceStatus: m.ServiceStatus, LastSyncedAt: tp(m.LastSyncedAt)}
+		d.VersionMismatch = ns.Version != "" && m.InstalledVersion != "" && ns.Version != m.InstalledVersion
+		if ap != nil {
+			if sv, ok := ap.Servers[memberConfig(m).RaftNodeID]; ok {
+				d.AutopilotHealthy, d.LastContact, d.LastIndex = sv.Healthy, sv.LastContact, sv.LastIndex
+			}
+		}
+		if ns.Role == "active" {
+			rep.ActiveNode = ns.Name
+		}
+		if ns.Version != "" && !seen[ns.Version] {
+			seen[ns.Version] = true
+			rep.Versions = append(rep.Versions, ns.Version)
+		}
+		rep.Nodes = append(rep.Nodes, d)
+	}
+	rep.VersionsConsistent = len(rep.Versions) <= 1
+	return rep, nil
+}

@@ -175,12 +175,12 @@ func (a *API) clusterStatus(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.vaultCluster(w, r); !ok {
 		return
 	}
-	nodes, health, err := a.Vault.SyncStatus(r.Context(), chi.URLParam(r, "id"))
+	rep, err := a.Vault.StatusDetail(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"health_status": health, "nodes": nodes})
+	writeJSON(w, http.StatusOK, map[string]any{"status": rep})
 }
 
 func (a *API) addClusterNodes(w http.ResponseWriter, r *http.Request) {

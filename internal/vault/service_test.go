@@ -559,6 +559,12 @@ func TestServiceBusinessAndDoctor(t *testing.T) {
 	if err := s.DisableAuth(ctx, testActor, id, "userpass"); err != nil {
 		t.Fatal(err)
 	}
+	st, err := s.StatusDetail(ctx, id)
+	if err != nil || st.Health != "healthy" || st.ActiveNode != "n1" || st.FailureTolerance == nil || *st.FailureTolerance != 0 ||
+		st.Voters != 1 || st.HealthyVoters != 1 || !st.VersionsConsistent || len(st.Nodes) != 1 || !st.Nodes[0].AutopilotHealthy ||
+		st.Nodes[0].LastIndex == 0 || !st.Nodes[0].VersionMismatch { // the fixture registers version "local"
+		t.Fatalf("status detail: %+v %v", st, err)
+	}
 	rep, err := s.Doctor(ctx, id)
 	if err != nil {
 		t.Fatal(err)

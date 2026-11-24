@@ -537,3 +537,12 @@ func sortedMembers(ms []*db.ClusterNode) []*db.ClusterNode {
 	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out
 }
+
+func jsonMarshal(v any) (string, error) {
+	b, err := json.Marshal(v)
+	return string(b), err
+}
+
+func pemOf(ca *pki.CA) []byte {
+	return []byte(pki.EncodeCert(ca.Cert.Raw))
+}

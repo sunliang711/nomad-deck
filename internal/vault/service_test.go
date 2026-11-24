@@ -416,3 +416,71 @@ func TestServiceSingleNodeRekeyReconcile(t *testing.T) {
 		t.Fatalf("single-node reconcile: %v", gs)
 	}
 }
+
+func TestServiceSnapshotRestore(t *testing.T) {
+	e := newSvcEnv(t, 3)
+	ctx := context.Background()
+	s := e.s
+	id := e.cluster.ID
+	e.mustSucceed(s.Init(ctx, testActor, id, InitInput{}))
+	clu, _ := s.loadCluster(ctx, s.DB.Reader, id)
+	admin := func() *Client {
+		c, _, err := s.adminClient(ctx, clu)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	if err := admin().Request(ctx, "POST", "sys/mounts/secret", map[string]any{"type": "kv", "options": map[string]any{"version": "2"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin().KVWrite(ctx, "secret", "app/db", true, map[string]any{"password": "one"}, 0); err != nil {
+		t.Fatal(err)
+	}
+	snapTask := e.mustSucceed(s.CreateSnapshot(ctx, testActor, id))
+	_ = snapTask
+	snaps, _ := s.ListSnapshots(ctx, id)
+	if len(snaps) != 1 || *snaps[0].SealGeneration != 1 {
+		t.Fatalf("snapshots: %+v", snaps)
+	}
+	if _, err := admin().KVWrite(ctx, "secret", "app/db", true, map[string]any{"password": "two"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	e.mustSucceed(s.Rekey(ctx, testActor, id, RekeyInput{}))
+	tok, _ := s.adminToken(ctx, id)
+	_ = admin().WithToken(tok).RevokeSelf(ctx)
+	e.mustSucceed(s.RecoverToken(ctx, testActor, id))
+
+	if _, err := s.Restore(ctx, testActor, id, snaps[0].ID, RestoreInput{}); err == nil || !strings.Contains(err.Error(), "force") {
+		t.Fatalf("restoring an older generation must need force: %v", err)
+	}
+	e.mustSucceed(s.Restore(ctx, testActor, id, snaps[0].ID, RestoreInput{Force: true}))
+	if g := e.gens(); g[1] != db.GenActive || g[2] != db.GenRetired || e.custody().SealGeneration != 1 {
+		t.Fatalf("generations after restore: %v", g)
+	}
+	sec, err := admin().KVRead(ctx, "secret", "app/db", true, 0)
+	if err != nil || sec.Data["password"] != "one" {
+		t.Fatalf("data after restore: %+v %v", sec, err)
+	}
+	if cl, _ := db.GetCluster(ctx, s.DB.Reader, id); cl.MaintenanceMode || e.custody().UnsealSuppressedReason != "" {
+		t.Fatal("restore must leave maintenance and clear its suppression")
+	}
+	// The restored cluster unseals with generation 1 keys.
+	e.restart("n2")
+	e.mustSucceed(s.Unseal(ctx, testActor, id, UnsealInput{NodeIDs: []string{e.members["n2"].NodeID}}))
+
+	// Portable archive round trip and a restore of the imported copy (same generation, no force).
+	vaultbackup.DefaultMemory = 8 * 1024
+	var arch bytes.Buffer
+	if err := s.WriteArchive(ctx, testActor, id, snaps[0].ID, "archive passphrase", &arch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportArchive(ctx, testActor, id, io.NopCloser(bytes.NewReader(arch.Bytes())), "wrong passphrase!!"); err == nil {
+		t.Fatal("wrong archive passphrase must fail")
+	}
+	imp, err := s.ImportArchive(ctx, testActor, id, io.NopCloser(bytes.NewReader(arch.Bytes())), "archive passphrase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.mustSucceed(s.Restore(ctx, testActor, id, imp.ID, RestoreInput{}))
+}

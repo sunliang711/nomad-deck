@@ -292,3 +292,6 @@ func Pool(bundle string) (*x509.CertPool, error) {
 	}
 	return p, nil
 }
+
+// EncodeCert PEM-encodes a DER certificate.
+func EncodeCert(der []byte) string { return encodeCert(der) }

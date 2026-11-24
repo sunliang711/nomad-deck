@@ -582,4 +582,3 @@ type httpClientResult struct {
 	useProxy  bool
 	proxyAddr string
 }
-

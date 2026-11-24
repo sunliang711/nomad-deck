@@ -145,6 +145,26 @@ func TestSettingsAndProxyAPI(t *testing.T) {
 	}
 	logs, _ := root.do("GET", "/api/v1/audit-logs?action=settings.proxy_update", nil, nil)
 	_ = logs
+
+	// Docker repository signing key rotation and version listing input checks.
+	if code, _ := root.do("PUT", "/api/v1/settings", map[string]any{"release.docker_pgp_public_key": "not a key"}, nil); code != 400 {
+		t.Fatal("unparseable Docker signing key accepted")
+	}
+	root.do("PUT", "/api/v1/settings", map[string]any{"proxy.use_for_releases": false}, nil)
+	if code, b := root.do("GET", "/api/v1/releases/docker?distro=ubuntu&release=noble&arch=s390x", nil, nil); code != 400 || errCode(b) != "invalid_argument" {
+		t.Fatalf("unsupported arch: %d %v", code, b)
+	}
+	if code, b := root.do("GET", "/api/v1/releases/docker?node_id=missing", nil, nil); code != 404 {
+		t.Fatalf("unknown node: %d %v", code, b)
+	}
+	code, b = root.do("POST", "/api/v1/nodes", map[string]any{"name": "dk", "host": "10.0.0.21", "ssh_user": "ops", "use_sudo": true}, nil)
+	if code != 201 {
+		t.Fatalf("create node: %d %v", code, b)
+	}
+	nodeID, _ := b["node"].(map[string]any)["id"].(string)
+	if code, b := root.do("GET", "/api/v1/releases/docker?node_id="+nodeID, nil, nil); code != 409 || errCode(b) != "node_not_probed" {
+		t.Fatalf("unprobed node: %d %v", code, b)
+	}
 }
 
 func TestOperationsAPIAndStream(t *testing.T) {

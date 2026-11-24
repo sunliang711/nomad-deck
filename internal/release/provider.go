@@ -19,12 +19,14 @@ type Provider struct {
 	once sync.Once
 	hc   *HashiCorp
 	cni  *CNI
+	dk   *Docker
 }
 
 func (p *Provider) init() {
 	p.once.Do(func() {
 		p.hc = &HashiCorp{CacheDir: filepath.Join(p.CacheDir, "hashicorp")}
 		p.cni = &CNI{CacheDir: p.CacheDir}
+		p.dk = &Docker{CacheDir: p.CacheDir}
 	})
 }
 
@@ -51,4 +53,10 @@ func (p *Provider) CNI(ctx context.Context) *CNI {
 		_ = json.Unmarshal([]byte(raw), &extra)
 	}
 	return &CNI{CacheDir: p.cni.CacheDir, Extra: extra}
+}
+
+// Docker returns the Docker repository source with the configured signing keys.
+func (p *Provider) Docker(ctx context.Context) *Docker {
+	p.init()
+	return &Docker{CacheDir: p.dk.CacheDir, ArmoredKeys: p.str(ctx, "release.docker_pgp_public_key")}
 }

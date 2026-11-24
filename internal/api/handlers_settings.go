@@ -80,6 +80,18 @@ var settingDefs = map[string]settingDef{
 		}
 		return v, nil
 	}},
+	"release.docker_pgp_public_key": {Default: "", Validate: func(raw json.RawMessage) (any, error) {
+		var v string
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, errors.New("需为字符串")
+		}
+		if v != "" {
+			if _, err := (&release.Docker{ArmoredKeys: v}).Keyring(); err != nil {
+				return nil, errors.New("Docker PGP 公钥无法解析")
+			}
+		}
+		return v, nil
+	}},
 	"release.cni_checksums": {Default: release.CNIChecksums{}, Validate: func(raw json.RawMessage) (any, error) {
 		var v release.CNIChecksums
 		if err := json.Unmarshal(raw, &v); err != nil {
@@ -278,7 +290,7 @@ func (a *API) listReleases(w http.ResponseWriter, r *http.Request) {
 	case "cni":
 		writeJSON(w, http.StatusOK, map[string]any{"product": product, "versions": a.Releases.CNI(r.Context()).Versions()})
 		return
-	case "nomad", "vault":
+	case "nomad", "vault", "docker":
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "不支持的产品")
 		return
@@ -292,11 +304,60 @@ func (a *API) listReleases(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, r, err)
 		return
 	}
+	if product == "docker" {
+		a.listDockerReleases(w, r, client, useProxy)
+		return
+	}
 	versions, err := a.Releases.HashiCorp(r.Context()).Versions(r.Context(), client, product)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "release_fetch_failed", "获取版本列表失败："+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"product": product, "versions": versions, "min_version": release.MinVersions[product],
+		"used_proxy": useProxy})
+}
+
+// listDockerReleases lists Docker Engine versions from the verified
+// repository metadata matching a host (node_id) or an explicit repository
+// (distro, release, arch).
+func (a *API) listDockerReleases(w http.ResponseWriter, r *http.Request, client *http.Client, useProxy bool) {
+	q := r.URL.Query()
+	var target release.DockerTarget
+	if id := q.Get("node_id"); id != "" {
+		n, err := db.GetNode(r.Context(), a.DB.Reader, id)
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "主机不存在")
+			return
+		}
+		if err != nil {
+			a.writeErr(w, r, err)
+			return
+		}
+		var probe struct {
+			Raw map[string]string `json:"raw"`
+		}
+		_ = json.Unmarshal([]byte(n.ProbeJSON), &probe)
+		if len(probe.Raw) == 0 {
+			writeError(w, http.StatusConflict, "node_not_probed", "主机尚未完成连通性测试，无法确定 Docker 仓库")
+			return
+		}
+		if target, err = release.DockerTargetFromProbe(probe.Raw, n.Arch); err != nil {
+			writeError(w, http.StatusBadRequest, "docker_unsupported", err.Error())
+			return
+		}
+	} else {
+		target = release.DockerTarget{Distro: q.Get("distro"), Release: q.Get("release"), Arch: q.Get("arch")}
+		target.Format = map[string]string{"ubuntu": "deb", "debian": "deb", "centos": "rpm", "rhel": "rpm", "fedora": "rpm"}[target.Distro]
+		if err := target.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_argument", "需提供 node_id，或 distro/release/arch："+err.Error())
+			return
+		}
+	}
+	ix, err := a.Releases.Docker(r.Context()).Index(r.Context(), client, target, nil)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "release_fetch_failed", "获取 Docker 版本列表失败："+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"product": "docker", "target": target, "versions": ix.EngineVersions(),
 		"used_proxy": useProxy})
 }

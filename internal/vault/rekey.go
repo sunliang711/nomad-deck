@@ -101,7 +101,12 @@ func (s *Service) runRekey(ctx context.Context, t *ops.Task, clusterID string, i
 	if err != nil {
 		return err
 	}
-	c, err := s.client(cl, am, "")
+	// Newer Vault versions require a token on the rekey endpoints.
+	tok, err := s.adminToken(ctx, clusterID)
+	if err != nil {
+		return err
+	}
+	c, err := s.client(cl, am, tok)
 	if err != nil {
 		return err
 	}

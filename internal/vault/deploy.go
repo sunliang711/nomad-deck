@@ -227,7 +227,8 @@ func (s *Service) buildGeneration(cl *cluster, m *db.ClusterNode, n *db.Node, pe
 	ca *pki.CA, caBundle string) ([]GenerationFile, *pki.Material, error) {
 	mc := memberConfig(m)
 	cfg := RenderConfig(NodeConfig{ClusterName: cl.Name, RaftNodeID: mc.RaftNodeID, Advertise: m.AdvertiseAddr,
-		APIPort: cl.Settings.APIPort, ClusterPort: cl.Settings.ClusterPort, TLS: cl.TLSEnabled, Generation: gen, Peers: peers})
+		APIPort: cl.Settings.APIPort, ClusterPort: cl.Settings.ClusterPort, TLS: cl.TLSEnabled, Generation: gen, Peers: peers,
+		Version: cl.Settings.Version})
 	if err := ValidateHCL("config.hcl", cfg); err != nil {
 		return nil, nil, err
 	}
@@ -475,6 +476,7 @@ func (s *Service) runDeploy(ctx context.Context, t *ops.Task, clusterID, version
 	if err != nil {
 		return err
 	}
+	cl.Settings.Version = version // the config is rendered for the version being deployed
 	_ = t.Checkpoint(map[string]any{"phase": "deploy", "version": version})
 	arts, err := s.fetchArtifacts(ctx, t, hc, version, members)
 	if err != nil {

@@ -138,7 +138,9 @@ func (a *API) Handler() http.Handler {
 				r.Post("/clusters/{id}/snapshots/{snapshot_id}/restore", a.restoreSnapshot)
 				r.Delete("/clusters/{id}/snapshots/{snapshot_id}", a.deleteSnapshot)
 
+				r.Post("/clusters/{id}/nodes/{node_id}/config/rollback", a.rollbackNodeConfig)
 				r.Post("/vault/{id}/init", a.vaultInit)
+				r.Post("/vault/{id}/init/reset", a.vaultInitReset)
 				r.Post("/vault/{id}/unseal", a.vaultUnseal)
 				r.Post("/vault/{id}/seal", a.vaultSeal)
 				r.Put("/vault/{id}/custody", a.vaultCustody)

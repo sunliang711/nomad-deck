@@ -47,6 +47,16 @@ type NodeConfig struct {
 	Generation   int
 	Peers        []string // api addresses of the other nodes (retry_join)
 	AuditLogPath string
+	Version      string // Vault version the config is rendered for
+}
+
+// unauthGenerateRoot reports whether the version denies unauthenticated
+// generate-root by default (Vault 2.0 and later), which the control plane
+// needs for emergency token recovery when no valid token exists.
+func unauthGenerateRoot(version string) bool {
+	major, _, _ := strings.Cut(version, ".")
+	n, err := strconv.Atoi(major)
+	return err == nil && n >= 2
 }
 
 func hostPort(host string, port int) string {
@@ -83,7 +93,13 @@ func RenderConfig(c NodeConfig) string {
 	fmt.Fprintf(&b, "disable_mlock = true\n")
 	fmt.Fprintf(&b, "cluster_name  = %q\n", c.ClusterName)
 	fmt.Fprintf(&b, "api_addr      = %q\n", APIAddr(c.Advertise, c.APIPort, c.TLS))
-	fmt.Fprintf(&b, "cluster_addr  = %q\n\n", ClusterAddr(c.Advertise, c.ClusterPort, c.TLS))
+	fmt.Fprintf(&b, "cluster_addr  = %q\n", ClusterAddr(c.Advertise, c.ClusterPort, c.TLS))
+	if unauthGenerateRoot(c.Version) {
+		// Emergency token recovery uses generate-root without a token; it
+		// still requires a threshold of unseal keys.
+		fmt.Fprintf(&b, "enable_unauthenticated_access = [\"generate-root\"]\n")
+	}
+	fmt.Fprintf(&b, "\n")
 	fmt.Fprintf(&b, "listener \"tcp\" {\n")
 	fmt.Fprintf(&b, "  address         = %q\n", hostPort("0.0.0.0", c.APIPort))
 	fmt.Fprintf(&b, "  cluster_address = %q\n", hostPort("0.0.0.0", c.ClusterPort))

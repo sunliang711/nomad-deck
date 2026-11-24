@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -332,6 +333,16 @@ systemctl daemon-reload
 echo "vault removed from host"
 `
 
+// wipe removes Vault from a host. It runs as a direct command because it
+// deletes the directory holding detached step results.
+func (s *Service) wipe(ctx context.Context, nc *nodeCtx) error {
+	out, err := s.run(ctx, nc, wipeScript)
+	if err == nil {
+		nc.step.Logf("%s", strings.TrimSpace(out))
+	}
+	return err
+}
+
 func (s *Service) runRemove(ctx context.Context, t *ops.Task, cl *cluster, members []*db.ClusterNode, m *db.ClusterNode) error {
 	step, err := t.Step("移出 Raft "+m.NodeName, m.NodeID)
 	if err != nil {
@@ -381,7 +392,7 @@ func (s *Service) runRemove(ctx context.Context, t *ops.Task, cl *cluster, membe
 	if err != nil {
 		return fmt.Errorf("节点已移出 Raft，但无法连接清理（请手动停止 vault 服务）：%w", err)
 	}
-	err = s.remote(ctx, t, nc, "wipe", wipeScript)
+	err = s.wipe(ctx, nc)
 	nc.step.Finish(err, nil)
 	if err != nil {
 		return err
@@ -803,7 +814,7 @@ func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, c
 					errs = append(errs, err)
 					continue
 				}
-				err = s.remote(ctx, t, nc, "wipe", wipeScript)
+				err = s.wipe(ctx, nc)
 				nc.step.Finish(err, nil)
 				errs = append(errs, err)
 			}
@@ -954,4 +965,138 @@ func (s *Service) Reconcile(ctx context.Context, actor audit.Actor, clusterID st
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.reconcile", ResourceType: "cluster", ResourceID: clusterID,
 		ResourceName: cl.Name, Summary: map[string]any{"tasks": len(tasks), "resolved": rep.Resolved}})
 	return rep, nil
+}
+
+// ---- Config generation rollback ----
+
+// RollbackGeneration switches a node back to its previous config
+// generation (configuration and TLS material together), restarts it through
+// the quorum gate and unseals it.
+func (s *Service) RollbackGeneration(ctx context.Context, actor audit.Actor, clusterID, nodeID string, confirmSingle bool) (*db.OperationTask, error) {
+	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.requireOperable(cl); err != nil {
+		return nil, err
+	}
+	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	target, err := s.targets(members, []string{nodeID})
+	if err != nil {
+		return nil, err
+	}
+	m := target[0]
+	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.config_rollback", TargetType: "cluster", TargetID: clusterID,
+		Locks:       []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}, {Key: ops.HostLock(nodeID, "vault"), Mode: ops.Exclusive}},
+		TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID},
+		Run: func(ctx context.Context, t *ops.Task) (err error) {
+			nc, err := s.openNode(ctx, t, m, "切回上一配置代际")
+			if err != nil {
+				return err
+			}
+			defer func() { nc.done(ctx, err) }()
+			mc := memberConfig(m)
+			out, err := s.run(ctx, nc, fmt.Sprintf(`ls -1 %s | grep -E '^[0-9]+$' | sort -n`, sshx.Quote(ReleasesDir)))
+			if err != nil {
+				return err
+			}
+			prev := 0
+			for _, f := range strings.Fields(out) {
+				if g, err := strconv.Atoi(f); err == nil && g < mc.ConfigGeneration && g > prev {
+					prev = g
+				}
+			}
+			if prev == 0 {
+				return conflict("no_previous_generation", "节点上没有可切回的上一配置代际")
+			}
+			if err := s.gateFor(ctx, cl, m, confirmSingle, nc.step.Logf); err != nil {
+				return err
+			}
+			dir := GenerationDir(prev)
+			cert, err := s.run(ctx, nc, fmt.Sprintf(`set -e
+test -f %[1]s/config.hcl
+ln -sfn releases/%[2]d %[3]s.nd-tmp && mv -Tf %[3]s.nd-tmp %[3]s
+cat %[1]s/tls/server.crt 2>/dev/null || true`, sshx.Quote(dir), prev, ConfigLink))
+			if err != nil {
+				return err
+			}
+			nc.step.Logf("vault.d 已切回配置代际 %d", prev)
+			mc.ConfigGeneration = prev
+			setMemberConfig(m, mc)
+			if exp, err := pki.NotAfter(cert); err == nil {
+				m.CertExpiresAt = exp
+			}
+			if err := db.UpdateClusterNodeInstall(ctx, s.DB.Writer, m, s.DB.Now()); err != nil {
+				return err
+			}
+			return s.restartAndRecover(ctx, t, cl, members, nc, "")
+		}})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.config_rollback", ResourceType: "cluster",
+		ResourceID: clusterID, ResourceName: cl.Name, OperationTaskID: task.ID, Summary: map[string]any{"node": m.NodeName}})
+	return task, nil
+}
+
+// ---- Controlled reset of an in-doubt initialization ----
+
+// ResetInDoubt wipes the Raft data of a cluster whose initialization result
+// is unknown and whose keys were never obtained, so it can be initialized
+// again. Only for clusters confirmed to carry no workload.
+func (s *Service) ResetInDoubt(ctx context.Context, actor audit.Actor, clusterID, confirmName string) (*db.OperationTask, error) {
+	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	cu, err := db.GetCustody(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if cl.InitState != db.InitInDoubt || cu.SealGeneration != 0 {
+		return nil, conflict("not_in_doubt", "只有处于 init_in_doubt 且没有保存密钥的集群可以重置")
+	}
+	if confirmName != cl.Name {
+		return nil, badRequest("请输入集群名称以确认重置")
+	}
+	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "vault.init_reset", TargetType: "cluster", TargetID: clusterID,
+		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name,
+		Run: func(ctx context.Context, t *ops.Task) error {
+			for _, m := range members {
+				if err := func() (err error) {
+					nc, err := s.openNode(ctx, t, m, "清空 Raft 数据")
+					if err != nil {
+						return err
+					}
+					defer func() { nc.done(ctx, err) }()
+					if _, err := s.run(ctx, nc, "systemctl stop vault.service\nfind "+sshx.Quote(DataDir)+" -mindepth 1 -delete\n"); err != nil {
+						return err
+					}
+					if err := s.service(ctx, t, nc, "start"); err != nil {
+						return err
+					}
+					st, err := s.waitAPI(ctx, cl, m, "")
+					if err == nil && st.Initialized {
+						err = fmt.Errorf("%s 重置后仍报告已初始化", m.NodeName)
+					}
+					return err
+				}(); err != nil {
+					return err
+				}
+			}
+			return db.SetClusterInitState(ctx, s.DB.Writer, clusterID, db.InitUninitialized, s.DB.Now())
+		}})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "vault.init_reset", ResourceType: "cluster", ResourceID: clusterID,
+		ResourceName: cl.Name, OperationTaskID: task.ID})
+	return task, nil
 }

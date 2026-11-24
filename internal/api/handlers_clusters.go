@@ -916,3 +916,40 @@ func (a *API) vaultKVDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (a *API) rollbackNodeConfig(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ConfirmSingle bool `json:"confirm_single_node"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if _, ok := a.vaultCluster(w, r); !ok {
+		return
+	}
+	t, err := a.Vault.RollbackGeneration(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "node_id"), in.ConfirmSingle)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	taskResponse(w, t)
+}
+
+func (a *API) vaultInitReset(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ConfirmName     string `json:"confirm_name"`
+		CurrentPassword string `json:"current_password"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if _, ok := a.vaultCluster(w, r); !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
+		return
+	}
+	t, err := a.Vault.ResetInDoubt(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.ConfirmName)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	taskResponse(w, t)
+}

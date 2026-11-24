@@ -23,7 +23,7 @@
 
 1. **全新设计，不兼容已有旧节点**：目标主机采用 NomadDeck 统一规划的集群级目录布局、systemd 单元与配置模板，不承担旧版单机脚本的历史迁移与兼容包袱。
 2. **控制面独立部署于被管集群之外**：NomadDeck 必须运行在被管 Nomad/Vault 集群之外的独立宿主机，避免机房断电重启后出现“Vault 密封 → 托管在 Nomad 内的控制面无法启动 → 无法自动解封”的循环死锁。
-3. **纯 Go 原生 SSH + SFTP 远端执行**：控制面直接通过 Go SSH/SFTP 完成文件分发、二进制部署、服务控制与日志流读取，**被管主机无需安装 Python、Ansible 或任何常驻 Agent**。
+3. **纯 Go 原生 SSH + SFTP 远端执行**：控制面直接通过 Go SSH/SFTP 完成文件分发、二进制部署、服务控制与日志流读取，**被管主机无需安装 Python、Ansible 或任何常驻 Agent**。Nomad、Vault、CNI Plugins 与 Docker 的安装包一律由控制面下载、校验后中转分发，被管主机不需要访问外网发布源。
 4. **Vault Unseal Keys 由平台加密托管**：Vault 初始化产出的 Unseal Keys 由控制面主密钥加密落库并按代际保留，日常 API 调用使用初始化后派生的专用 Admin Policy Token，初始化完成后即吊销 Root Token，应急时凭托管的 Unseal Keys 临时生成；支持在 UI 中一键解封、滚动升级后自动解封及可选的巡检自动解封，避免在 Vault 节点磁盘明文存放解封密钥。
 5. **预留 Consul 扩展位（可选）**：核心数据模型、集群驱动接口、联动模型与前端路由均预留 `consul` 类型接口；`v1.0.0` 聚焦 Nomad + Vault，Consul 作为后续按需启用的可选扩展。
 6. **一次性发版（`v1.0.0`）**：全部既定功能在 `v1.0.0` 统一交付并完成端到端验收，不拆分多阶段灰度发布。
@@ -122,6 +122,12 @@
   - 审计日志：`/opt/nomad-deck/vault/logs/audit.log`（Vault 文件审计设备输出，由托管的 logrotate 配置按大小轮转，轮转后向 Vault 发送 `SIGHUP` 重新打开文件）
   - 操作锁标记：`/opt/nomad-deck/vault/.op.lock`（语义同 Nomad；按产品分别存放，与「主机产品级锁」一一对应，同一主机上的 Nomad 与 Vault 任务互不覆盖）
   - systemd 单元：`/etc/systemd/system/vault.service`（以低权系统用户 `vault` 运行并显式设置 `LimitCORE=0` 禁止 core dump；因 Raft 模式启用 `disable_mlock = true`，Vault 主机部署预检要求禁用 Swap 或采用明确批准的加密 Swap；不安装本地明文自动解封单元，解封由 NomadDeck 控制面通过 API 完成）
+- **Docker Engine（主机级，`managed` 模式）**
+  - 安装来源：Docker 官方软件仓库的 `docker-ce`、`docker-ce-cli`、`containerd.io`、`docker-buildx-plugin`、`docker-compose-plugin` 安装包，由控制面中转后以本地包方式安装，系统包管理器锁定版本
+  - 守护进程配置：`/etc/docker/daemon.json`（托管标记文件 `/etc/docker/daemon.json.managed-by-nomad-deck`；含代理认证信息时权限 `0600`）
+  - systemd 单元：使用安装包自带的 `docker.service`、`docker.socket` 与 `containerd.service`；`external` 模式下镜像拉取代理写入 `/etc/systemd/system/docker.service.d/nomad-deck-proxy.conf`
+  - 操作锁标记：`/opt/nomad-deck/docker/.op.lock`
+- **安装包 staging 目录**：`/opt/nomad-deck/.staging/<remote_op_id>/`（权限 `0700`，存放控制面经 SFTP 传来的 gzip 压缩二进制与 Docker 安装包，校验与安装完成后删除）
 
 ### 3.3 仓库目录结构规划
 
@@ -183,7 +189,7 @@ nomad-deck/
 ### 4.2 `system_settings`（系统全局设置）
 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- |
-| `key` | TEXT PK | 配置键（如 `release.mirror_url`、`release.download_mode`、`release.pgp_public_key`、`ssh.timeout_sec`、`ssh.max_concurrency`、`proxy.profiles`、`proxy.default_profile`、`proxy.use_for_releases`、`proxy.use_for_self_update`、`audit.retention_days`、`ops.retention_days`、`snapshot.dir`、`auth.session_ttl_hours`、`auth.session_idle_minutes`、`cron.timezone`、`defaults.nomad_version`、`defaults.vault_version`、`release.cni_checksums`、`upgrade.max_minor_skip`、`nomad.stats_interval_seconds`、`nomad.exec_idle_minutes`、`nomad.exec_max_minutes`、`observability.grafana_url_template`、`self_update.channel`、`self_update.schedule`、`self_update.last_result`、`self_update.backup_retention`、`backup.enabled`、`backup.passphrase`、`backup.targets`、`backup.include_history`、`control_plane.activated`） |
+| `key` | TEXT PK | 配置键（如 `release.mirror_url`、`release.pgp_public_key`、`ssh.timeout_sec`、`ssh.max_concurrency`、`proxy.config`、`proxy.password`、`proxy.use_for_releases`、`proxy.use_for_self_update`、`audit.retention_days`、`ops.retention_days`、`snapshot.dir`、`auth.session_ttl_hours`、`auth.session_idle_minutes`、`cron.timezone`、`defaults.nomad_version`、`defaults.vault_version`、`defaults.docker_version`、`release.docker_pgp_public_key`、`release.transfer_rate_limit`、`release.cni_checksums`、`upgrade.max_minor_skip`、`nomad.stats_interval_seconds`、`nomad.exec_idle_minutes`、`nomad.exec_max_minutes`、`observability.grafana_url_template`、`self_update.channel`、`self_update.schedule`、`self_update.last_result`、`self_update.backup_retention`、`backup.enabled`、`backup.passphrase`、`backup.targets`、`backup.include_history`、`control_plane.activated`） |
 | `value` | TEXT | JSON 序列化配置值（含敏感项的设置使用 `is_secret=1` 并存入加密值） |
 | `is_secret` | INTEGER | `0` 明文 / `1` AES-256-GCM 密文 |
 | `updated_at` | TEXT | 更新时间 |
@@ -213,7 +219,11 @@ nomad-deck/
 | `sudo_ready` | INTEGER | 探测得到的免密 `sudo` 可用性（`0` 不可用 / `1` 可用） |
 | `selinux_mode` | TEXT | 探测得到的 SELinux 状态（`enforcing` / `permissive` / `disabled` / `unknown`） |
 | `swap_enabled` | INTEGER | 探测得到的宿主机 Swap 启用状态（`0` 已禁用 / `1` 已启用，用于 Vault 节点安全预检） |
-| `docker_status` | TEXT | 探测得到的 Docker Engine 状态（`running` / `installed_stopped` / `absent`）及版本，用于启用 Docker 驱动的 Client 节点预检 |
+| `os_family` / `os_codename` / `package_manager` | TEXT | 探测得到的发行版系列（如 `debian`、`rhel`）、版本代号（如 `jammy`、`9`）与包管理器（`apt` / `dnf` / `yum`），用于选择 Docker 安装包 |
+| `docker_mode` | TEXT | Docker 管理模式（`managed` / `external` / `absent`，见 5.3） |
+| `docker_status` | TEXT | 探测得到的 Docker Engine 运行状态（`running` / `installed_stopped` / `absent`） |
+| `docker_version` | TEXT | 当前 Docker Engine 版本 |
+| `docker_config_json` | TEXT | 主机级 Docker 守护进程配置覆盖项（版本、镜像拉取代理、镜像加速、日志轮转、`data-root`；代理密码字段加密存储） |
 | `machine_id` | TEXT | 探测得到的 `/etc/machine-id`（用于拒绝把控制面宿主机自身纳管为集群节点） |
 | `time_sync` | TEXT | 探测得到的时间同步状态（`synced` / `unsynced` / `unknown`）及与控制面的时钟偏差，用于证书签发与 JWT 校验前置检查 |
 | `host_key_fingerprint` | TEXT | 首次信任（TOFU）记录的远端主机公钥指纹 |
@@ -249,7 +259,7 @@ nomad-deck/
 | `init_state` | TEXT | 集群初始化状态（`uninitialized` / `init_in_doubt` / `initialized`；在调用 Init/Bootstrap 前先置为 `init_in_doubt`，确认结果并持久落库后置为 `initialized`） |
 | `maintenance_mode` | INTEGER | 集群维护/隔离模式（`0` 正常 / `1` 维护或待核对，期间暂停自动巡检与自动解封） |
 | `maintenance_reason` | TEXT | 维护/隔离原因（如 `snapshot_restore`、`needs_reconcile`、`manual_maintenance`） |
-| `config_json` | TEXT | 集群级默认配置（如 Nomad `job_gc_threshold`、Telemetry、UI、Edition、`exec_enabled` 交互式终端开关；Vault API/Cluster 端口策略） |
+| `config_json` | TEXT | 集群级默认配置（如 Nomad `job_gc_threshold`、Telemetry、UI、Edition、`exec_enabled` 交互式终端开关、`docker_defaults` 集群默认 Docker 配置；Vault API/Cluster 端口策略） |
 | `health_status` | TEXT | `healthy` / `degraded` / `sealed` / `uninitialized` / `unreachable` |
 | `created_at` / `updated_at` | TEXT | 时间戳 |
 
@@ -322,7 +332,7 @@ nomad-deck/
 - `job_revisions`：`id`、`cluster_id`、`namespace`、`job_id`、`revision_no`、`source`（由 NomadDeck 发起的变更来源：`workbench` 编排工作台提交 / `scale` 扩缩副本数 / `revert` 版本回滚）、`edit_mode`（`visual` / `hcl`）、`renderer_version`、`form_spec_json`（可空）、`hcl_content`、`hcl_sha256`、`remote_job_version`、`eval_id`、`submit_status`（`submitted` / `in_doubt` / `confirmed` / `failed`）、`plan_summary`、`count_overridden_json`（扩缩后 HCL 中无法原位改写 `count` 的 Group 及其现网副本数，可空）、`submitted_by`、`created_at`（支持现网漂移检测、版本对比与按权威表示回填；回滚优先使用 Nomad 原生 Job 版本，本表负责保存每个 Nomad 版本对应的可视化编排结构与原始 HCL，并在 Nomad 已回收旧版本时作为重新提交的来源）。
 
 ### 4.10 `operation_tasks` 与 `operation_task_steps`（异步运维任务与步骤追踪）
-- `operation_tasks`：`id`、`action`（如 `nomad.install`、`nomad.upgrade`、`vault.init`、`vault.unseal`、`cluster.node_join`、`cluster.node_remove`、`cluster.cert_renew`、`cluster.gossip_rotate`、`vault.rekey`、`integration.apply`、`cluster.uninstall`、`snapshot.restore`、`system.self_update`）、`target_type`、`target_id`、`lock_mode`（`exclusive` / `shared`）、`remote_op_id`（写入目标机 `/opt/nomad-deck/<product>/.op.lock` 的幂等标识，同时作为远端临时 systemd 单元名 `nomad-deck-op-<remote_op_id>-<step>` 的组成部分）、`intent_json`（结构化执行意图与步骤检查点，用于崩溃后核对，不含明文凭据）、`status`（`pending` / `running` / `success` / `failed` / `rolled_back` / `interrupted` / `needs_reconcile` / `cancelled`）、`params_redacted_json`、`triggered_by`、`started_at`、`finished_at`、`error_message`。
+- `operation_tasks`：`id`、`action`（如 `nomad.install`、`nomad.upgrade`、`vault.init`、`vault.unseal`、`cluster.node_join`、`cluster.node_remove`、`cluster.cert_renew`、`cluster.gossip_rotate`、`vault.rekey`、`docker.install`、`docker.upgrade`、`docker.config`、`integration.apply`、`cluster.uninstall`、`snapshot.restore`、`system.self_update`）、`target_type`、`target_id`、`lock_mode`（`exclusive` / `shared`）、`remote_op_id`（写入目标机 `/opt/nomad-deck/<product>/.op.lock` 的幂等标识，同时作为远端临时 systemd 单元名 `nomad-deck-op-<remote_op_id>-<step>` 的组成部分）、`intent_json`（结构化执行意图与步骤检查点，用于崩溃后核对，不含明文凭据）、`status`（`pending` / `running` / `success` / `failed` / `rolled_back` / `interrupted` / `needs_reconcile` / `cancelled`）、`params_redacted_json`、`triggered_by`、`started_at`、`finished_at`、`error_message`。
 - `operation_task_steps`：`id`、`task_id` FK、`step_order`、`node_id`（可空）、`name`、`status`、`log_path`（经流式脱敏后的步骤执行日志文件，相对控制面数据目录存放；环境迁移导出运维任务时日志文件随包导出）、`remote_unit`（远端临时 systemd 单元名，可空）、`exit_code`、`started_at`、`finished_at`、`error_message`。
 
 ### 4.11 `cron_jobs` 与 `cron_job_runs`（平台定时任务与执行历史）
@@ -376,7 +386,7 @@ nomad-deck/
    - **主密钥轮换**：在停止服务的状态下于本机执行 `nomad-deck master-key rotate` 子命令，读取当前主密钥与新主密钥，在单一 SQLite 事务内重新加密全部 `_encrypted` 列与 `is_secret=1` 的系统设置，并重新包裹全部快照文件头中的数据密钥（快照正文无需重写）；密文携带主密钥版本前缀，轮换中途失败时事务整体回滚、旧主密钥继续有效。轮换完成后写入审计日志。
 3. **首次初始化安全（Setup Wizard + 一次性 Setup Token）**：
    - 当 `admins` 表为空时，控制面启动即生成一次性随机 **Setup Token**（仅输出至本地终端并写入权限 `0600` 的 `setup.token`，默认仅建议经本地或受控网络访问）。
-   - `POST /api/v1/auth/setup` 在单一 `BEGIN IMMEDIATE` 事务内原子完成“校验并消耗 Setup Token → 断言 `COUNT(admins) == 0` → 创建首个 `admin` 角色账号 → 生成默认 Ed25519 SSH 密钥对 → 写入默认下载模式”，消除公网抢注与并发创建多个初始管理员的窗口。
+   - `POST /api/v1/auth/setup` 在单一 `BEGIN IMMEDIATE` 事务内原子完成“校验并消耗 Setup Token → 断言 `COUNT(admins) == 0` → 创建首个 `admin` 角色账号 → 生成默认 Ed25519 SSH 密钥对”，消除公网抢注与并发创建多个初始管理员的窗口。
 4. **认证、CSRF、会话撤销与 SSE 生命周期**：
    - 密码采用 Argon2id 哈希；生产环境强制经 HTTPS 访问，登录态使用 `Secure + HttpOnly + SameSite=Lax` Cookie 承载随机会话令牌，服务端在 `admin_sessions` 中保存其哈希并逐请求校验（含绝对过期 `auth.session_ttl_hours` 与空闲过期 `auth.session_idle_minutes`）。
    - 会话按设备独立管理：登出只删除当前会话；修改密码时保留当前会话并删除该账号其他会话；停用账号删除其全部会话；管理员可在「账号与会话」页查看并注销任意会话；迁移导入整表清空会话。
@@ -414,29 +424,25 @@ nomad-deck/
 2. **连接安全、命令边界与环境探测**：
    - 首次连接采用 TOFU 策略记录目标机 Host Key 指纹；后续连接强制比对，如主机重装导致指纹变化，UI 明确告警并允许管理员确认后重置。
    - **提权命令与文件信任边界**：所有远端 SSH 命令均采用固定模板执行，严禁直接拼接未校验用户输入；版本号、路径、服务名、卷名与日志参数均通过严格白名单正则校验、POSIX 单引号转义并附加 `--` 选项终结符。通过 `sudo` 落位敏感文件前，先传入受保护的 `0700` staging 目录，由特权步骤校验其为普通文件、非符号链接且 SHA256 与预期一致，再执行同文件系统 `fsync` + `mv -Tf`（`rename`）原子替换。
-   - 连通性测试同时自动探测：Linux 发行版、CPU 架构（`amd64`/`arm64`）、`systemctl`/`journalctl`/`tar`/`unzip` 可用性、当前用户免密 `sudo` 权限（`sudo_ready`）、SELinux 状态（`selinux_mode`）、Swap 启用状态（`swap_enabled`）、Docker Engine 安装与运行状态及版本（`docker_status`）、`machine_id`、时间同步状态（`time_sync`，读取 systemd-timesyncd 或 chrony 的同步标记，并比较目标机与控制面的时钟偏差）以及 `/opt/nomad-deck` 可写性。
+   - 连通性测试同时自动探测：Linux 发行版、版本代号与包管理器（`os_family`、`os_codename`、`package_manager`，用于选择 Docker 安装包）、CPU 架构（`amd64`/`arm64`）、`systemctl`/`journalctl`/`tar`/`gzip`/`sha256sum` 可用性、当前用户免密 `sudo` 权限（`sudo_ready`）、SELinux 状态（`selinux_mode`）、Swap 启用状态（`swap_enabled`）、Docker Engine 安装来源、运行状态与版本（`docker_mode`、`docker_status`、`docker_version`）、`machine_id`、时间同步状态（`time_sync`，读取 systemd-timesyncd 或 chrony 的同步标记，并比较目标机与控制面的时钟偏差）以及 `/opt/nomad-deck` 可写性。
    - **时间同步前置检查**：TLS 证书有效期与 Workload Identity JWT 校验都依赖准确时钟。部署、扩容、证书签发与联动 Apply 前，目标节点未同步或与控制面偏差超过 30 秒时拦截并展示配置指引；健康巡检持续检测并在偏差超限时告警。
-   - **Docker Engine 由主机运维方预先安装**：NomadDeck 不安装、不升级 Docker Engine，只负责 Nomad Docker 驱动配置。节点启用 Docker 驱动时，部署与配置变更前置检查要求 `docker_status=running`，否则拦截并展示安装指引。
+   - **Docker Engine**：由 NomadDeck 安装、升级并托管其守护进程配置（含镜像拉取代理），机制见 5.3 第 6 项。节点启用 Nomad Docker 驱动时，部署与配置变更前置检查要求 Docker 处于运行状态；未安装时可在同一任务中自动安装。
    - 若普通用户未配置免密 `sudo`，UI 展示明确的 `sudoers` 配置指引并在发起需提权的运维任务前拦截；若目标机处于 SELinux `enforcing` 或开启防火墙，在节点详情和部署前预检中给出上下文标签与端口放行提示（Nomad `4646/4647/4648`、Vault `8200/8201` 及业务端口）；Vault 节点预检发现未加密 Swap 开启时阻断生产部署或要求显式确认。
 3. **可信校验、原子分发与下载中转**：
+   - **统一由控制面中转分发**：Nomad、Vault、CNI Plugins 与 Docker 的全部安装包只由控制面下载并完成校验，再分发给目标节点。**被管节点从不访问外网发布源**，无需外网或代理出口，也无需安装 `unzip` 与额外的包下载工具；同一版本无论安装多少节点都只下载一次。
    - **PGP 签名 + SHA256 双重校验**：下载官方或镜像源 release 时，不仅比对 `*_SHA256SUMS`，还必须使用内置固定的 HashiCorp Release Security PGP 公钥（支持系统设置轮换）验证 `*_SHA256SUMS.sig` 签名，防止镜像源被篡改后同时替换二进制与摘要。控制面本地缓存按 `(product, version, os, arch, verified_sha256)` 严格隔离。
    - **CNI Plugins 校验**：CNI Plugins 由 containernetworking 项目在 GitHub 发布，不带 HashiCorp PGP 签名，因此采用固定摘要校验：每个 NomadDeck 发布版本内置一份经构建流程核对的 CNI 版本与各架构压缩包 SHA256 对照表，只允许安装表内版本；管理员如需安装表外版本，须在系统设置 `release.cni_checksums` 中手工登记该版本各架构的 SHA256（登记操作写审计），下载后严格比对，上游同目录的摘要文件仅作提示、不作为信任依据。
-   - **双下载模式**（可在系统设置或单次任务中切换）：
-     - `direct`：目标机拉取 release zip、校验经控制面验签后的预期 SHA256 并解压；
-     - `relay`（推荐用于内网/离线集群）：由 NomadDeck 控制面统一下载、完成 PGP 验签与 SHA256 校验，并在**控制面本地预解压出目标二进制文件**后缓存，再经 SFTP 分发二进制给各目标节点——**同版本多节点安装或升级只需下载一次，且目标机无需访问外网也无需安装 `unzip`**。
-4. **外网访问代理（HTTP / HTTPS / SOCKS5）**：
-   - **代理配置**：系统设置中可登记多个代理配置（`proxy.profiles`），每个配置包含名称、类型（`http`、`https`、`socks5`）、主机、端口、可选用户名与密码，以及不走代理的地址列表（`no_proxy`）；其中一个设为默认代理（`proxy.default_profile`）。SOCKS5 代理由代理端解析目标域名（控制面侧等同 `socks5h` 语义），适用于本地 DNS 无法解析外网域名的环境。代理密码以 `is_secret=1` 加密存储，接口只返回“已设置”标记，编辑时留空表示保持原值。
-   - **连通性测试**：代理配置表单提供「测试」按钮，可在保存前用表单当前值测试（密码留空时使用已保存的密码）。测试分两类：
-     - **控制面测试**：控制面经该代理依次请求 HashiCorp Release 站点（或系统设置中的镜像源）、GitHub API 与 GitHub Release 文件下载域名，逐项返回是否成功、HTTP 状态码、耗时与失败原因（代理拒绝连接、认证失败、TLS 错误、超时等），并展示经代理访问时的出口 IP；
-     - **节点测试**：选择一台或多台已纳管主机，经 SSH 在目标机上通过该代理请求同样的地址，用于验证 `direct` 下载模式下目标机能否连上代理。
-     测试结果仅展示、不落库，测试操作写审计（不含密码）。
-   - **按任务勾选代理**：Nomad/Vault 的部署安装、节点扩容（涉及二进制安装）、版本升级、CNI Plugins 安装，以及控制面立即自更新与预约自更新的发起表单中，均提供「使用代理」勾选项与代理配置下拉框。勾选项的默认状态取自系统设置（`proxy.use_for_releases` 控制 Nomad/Vault/CNI 相关任务，`proxy.use_for_self_update` 控制自更新），下拉框默认选中默认代理；未登记任何代理时勾选项置灰并提示先到系统设置添加。选择结果作为任务参数记录在 `operation_tasks.params_redacted_json`（只记录代理配置名称与地址，不含凭据），预约自更新的选择保存在 `self_update.schedule` 中，执行时沿用。
-   - **代理作用范围**：
-     - `relay` 下载模式：由控制面经所选代理拉取版本列表、校验文件与安装包，目标节点只接收控制面经 SFTP 分发的文件，无需访问代理；
-     - `direct` 下载模式：版本列表与校验文件由控制面经代理获取，安装包由目标节点经所选代理下载。代理地址与凭据写入目标机受保护 staging 目录中权限 `0600` 的临时下载配置文件，由下载命令读取，不出现在命令行参数与进程列表中，步骤结束即删除；
-     - 版本列表查询（`GET /api/v1/releases/...`）在系统设置的默认勾选状态下使用默认代理，界面可临时切换；
-     - 代理只用于访问外网发布源。控制面与 Nomad/Vault HTTP API 之间的通信、SSH/SFTP 连接、灾备备份上传以及节点上 Docker 拉取镜像均不经过该代理（Docker 镜像代理属于主机运维方管理的 Docker 配置）。
-   - 未勾选代理时直接连接；勾选后代理不可用即视为下载失败，不自动回退为直连，避免在限制出网的环境中绕过代理。签名与摘要校验不受是否使用代理影响。
+   - **Docker 安装包校验**：Docker 官方软件仓库的元数据由 Docker 发布 GPG 密钥签名。控制面内置该公钥（支持系统设置 `release.docker_pgp_public_key` 轮换），先验证仓库签名元数据（Debian 系为 `InRelease`，RHEL 系为 `repomd.xml` 及其 `.asc` 签名），再从已验证的索引中取得各安装包的 SHA256 并逐一比对；RHEL 系安装包本身的 GPG 签名在节点安装时再次校验。
+   - **缓存与压缩分发**：
+     - 控制面对已校验的安装包按 `(product, version, os, arch, verified_sha256)` 缓存。Nomad、Vault、CNI 在控制面解压出目标二进制后，以 gzip 压缩形式经 SFTP 传到目标节点的受保护 staging 目录（gzip 为各发行版基础组件），传输量与原始压缩包相当；Docker 安装包（`.deb`/`.rpm`）原样传输。
+     - 节点侧解压后使用 `sha256sum` 校验解压出的二进制（或安装包）与控制面给出的预期值一致，校验通过才进入安装步骤，防止传输损坏或 staging 目录被篡改。
+     - 同时向多个节点分发时，并发数受系统设置 `ssh.max_concurrency` 限制，并可通过 `release.transfer_rate_limit` 限制单节点传输速率，避免占满控制面上行带宽。
+4. **系统代理（HTTP / HTTPS / SOCKS5）**：
+   - **单一代理配置**：控制面只有一个系统代理，在系统设置中配置类型（`http`、`https`、`socks5`）、主机、端口、可选用户名与密码，以及不走代理的地址列表（`no_proxy`）。SOCKS5 代理由代理端解析目标域名（等同 `socks5h` 语义），适用于本地 DNS 无法解析外网域名的环境。代理密码以 `is_secret=1` 加密存储，接口只返回“已设置”标记，编辑时留空表示保持原值。
+   - **连通性测试**：代理表单提供「测试」按钮，可在保存前用表单当前值测试（密码留空时使用已保存的密码）。控制面经该代理依次请求 HashiCorp Release 站点（或系统设置中的镜像源）、Docker 软件仓库、GitHub API 与 GitHub Release 文件下载域名，逐项返回是否成功、HTTP 状态码、耗时与失败原因（代理拒绝连接、认证失败、TLS 错误、超时等），并展示经代理访问时的出口 IP。测试结果仅展示、不落库，测试操作写审计（不含密码）。
+   - **按任务勾选**：Nomad、Vault、CNI Plugins 与 Docker 的安装、扩容、升级任务，以及控制面立即自更新与预约自更新的发起表单中，均提供「使用系统代理」勾选项。默认勾选状态取自系统设置（`proxy.use_for_releases` 控制 Nomad/Vault/CNI/Docker 相关任务，`proxy.use_for_self_update` 控制自更新）；未配置系统代理时勾选项置灰并提示先到系统设置配置。选择结果作为任务参数记录在 `operation_tasks.params_redacted_json`（只记录是否使用及代理地址，不含凭据），预约自更新的选择保存在 `self_update.schedule` 中，执行时沿用。版本列表查询按 `proxy.use_for_releases` 的默认状态决定是否经代理，界面可临时切换。
+   - **作用范围**：系统代理只作用于控制面访问外网发布源（版本列表、签名与摘要文件、安装包、自更新）。被管节点从不访问外网发布源，因此不涉及节点侧代理；控制面与 Nomad/Vault HTTP API 之间的通信、SSH/SFTP 连接与灾备备份上传也不经过系统代理。节点上 Docker 拉取镜像使用的代理是 Docker 守护进程自身的配置，见 5.3 第 6 项。
+   - 未勾选时直接连接；勾选后代理不可用即视为下载失败，不自动回退为直连，避免在限制出网的环境中绕过代理。签名与摘要校验不受是否使用代理影响。
 5. **实时日志流**：所有 SSH 命令执行均实时捕获 `stdout`/`stderr`，经流式脱敏后写入步骤日志文件并通过绑定会话的内存 PubSub 经 **SSE** 实时推流到前端终端面板；查看节点服务日志时，通过参数校验后的固定模板执行 `journalctl -u nomad|vault -n <lines> [--since ...] [-f]` 并将流式输出经 SSE 转发到浏览器。
 
 ### 5.3 Nomad 节点与集群管理
@@ -445,11 +451,11 @@ nomad-deck/
    - 支持**单机模式（Server+Client）**与**集群模式（推荐 3/5 台 Server + N 台 Client）**。
    - **TLS 强制边界与显式配置**：生产集群默认且强制启用 TLS，显式配置 `http`、`rpc`、`verify_server_hostname` 与 `verify_https_client`（禁止静默跳过证书验证）；仅在非生产实验环境允许显式勾选 `allow_insecure_http` 并持续展示安全警告。
    - **`verify_https_client` 默认关闭**：Nomad 启用 ACL 后，HTTP API 调用方身份已由 ACL Token 鉴别。开启该项会要求所有 HTTP 客户端出示集群 CA 签发的证书，导致浏览器无法直接访问 Nomad 原生 UI、Vault 无法拉取 JWKS（Vault JWT Auth 不支持客户端证书）。管理员在集群向导中显式开启时，界面列出上述影响，并要求为联动选择 5.5 所述的替代方案。
-   - 创建集群并选择节点角色、目标版本、下载模式（`direct`/`relay`）与是否使用代理（见 5.2）后，点击「一键部署」进入异步运维任务；节点扩容与版本升级的发起表单同样提供下载模式与代理选择：
+   - 创建集群并选择节点角色、目标版本与是否使用系统代理（见 5.2）后，点击「一键部署」进入异步运维任务；节点扩容与版本升级的发起表单同样提供系统代理勾选：
      1. 自动签发集群统一 CA（记录 `ca_expires_at`）、控制面专用客户端证书（`cli.<region>.nomad`，记录 `client_cert_expires_at`）以及各节点 TLS 证书。节点证书强制包含 Nomad 专属 DNS SAN（Server 包含 `server.<region>.nomad`，Client 包含 `client.<region>.nomad`，同时包含 `localhost`、`127.0.0.1`、`::1`、节点 `advertise_addr`/域名以及 TLS 透传场景下的 `public_api_url` 主机名/IP）；同时自动生成 Gossip 加密密钥。
      2. 并发安装各节点 Nomad 二进制（版本目录 + 原子软链）、创建目录与 `nomad.service`：**纯 Server 节点以低权系统用户 `nomad` 运行，含 Client 角色（`client` / `server_client`）的节点以 `root` 运行**，以满足 cgroups、CNI、Host Volume 与 Docker socket 权限要求。
      3. 按角色渲染托管配置片段至首个配置代际目录并原子软链至 `nomad.d`（`10-base.hcl`、`30-tls.hcl`、`40-telemetry.hcl`、`80-docker.hcl` 等）。
-     4. 如节点启用 CNI，自动下发 CNI Plugins 到 `/opt/cni/bin`、写入 bridge sysctl 与 `83-cni.hcl`。
+     4. 如节点启用 CNI，自动下发 CNI Plugins 到 `/opt/cni/bin`、写入 bridge sysctl 与 `83-cni.hcl`；如 Client 启用 Docker 驱动而主机尚未安装 Docker（`docker_mode=absent`），按本节第 6 项以集群默认 Docker 配置自动安装。
      5. 先启动全部 Server 并等待 Leader 选出，随后以**控制面预生成 Secret** 的方式完成 ACL Bootstrap：
         - 控制面本地生成随机 UUID 作为 Management Token Secret，加密写入 `clusters.admin_token_encrypted` 并将 `init_state` 置为 `init_in_doubt`，两者在同一事务内落库；
         - 调用 `/v1/acl/bootstrap` 并在请求体 `BootstrapSecret` 中携带该 Secret；
@@ -468,7 +474,7 @@ nomad-deck/
    - 配置托管管理（UI 表单化编辑）：Docker 驱动（privileged、volumes、image GC、私有仓库 auth）、CNI、raw_exec、Driver Denylist、Host Volumes（支持远端自动创建目录与防误删校验）、Client Meta、UI 跨链接与环境标签、Telemetry。
    - **版本代际原子配置变更**：构建全新完整配置代际目录 `/opt/nomad-deck/nomad/etc/releases/<gen>/` → 对整目录执行 `nomad config validate` → 校验通过后通过原子软链将 `nomad.d` 指向新代际 → 经仲裁门禁按顺序重启服务 → HTTP API 验活；若验活失败立即原子切回上一代际软链并重启恢复。
 3. **版本升级、版本跨度校验与安全熔断**：
-   - 升级前强制展示升级计划（Dry-Run 预览：当前版本、目标版本、版本跨度校验结果、节点执行顺序、保留版本数、下载模式与所用代理），并**自动执行一次升级前 Raft 快照与配置备份（校验通过后才允许继续）**。
+   - 升级前强制展示升级计划（Dry-Run 预览：当前版本、目标版本、版本跨度校验结果、节点执行顺序、保留版本数、是否使用系统代理），并**自动执行一次升级前 Raft 快照与配置备份（校验通过后才允许继续）**。
    - **版本跨度规则**（Nomad 与 Vault 共用）：禁止降级；禁止跨主版本升级；一次跨越的小版本数超过系统设置 `upgrade.max_minor_skip`（默认 `2`）时须管理员显式确认；每个 NomadDeck 发布版本内置一份“须人工确认的版本清单”（对应官方升级说明中含破坏性变更或特殊步骤的版本），升级路径经过清单中的版本时，在升级计划中展示对应说明并要求逐项确认。规则判定不依赖手工维护的完整兼容矩阵。
    - 区分两类故障回滚策略：**新版本尚未初始化存储/变更数据格式前的启动失败**，可安全原子切回旧版二进制软链并重启恢复；**新版本已加入集群或可能已完成磁盘状态迁移后的异常（以及跨小版本/大版本升级）**，禁止自动降级二进制，立即熔断中止后续节点并引导管理员按升级前快照执行标准恢复。
    - 集群滚动顺序：**先所有非 Leader Server（逐台校验重新加入 Raft、在线 Voter 与复制进度恢复正常）→ 再 Leader Server → 最后按批次升级 Client（可选先 Drain 等待疏散完成再升级再取消 Drain）**。
@@ -479,11 +485,30 @@ nomad-deck/
    - **ACL Role 管理**：创建与编辑聚合多个 Policy 的 Role，签发 Token 时可绑定 Role。
    - **Node Pool 管理**：列表、创建、编辑描述与 Meta、删除（存在节点或 Job 引用时禁止删除），并展示每个 Pool 的节点数与运行中 Job 数；Client 托管配置与 Job 编排器的 Node Pool 下拉引用此处的列表。
    - **ACL Token 管理**：为人员或 CI 签发绑定 Policy 或 Role 的 Client Token（可设过期时间），Secret 仅在签发时展示一次、不入库；支持查看、吊销。控制面自身持有的 Management Token 不在列表中暴露 Secret。
+6. **Docker Engine 安装、升级与守护进程配置**：
+   - **管理范围与模式**：Docker 是主机级组件（同一主机可能同时属于 Nomad 与 Vault 集群，但只有 Nomad Client 需要 Docker）。每台主机的 Docker 处于三种模式之一：`managed`（由 NomadDeck 从 Docker 官方仓库安装，可安装、升级与托管配置）、`external`（主机上已存在非 NomadDeck 安装的 Docker，如发行版自带的 `docker.io`，NomadDeck 只检测状态并可托管镜像拉取代理，不执行安装与升级）、`absent`（未安装）。`external` 主机可由管理员确认后“转为托管”：先卸载原有包（存在运行中容器时拦截），再按托管方式安装。
+   - **支持范围**：Docker 官方仓库覆盖的发行版（Ubuntu、Debian、RHEL 及其兼容发行版 Rocky/AlmaLinux/CentOS Stream、Fedora）与架构（`amd64`、`arm64`）；不在范围内的主机只能使用 `external` 模式。
+   - **安装（全程控制面中转）**：
+     1. 控制面根据主机的 `os_family`、`os_codename`、`package_manager` 与架构，经（可勾选的）系统代理从 Docker 官方仓库获取签名元数据并按 5.2 校验，确定目标版本对应的 `docker-ce`、`docker-ce-cli`、`containerd.io`、`docker-buildx-plugin`、`docker-compose-plugin` 安装包及其 SHA256，下载、校验并缓存；
+     2. 经 SFTP 将安装包传到节点 staging 目录并复核 SHA256；
+     3. 依赖预检：Debian 系执行 `apt-get install --simulate`、RHEL 系执行 `dnf install --assumeno` 检查安装这些本地包还缺哪些系统依赖（如 `iptables`、`container-selinux`）。缺失的依赖须能从节点已配置的发行版软件源（通常为内网镜像）获得，否则拦截并列出缺失项；
+     4. 以本地包方式安装（Debian 系为 `apt-get install ./<pkg>.deb ...`，RHEL 系为 `dnf install ./<pkg>.rpm ...`，并导入 Docker GPG 公钥以校验 RPM 签名），锁定已安装版本防止系统例行升级时被意外更新（Debian 系 `apt-mark hold`，RHEL 系 `versionlock` 或 `exclude`）；
+     5. 写入托管的 `/etc/docker/daemon.json`，启用并启动 `docker` 与 `containerd`，以 `docker info` 与 Nomad 节点的 Docker 驱动健康状态验活。
+   - **升级**：以集群为单位滚动执行（也可单节点执行），版本只允许前进，主版本跨越须显式确认。逐台执行：可选先将该 Client 标记为不可调度并 Drain（默认不 Drain，依赖 `live-restore` 保持容器运行）→ 解除版本锁定、以本地包方式升级、重新锁定 → 重启 Docker → 验证 `docker info`、运行中容器数量不变、Nomad Docker 驱动恢复健康 → 恢复调度。任一节点验证失败即熔断并停止后续节点，失败节点可选择按缓存的上一版本安装包回退。
+   - **托管的守护进程配置**（`/etc/docker/daemon.json`；JSON 不支持注释，托管标记记录在同目录的 `daemon.json.managed-by-nomad-deck` 文件中）：
+     - `live-restore: true`（Docker 重启或升级期间容器继续运行，Nomad 任务不中断）；
+     - 日志驱动与轮转（默认 `json-file`，`max-size`/`max-file`）；
+     - 可选的镜像加速地址（`registry-mirrors`）与数据目录（`data-root`，仅允许在首次安装时设置）；
+     - **镜像拉取代理**：Docker 守护进程拉取镜像时使用的 HTTP/HTTPS 代理及 `no-proxy` 列表，写入 `daemon.json` 的 `proxies` 字段（`external` 模式下若版本过低不支持该字段，改为写入 `docker.service` 的 systemd drop-in 环境变量）。代理可选择“沿用系统代理”或单独填写节点可达的代理地址（节点访问代理的网络路径可能与控制面不同）；含认证信息时配置文件权限设为 `0600`。`no-proxy` 默认包含 `localhost`、`127.0.0.1`、集群节点网段与私有镜像仓库地址。
+     - 配置变更按“写入新文件 → `dockerd --validate` 校验 → 原子替换 → 重启 Docker → 验活，失败则恢复旧文件并重启”执行；
+     - **代理测试**：配置表单提供「从节点测试」按钮，经 SSH 在所选节点上使用待保存的代理访问 Docker Hub（或配置的镜像仓库）的 Registry 接口，返回是否成功、状态码、耗时与失败原因。
+   - **默认值继承**：Nomad 集群级配置（`clusters.config_json.docker_defaults`）定义默认 Docker 版本、镜像拉取代理、镜像加速与日志轮转，主机级配置（`nodes.docker_config_json`）可逐项覆盖。
+   - Docker 的安装、升级与配置变更以 `docker.install`、`docker.upgrade`、`docker.config` 异步任务执行，按独占模式加主机产品级锁 `(node_id, docker)`，并以共享模式加该主机所属 Nomad 集群的集群锁（与该集群的独占任务互斥），步骤日志与审计同其他运维任务。
 
 ### 5.4 Vault 节点与集群管理（含加密托管解封）
 
 1. **安装与 Raft 集群部署**：
-   - 支持单机与多节点 Raft HA 集群（推荐 3/5 节点）。部署、扩容与升级的发起表单与 Nomad 一致，提供目标版本、下载模式与是否使用代理的选择（见 5.2）。
+   - 支持单机与多节点 Raft HA 集群（推荐 3/5 节点）。部署、扩容与升级的发起表单与 Nomad 一致，提供目标版本与是否使用系统代理的选择（见 5.2）。
    - 生产集群强制启用 TLS（非生产环境须显式勾选 `allow_insecure_http` 并禁止在明文 HTTP 下启用托管自动解封）。由控制面自动签发集群统一 CA（记录 `ca_expires_at`）与各节点 SAN 证书（覆盖 `localhost`、`127.0.0.1`、`::1`、节点 `advertise_addr`/域名及 `public_api_url` 域名），写入 `config.hcl` 的 `disable_mlock = true`、`api_addr`、`cluster_addr`、`storage "raft"` 与 `retry_join`（附 `leader_ca_cert_file`），`vault.service` 设置 `LimitCORE=0`，部署预检核查宿主机 Swap 已禁用（或已批准加密 Swap）。
    - 启动服务后，Vault 默认处于未初始化、密封状态（HTTP 501）。
 2. **初始化、Shamir 两阶段 Raft 加入与凭证生命周期**：
@@ -658,7 +683,7 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 
 ### 5.9 审计日志与强制脱敏
 
-- **全覆盖**：登录/登出/改密、账号新增/角色变更/停用/重置密码与会话注销、`viewer` 越权调用被拒绝、本机重置密码与主密钥轮换、SSH 密钥管理、节点增删与公钥推送、集群创建/部署/扩缩容/证书续期与 CA 轮换/Gossip 密钥轮换/凭据补录/配置修改/启停/升级/卸载/维护态切换/快照恢复、Nomad Namespace/Node Pool/ACL Policy/ACL Role/ACL Token 管理、Nomad 运行态操作（Deployment Promote/Fail/暂停、扩缩副本数、Periodic 立即触发、Parameterized 派发、Allocation 停止与 Task 重启及发送信号、Client 节点调度资格/Drain/Purge、CSI 卷注销、Variables 增删改与查看原文、Allocation 文件下载、交互式终端与 Job Action 的开始与结束）、Vault 初始化/Root Token 吊销/解封/手动封存/Rekey/应急签发运维 Token/策略与密钥操作、集群联动与 Role 下发、Job 提交/启停/重启/回滚/Purge、定时任务修改与触发、迁移导出/导入与控制面激活、控制面自更新/预约升级/版本回退、外网代理配置增删改与连通性测试（记录代理名称与地址，不含密码）、系统设置修改全部强制写审计。
+- **全覆盖**：登录/登出/改密、账号新增/角色变更/停用/重置密码与会话注销、`viewer` 越权调用被拒绝、本机重置密码与主密钥轮换、SSH 密钥管理、节点增删与公钥推送、集群创建/部署/扩缩容/证书续期与 CA 轮换/Gossip 密钥轮换/凭据补录/配置修改/启停/升级/卸载/维护态切换/快照恢复、Nomad Namespace/Node Pool/ACL Policy/ACL Role/ACL Token 管理、Nomad 运行态操作（Deployment Promote/Fail/暂停、扩缩副本数、Periodic 立即触发、Parameterized 派发、Allocation 停止与 Task 重启及发送信号、Client 节点调度资格/Drain/Purge、CSI 卷注销、Variables 增删改与查看原文、Allocation 文件下载、交互式终端与 Job Action 的开始与结束）、Vault 初始化/Root Token 吊销/解封/手动封存/Rekey/应急签发运维 Token/策略与密钥操作、集群联动与 Role 下发、Job 提交/启停/重启/回滚/Purge、定时任务修改与触发、迁移导出/导入与控制面激活、控制面自更新/预约升级/版本回退、系统代理配置修改与连通性测试（记录代理地址，不含密码）、Docker 安装/升级/转为托管/守护进程配置变更与镜像拉取代理测试、系统设置修改全部强制写审计。
 - **关联追溯**：涉及异步运维任务的操作，审计记录直接关联 `operation_task_id`，管理员可在审计详情页一键展开查看每台节点的脱敏命令输出与回滚轨迹。
 - **强制脱敏**：请求体、命令参数与实时日志流在落盘和推送前统一经脱敏器过滤（匹配 `token`、`password`、`passphrase`、`secret`、`private_key`、`unseal_key`、`gossip_key`、`authorization`、PEM 私钥块及敏感 CLI 参数），全部替换为 `<redacted>`。
 
@@ -711,7 +736,7 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
    - `server.public_url` 是管理端的外部访问地址，用于 CSRF 与 WebSocket 的同源校验、自签证书 SAN 补充以及告警与审计中的跳转链接。
 3. **版本来源与可信校验**：
    - 新版本来自构建时固化的 NomadDeck GitHub 仓库的 Release，默认只考虑正式版（排除 Draft 与 Pre-release）；系统设置 `self_update.channel` 可切换为 `prerelease` 以包含预发布版本。
-   - **代理选择**：立即升级与预约升级的发起表单提供「使用代理」勾选项与代理配置下拉框（默认值取自 `proxy.use_for_self_update` 与默认代理，机制见 5.2），版本查询、签名摘要与程序包下载均按所选方式访问 GitHub；预约升级保存该选择并在每次检查与最终下载时沿用。内置定时任务 `self_update_check` 按 `proxy.use_for_self_update` 的默认设置决定是否经默认代理检查。勾选代理后代理不可用即判定本次检查或升级失败，不回退为直连。
+   - **代理选择**：立即升级与预约升级的发起表单提供「使用系统代理」勾选项（默认值取自 `proxy.use_for_self_update`，机制见 5.2），版本查询、签名摘要与程序包下载均按所选方式访问 GitHub；预约升级保存该选择并在每次检查与最终下载时沿用。内置定时任务 `self_update_check` 按 `proxy.use_for_self_update` 的默认设置决定是否经系统代理检查。勾选代理后代理不可用即判定本次检查或升级失败，不回退为直连。
    - 每个 Release 附带各平台程序压缩包、`SHA256SUMS` 及其 Ed25519 签名文件 `SHA256SUMS.sig`。签名私钥仅存在于发布流水线，公钥内置于程序中。自更新依次校验：签名有效 → 目标压缩包的 SHA256 与 `SHA256SUMS` 一致 → 压缩包内程序可执行。任一环节失败即中止，不改动现有安装。仅校验 SHA256 无法防止 Release 被篡改后同时替换程序与摘要，因此签名校验为强制步骤。
    - 自更新只允许升级到比当前更高的版本；回到旧版本只能走本节第 5 项的版本回退流程。
 4. **升级流程**（作为 `system.self_update` 异步任务执行，全程写入任务日志与审计）：
@@ -725,7 +750,7 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 5. **版本回退（手动）**：
    - 已确认成功的升级，在「版本与升级」页可回退到上一版本：两版本 Schema 版本相同时直接切换软链并重启，数据保持不变；Schema 版本不同时界面拒绝回退，并说明只能在本机执行 `nomad-deck rollback --to-backup <文件>`，该命令会用升级前备份覆盖数据库、丢失升级后的全部数据变更，执行前须交互确认。
 6. **预约升级**：
-   - 适用于新版本即将发布、希望发布后自动升级的场景。管理员设置目标版本（`latest` 或指定版本号）、等待时长（30 秒至 24 小时，默认 5 分钟）、检查间隔（5 秒至 1 小时，默认 20 秒）以及是否使用代理与所用代理配置。预约状态持久化在 `self_update.schedule`，后台按间隔检查，服务重启后继续等待。
+   - 适用于新版本即将发布、希望发布后自动升级的场景。管理员设置目标版本（`latest` 或指定版本号）、等待时长（30 秒至 24 小时，默认 5 分钟）、检查间隔（5 秒至 1 小时，默认 20 秒）以及是否使用系统代理。预约状态持久化在 `self_update.schedule`，后台按间隔检查，服务重启后继续等待。
    - 目标为 `latest` 时，等待期内一旦出现比当前更高且附带完整签名摘要的正式版即开始升级；目标为指定版本时，该版本发布且资产完整后开始升级，当前已不低于目标版本则直接结束。到达截止时间仍未满足条件时记录超时。
    - 等待中可随时取消；已开始升级后不可取消，状态跟随对应的升级任务。预约进行中禁止发起立即升级，反之亦然。
    - 内置定时任务 `self_update_check` 仅检查并提示新版本，不自动安装；无人值守安装只能通过管理员显式创建的预约升级发生。
@@ -762,9 +787,10 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 | **审计日志** | `GET /api/v1/audit-logs`<br>`GET /api/v1/audit-logs/{id}` | 多条件分页检索（时间、动作、资源、结果、关键字）与脱敏详情查看 |
 | **环境迁移** | `POST /api/v1/migration/export`<br>`POST /api/v1/migration/import/preview`<br>`POST /api/v1/migration/import/apply`<br>`POST /api/v1/migration/activate` | 二次验密加密导出 `.ndbundle`、上传口令预检（签发绑定 `preview_token`）、全局维护屏障下事务导入还原、迁移后显式激活控制面自动调度 |
 | **控制面灾备备份**（`admin`） | `GET/PUT /api/v1/backup/config`<br>`POST /api/v1/backup/targets/test`<br>`POST /api/v1/backup/run`<br>`GET /api/v1/backup/history` | 备份开关、备份口令、目标（本机目录/SFTP/S3 兼容存储）与保留份数配置（二次验密）、目标连通性测试、立即备份、备份历史与校验结果 |
-| **系统设置** | `GET/PUT /api/v1/settings`<br>`GET /api/v1/releases/{nomad\|vault\|cni}?proxy=...` | 全局系统参数管理（含 PGP 公钥、CNI 摘要登记、版本跨度、代理默认勾选与时区）、拉取官方/镜像源可用版本列表（可指定是否经代理及所用代理配置） |
-| **外网代理**（`admin`） | `GET/POST /api/v1/settings/proxies`<br>`PUT/DELETE /api/v1/settings/proxies/{name}`<br>`PUT /api/v1/settings/proxies/default`<br>`POST /api/v1/settings/proxies/test` | 代理配置列表（密码只返回是否已设置）、新增、修改、删除（被预约升级引用时禁止删除）、设为默认；连通性测试（请求体为表单当前值或已保存配置名，可指定在控制面或所选节点上测试，逐项返回成功与否、状态码、耗时、失败原因与出口 IP） |
-| **任务的代理参数** | 部署、扩容、升级、CNI 安装与自更新（立即/预约）接口的请求体统一包含 `download_mode`（Nomad/Vault/CNI 任务）与 `proxy`（`{"enabled": true, "profile": "<名称>"}`） | 未传 `proxy` 时按系统设置的默认勾选状态与默认代理处理；`enabled=true` 而代理配置不存在时返回 400 |
+| **系统设置** | `GET/PUT /api/v1/settings`<br>`GET /api/v1/releases/{nomad\|vault\|cni\|docker}?use_proxy=...` | 全局系统参数管理（含 PGP 公钥、CNI 摘要登记、版本跨度、代理默认勾选与时区）、拉取官方/镜像源可用版本列表（可指定是否经代理及所用代理配置） |
+| **Docker 管理** | `GET /api/v1/nodes/{id}/docker`<br>`POST /api/v1/nodes/{id}/docker/{install\|upgrade\|adopt}`<br>`PUT /api/v1/nodes/{id}/docker/config`<br>`POST /api/v1/nodes/{id}/docker/proxy-test`<br>`POST /api/v1/clusters/{id}/docker/upgrade/plan`<br>`POST /api/v1/clusters/{id}/docker/upgrade`<br>`PUT /api/v1/clusters/{id}/docker/defaults` | 主机 Docker 模式、版本、运行状态与生效配置；单主机安装、升级与“转为托管”；守护进程配置（镜像拉取代理、镜像加速、日志轮转）变更；从节点测试镜像拉取代理；集群级滚动升级计划与执行；集群默认 Docker 配置 |
+| **系统代理**（`admin`） | `GET/PUT /api/v1/settings/proxy`<br>`POST /api/v1/settings/proxy/test` | 读取与保存唯一的系统代理（密码只返回是否已设置，留空保持原值）；连通性测试（可传表单当前值，逐项返回 HashiCorp、Docker 仓库、GitHub 的成功与否、状态码、耗时、失败原因与出口 IP） |
+| **任务的代理参数** | Nomad/Vault/CNI/Docker 的部署、扩容、安装、升级与自更新（立即/预约）接口的请求体统一包含 `use_proxy`（布尔值，仅决定控制面下载时是否经系统代理，与 Docker 镜像拉取代理无关） | 未传时按系统设置的默认勾选状态处理；`use_proxy=true` 而未配置系统代理时返回 400 |
 | **控制面版本与自更新** | `GET /api/v1/system/version`<br>`POST /api/v1/system/self-update`<br>`GET/POST/DELETE /api/v1/system/self-update/schedule`<br>`GET /api/v1/system/self-update/result`<br>`POST /api/v1/system/self-update/rollback` | 当前版本、最新版本、更新说明与自更新可用性（容器/开发模式返回不可用原因）；立即升级到最新版或指定版本（返回运维任务 ID）；预约升级的查询、创建与取消；最近一次升级结果；同 Schema 版本下回退到上一版本 |
 
 ---
@@ -777,10 +803,10 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 2. **总览仪表盘（Dashboard）**：Nomad/Vault 集群健康卡、主机在线概览、Vault 密封/抑制告警、Vault 运维 Token 续租异常告警、Vault 审计设备与审计日志分区告警、节点时钟偏差告警、控制面灾备备份失败或缺少异地目标告警、CA/节点/客户端证书到期告警、待核对异常任务提示、Nomad 运行中 Job/Alloc 计数、NomadDeck 新版本提示、最近运维任务与审计动态。
 3. **基础设施（Infrastructure）**：
    - **SSH 密钥库**：生成/导入/复制公钥、一键生成目标机配置命令、查看引用主机；
-   - **主机节点**：主机列表、一键密码推公钥、SSH 探测（系统架构、免密 `sudo`、SELinux、Swap、Docker、时间同步与 `machine_id` 状态展示及配置指引）、主机指纹管理。
+   - **主机节点**：主机列表、一键密码推公钥、Docker 面板（模式、版本、运行状态、安装/升级/转为托管、守护进程配置与镜像拉取代理及「从节点测试」按钮）、SSH 探测（系统架构、免密 `sudo`、SELinux、Swap、Docker、时间同步与 `machine_id` 状态展示及配置指引）、主机指纹管理。
 4. **Nomad 集群**：
-   - 集群向导（单机/多节点 Server+Client 拓扑、统一业务入口、显式 TLS/Gossip/ACL 一键配置、目标版本、下载模式与「使用代理」勾选及代理配置选择；扩容与升级向导提供同样的下载模式与代理选择）；
-   - 节点管理（安装、单节点扩容 Join 与安全缩容 Remove、经仲裁门禁的启停重启、托管配置表单：Docker/CNI/Host Volume/Meta/TLS/Telemetry/UI、版本升级与滚动升级向导、节点/客户端证书续期与 CA 轮换、维护态与崩溃核对解锁、凭据应急恢复、Dry-Run 卸载、Doctor 体检）；
+   - 集群向导（单机/多节点 Server+Client 拓扑、统一业务入口、显式 TLS/Gossip/ACL 一键配置、目标版本与「使用系统代理」勾选；扩容与升级向导提供同样的代理勾选）；
+   - 节点管理（安装、单节点扩容 Join 与安全缩容 Remove、经仲裁门禁的启停重启、托管配置表单：Docker 驱动/CNI/Host Volume/Meta/TLS/Telemetry/UI、集群默认 Docker 配置与 Docker 滚动升级向导、版本升级与滚动升级向导、节点/客户端证书续期与 CA 轮换、维护态与崩溃核对解锁、凭据应急恢复、Dry-Run 卸载、Doctor 体检）；
    - 快照管理子页（Raft 快照列表、手动创建、上传登记、下载与安全恢复向导）；
    - 治理子页（Namespace 与 Node Pool 管理、ACL Policy 编辑器与模板、ACL Role、Client Token 签发与吊销）；
    - **运行态工作台**（与 Nomad 原生 UI 常用页面对应，顶部提供 Region/Namespace 切换与全局搜索，数据实时刷新）：
@@ -790,7 +816,7 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
      - Servers、Topology 拓扑容量视图、Storage（CSI 卷与插件、动态 Host Volume）、Variables（路径树、遮蔽显示、CAS 编辑）、全局 Evaluations；
    - 内嵌实时终端抽屉（经 SSE 查看 `journalctl -u nomad` 实时日志与部署/升级实时输出）。
 5. **Vault 集群**：
-   - Raft 集群部署向导（自动 CA/TLS 证书签发、Swap 预检与统一业务入口配置、目标版本、下载模式与「使用代理」勾选及代理配置选择；扩容与升级向导提供同样选择）；
+   - Raft 集群部署向导（自动 CA/TLS 证书签发、Swap 预检与统一业务入口配置、目标版本与「使用系统代理」勾选；扩容与升级向导提供同样的代理勾选）；
    - 初始化与密钥托管面板（一键初始化与 `init_in_doubt` 异常处置、Root Token 吊销状态、逐节点密封状态展示、一键单节点/全集群解封与手动安全封存、自动解封开关与抑制解除、运维 Token 有效期与 `generate-root` 应急重签、Unseal Key 轮换与代际列表、二次验密导出离线备份、凭据应急补录）；
    - 节点运维（单节点扩容 Join 与安全缩容 Remove、经仲裁门禁启停重启、滚动升级、节点证书续期与 CA 轮换、实时 `journalctl -u vault` 日志、Doctor 体检、Raft 快照列表/上传/下载/标准及 force 恢复）；
    - Vault 管理子页（Auth 方法、Policy HCL 编辑器、支持嵌套挂载路径与 CAS 并发保护的多引擎 KV 浏览与 Secret 编辑）。
@@ -803,9 +829,9 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 9. **定时任务（Schedules）**：内置与自定义定时任务列表、Cron 表达式与防重入/漏执行策略编辑、启停开关、立即执行与关联 `operation_task_id` 的历史记录。
 10. **审计日志（Audit Logs）**：按动作/资源/结果/时间筛选、查看脱敏操作摘要与关联的运维任务日志。
 11. **环境迁移与灾备（Migration & Backup）**：向导式导出（二次验密 + 勾选范围 + 设置迁移口令下载 `.ndbundle`）与导入（上传 + 口令解密 → Dry-Run 绑定预检，列出导入后可登录的账号 → 全局维护屏障下选择 `replace`/`merge` 一键还原 → 确认旧实例下线后一键「激活控制面」）；灾备备份配置（备份口令、本机/SFTP/S3 目标与连通性测试、保留份数）、立即备份与备份历史，未配置异地目标时持续提示。
-12. **系统设置（Settings）**：下载模式（直连/中转）、镜像源与 PGP 验签公钥、CNI 版本摘要登记、升级版本跨度上限、资源统计采样间隔、交互式终端空闲与最长时长、Grafana 跳转链接模板、外网代理（多个 HTTP/HTTPS/SOCKS5 代理配置的增删改、设为默认、`no_proxy` 列表，以及“控制面测试/节点测试”按钮与逐项测试结果；Nomad/Vault/CNI 任务与自更新是否默认勾选代理的两个开关）、时区、默认版本号、SSH 超时与并发度、会话有效期、日志与快照保留天数。
+12. **系统设置（Settings）**：镜像源、HashiCorp 与 Docker 验签公钥、分发传输限速、Docker 默认版本、CNI 版本摘要登记、升级版本跨度上限、资源统计采样间隔、交互式终端空闲与最长时长、Grafana 跳转链接模板、系统代理（类型 HTTP/HTTPS/SOCKS5、地址、认证、`no_proxy` 列表、「测试」按钮与逐项测试结果；Nomad/Vault/CNI/Docker 任务与自更新是否默认勾选系统代理的两个开关）、时区、默认版本号、SSH 超时与并发度、会话有效期、日志与快照保留天数。
 13. **账号与会话（Accounts）**：当前账号改密、本人活跃会话列表与注销；（`admin`）账号列表、新增并指定角色、修改角色、停用/启用与重置密码。`viewer` 登录后所有变更按钮、终端入口与敏感操作入口均隐藏，顶部显示“只读”标识。
-14. **版本与升级（Version）**：并排显示当前版本与最新版本及更新说明（检查新版本时可勾选是否经代理），提供立即升级（发起前可勾选「使用代理」并选择代理配置；分阶段展示下载、校验、备份、重启、确认，完成后自动刷新页面）、预约升级（目标版本、等待时长、检查间隔、是否使用代理与代理配置、剩余时间与下次检查倒计时）、最近一次升级结果与回退到上一版本；容器部署或开发模式下禁用升级操作并说明原因。
+14. **版本与升级（Version）**：并排显示当前版本与最新版本及更新说明（检查新版本时可勾选是否经代理），提供立即升级（发起前可勾选「使用系统代理」；分阶段展示下载、校验、备份、重启、确认，完成后自动刷新页面）、预约升级（目标版本、等待时长、检查间隔、是否使用系统代理、剩余时间与下次检查倒计时）、最近一次升级结果与回退到上一版本；容器部署或开发模式下禁用升级操作并说明原因。
 
 ---
 
@@ -814,9 +840,9 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 本项目按单次完整发布（`v1.0.0`）推进，研发与联调按以下依赖顺序落地：
 
 1. **底座层**：Go 工程骨架、TOML 配置与默认 `0.0.0.0:8555` 监听（`auto`/`file`/`proxy` 三种 TLS 模式）、主密钥多来源加载（systemd 凭据/环境变量/文件）与信封加密、主密钥轮换子命令、Argon2id/TLS/SSH 密钥库、SQLite WAL 读写分离连接池与 Schema 迁移、一次性 Setup Token + Admin 认证（`Secure` Cookie 服务端会话、以 `server.public_url` 为准的 CSRF/Origin 校验、SSE 会话绑定）、`admin`/`viewer` 角色与服务端权限校验、账号管理与本机重置密码、流式审计脱敏中间件。
-2. **远端执行与任务引擎**：纯 Go SSH/SFTP 连接池、TOFU 指纹校验、固定命令模板与参数白名单/受保护 staging 原子落位、幂等一键推公钥、SELinux/免密 `sudo`/Swap/Docker/时间同步/`machine_id` 探测与产品版本下限校验、PGP 签名+SHA256 双校验预解压中转下载与 CNI 固定摘要校验、外网代理（多配置 HTTP/HTTPS/SOCKS5、控制面与节点两种连通性测试、按任务勾选、`direct` 模式下以 `0600` 临时配置文件向目标机传递代理凭据）、异步长任务队列（共享/独占两种模式的集群锁与主机产品锁、远端步骤以临时 systemd 单元执行、按产品分离的 `.op.lock` 崩溃核对与 SSE 实时日志推流）。
+2. **远端执行与任务引擎**：纯 Go SSH/SFTP 连接池、TOFU 指纹校验、固定命令模板与参数白名单/受保护 staging 原子落位、幂等一键推公钥、SELinux/免密 `sudo`/Swap/Docker/时间同步/`machine_id` 探测与产品版本下限校验、PGP 签名+SHA256 双校验与 CNI 固定摘要校验、单一系统代理（HTTP/HTTPS/SOCKS5、连通性测试、按任务勾选）、全部安装包经控制面中转并以 gzip 压缩分发、节点侧 SHA256 复核与并发限速、Docker 仓库 GPG 签名元数据校验、异步长任务队列（共享/独占两种模式的集群锁与主机产品锁、远端步骤以临时 systemd 单元执行、按产品分离的 `.op.lock` 崩溃核对与 SSE 实时日志推流）。
 3. **Vault 驱动与托管解封**：Vault 集群部署（TLS + Raft + `disable_mlock` + `LimitCORE=0` + Swap 预检 + 文件审计设备与日志轮转）、`init_in_doubt` 治理与 Shamir 两阶段 Raft 加入、密钥代际托管、orphan 周期性 Admin Token 与 Root Token 吊销、`generate-root` 应急重签、保存验证 nonce 的带验证 Rekey、快照恢复后自动重签 Admin Token、手动安全封存抑制与节点级解封、离线紧急备份、基于 Autopilot 的统一 Raft 仲裁门禁、单节点扩缩容与证书/CA 轮换、版本跨度校验与升级前快照/熔断、按密钥代际的 Raft 快照安全恢复状态机、Auth/Policy/支持嵌套路径与 CAS 的 KV v2 管理、Doctor 体检。
-4. **Nomad 驱动与集群联动**：Nomad 单机/集群部署（按角色区分 `nomad`/`root` 运行用户、显式 TLS 配置且 `verify_https_client` 默认关闭、专属 SAN 证书、Gossip 与预生成 Secret 的 ACL Bootstrap）、版本代际目录原子软链配置管理、基于 Autopilot 的统一 Raft 仲裁门禁、单节点扩缩容（含 `server_client` 双角色与 Drain 等待）、证书/CA/Gossip 密钥轮换、版本跨度校验升级与熔断、Namespace/Node Pool/ACL Policy/ACL Role/ACL Token 治理、Nomad-Vault 双向 TLS 信任联动（多 Role 模型、`explicit`/`templated` Policy、`role_type="jwt"`、`user_claim_json_pointer`、`bound_claims`、资源归属隔离、仅 Nomad 侧配置变化时滚动重启）及端到端 JWT Login 体检、Consul 扩展接口预留。
+4. **Nomad 驱动与集群联动**：Nomad 单机/集群部署（按角色区分 `nomad`/`root` 运行用户、显式 TLS 配置且 `verify_https_client` 默认关闭、专属 SAN 证书、Gossip 与预生成 Secret 的 ACL Bootstrap）、版本代际目录原子软链配置管理、基于 Autopilot 的统一 Raft 仲裁门禁、单节点扩缩容（含 `server_client` 双角色与 Drain 等待）、证书/CA/Gossip 密钥轮换、版本跨度校验升级与熔断、Namespace/Node Pool/ACL Policy/ACL Role/ACL Token 治理、Docker Engine 中转安装与滚动升级（`managed`/`external` 模式、依赖预检、版本锁定、`live-restore`、托管 `daemon.json` 与镜像拉取代理及节点侧测试）、Nomad-Vault 双向 TLS 信任联动（多 Role 模型、`explicit`/`templated` Policy、`role_type="jwt"`、`user_claim_json_pointer`、`bound_claims`、资源归属隔离、仅 Nomad 侧配置变化时滚动重启）及端到端 JWT Login 体检、Consul 扩展接口预留。
 5. **Nomad Job 中心**：按 Namespace 与 URL 编码 Job ID 定位的接口路由（兼容含 `/` 的子 Job）、Job 列表/详情、基于 `hcl/v2` 的可视化动态编排与受限 AST 附加片段、本地 AST 预检+受控反解、原生 HCL 编辑、纯 Go Compose 转换（含阻断校验）、模板管理、现网漂移检测、按 `plan_hash` 提交审阅时 Job JSON 并绑定 `JobModifyIndex` 的 Validate/Plan/Apply、启停重启与 Purge、基于 Nomad 原生 Revert 的版本回滚、Allocation SSE 实时日志流、HCL 导出；Nomad 运行态工作台（共享阻塞查询的 SSE 订阅、全局搜索、Job 各视图与 Deployment/扩缩（同步编排内容中的 `count`）/Periodic/Dispatch 操作、运行端口、Task 与节点实时资源统计、Allocation 文件浏览、基于一次性票据的 Exec/Action WebSocket 终端、Client 节点调度资格与 Drain、Server/拓扑/存储/Variables/Evaluation 视图）。
 6. **平台运营闭环**：定时任务（含防重入/漏执行/关联 `operation_task_id`、节点级健康巡检、CA/客户端/节点证书告警、Vault Token 续租、自动解封巡检、共享锁模式的 Raft 快照登记与互斥轮转、自更新版本检查、日志清理）、二次验密加密迁移包（`.ndbundle`，含步骤日志文件）导出/绑定预检（含导入后登录账号检查）/全局维护屏障下外键与 JSON 内引用一致还原（未包含的表保持现状）/防双活激活、控制面定时灾备备份（本机/SFTP/S3 目标、轮转与回读校验）、系统设置。
 7. **控制面自更新**：可勾选代理的 GitHub Release 版本查询、Ed25519 签名与 SHA256 校验、升级屏障、升级前数据库备份与保留上限、软链与 `.prev` 软链原子切换、退出码 `75` 重启、`Type=notify` 就绪确认与启动超时、启动失败自动回退、手动回退、预约升级；发布流水线产出各平台程序包、`SHA256SUMS` 与 `SHA256SUMS.sig`。
@@ -827,9 +853,10 @@ NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能�
 - [ ] **零配置启动、Setup 防抢注与会话撤销**：全新空目录启动 `nomad-deck`，验证默认在 `8555` 端口以自签证书提供 HTTPS，并自动生成 `master.key`、`setup.token` 与 SQLite；验证以 systemd 凭据提供主密钥时不生成 `master.key`；验证无 Setup Token 拒绝 `/auth/setup`，凭 Token 原子创建首个管理员并生成默认 SSH 密钥；验证登出只使当前设备会话失效、改密注销其他设备会话，被注销会话已建立的 SSE 日志流立即断开；验证变更请求缺少 CSRF/Origin 时被拒绝。
 - [ ] **账号角色与本机救援**：新增一个 `admin` 与一个 `viewer` 账号；验证 `viewer` 能查看全部运行态视图与日志，但调用任意变更接口、打开交互式终端、查看 Variables 原文、下载文件或导出备份均返回 403；停用账号后其会话立即失效，禁止停用或降级最后一个启用的 `admin`；本机执行重置密码子命令后可登录；执行主密钥轮换后全部凭据与快照仍可解密使用。
 - [ ] **节点纳管与隔离约束**：添加 3 台 Linux 主机（验证手动粘贴公钥与临时密码幂等推公钥），完成 SSH 连通性、架构、免密 `sudo`、SELinux、Swap、Docker、时间同步与 `machine_id` 探测，验证时钟偏差超过 30 秒的节点在部署前被拦截；验证同一主机无法同时加入两个同类集群（`UNIQUE(node_id, cluster_type)` 生效），控制面宿主机自身无法被纳管。
-- [ ] **外网代理**：在系统设置中分别登记一个带认证的 HTTP 代理与一个 SOCKS5 代理并设其一为默认；保存前用表单值执行控制面测试，验证逐项结果与出口 IP 正确，故意填错密码与端口时分别返回认证失败与连接失败；对一台已纳管主机执行节点测试 → 在目标机与控制面均禁止直连外网的环境中：以 `relay` 模式勾选代理部署 Vault 集群、以 `direct` 模式勾选代理部署 Nomad 集群并安装 CNI，均成功，且目标机进程列表与步骤日志中不出现代理密码、临时下载配置文件在步骤结束后已删除 → 取消勾选代理时下载失败且不会回退为直连 → 勾选代理完成 Nomad 滚动升级与 NomadDeck 立即自更新，创建勾选代理的预约升级并验证检查与下载均经代理 → 审计中可见代理选择与测试记录且无密码。
+- [ ] **系统代理与中转分发**：配置一个带认证的系统代理（分别以 HTTP 与 SOCKS5 类型各验证一次），保存前用表单值测试，验证逐项结果与出口 IP 正确，故意填错密码与端口时分别返回认证失败与连接失败 → 在控制面只能经代理出网、被管节点完全不能访问外网的环境中，勾选系统代理部署 Vault 与 Nomad 集群（含 CNI 与 Docker），全部成功，且节点侧无任何外网请求 → 验证分发采用 gzip 压缩、节点侧 SHA256 复核生效（人为篡改 staging 文件时安装中止）、并发与限速设置生效 → 取消勾选代理时下载失败且不会回退为直连 → 勾选代理完成 Nomad 滚动升级与 NomadDeck 立即自更新，创建勾选代理的预约升级并验证检查与下载均经代理 → 审计中可见代理选择与测试记录且无密码。
 - [ ] **Vault 集群全流程**：在 UI 部署 3 节点 TLS + Raft Vault 集群（验证 Swap 预检与 `LimitCORE=0`）→ 初始化并验证 Shamir 两阶段 Raft 加入成功、Unseal Keys 与 orphan Admin Token 加密托管、Root Token 已吊销且库内不存在 → 手动安全封存节点验证自动解封抑制持续生效、解除抑制后自动解封恢复 → 快照备份进行期间封存一个节点，验证自动解封不被阻塞 → 使 Admin Token 失效后经 `generate-root` 应急重签成功且临时 Root Token 已吊销 → 验证文件审计设备已启用且审计日志按轮转配置切分 → 执行 Rekey 并验证新旧代际状态，在验证阶段前中断控制面后能凭已保存的 nonce 继续完成 Rekey → 恢复 Rekey 之前的快照时使用旧代际密钥成功解封，且快照中不存在的 Admin Token 被自动重签 → 验证单节点扩容 Join、证书续期、安全缩容 Remove（含仲裁门禁拦截）、升级前快照与版本跨度校验 → 验证支持嵌套路径与 CAS 冲突保护的 KV v2 编辑。
 - [ ] **Nomad 集群全流程**：在 UI 部署 3 节点 Nomad 集群（验证纯 Server 跑 `nomad` 用户、Client 跑 `root` 用户、专属 SAN 与 `public_api_url` 证书、版本代际原子软链配置、`verify_https_client` 默认关闭且浏览器可直接打开 Nomad 原生 UI）→ 验证 ACL Bootstrap 前 Secret 已落库，模拟 Bootstrap 响应丢失后经 `/v1/acl/token/self` 确认进入 `initialized`，并模拟集群已被其他 Token 抢先 Bootstrap 时经二次 Bootstrap 判定转入受控恢复 → 验证单节点扩容 Join、证书续期、Gossip 密钥轮换、`server_client` 双角色缩容（等待 Drain 完成 + Raft `remove-peer`）、仲裁门禁拦截多数派停服、升级前快照与熔断策略 → 验证共享/独占锁互斥规则，并在远端步骤执行中杀死控制面进程，验证远端临时单元继续运行、重启后进入 `needs_reconcile` 并按单元状态完成核对恢复 → 验证 Namespace、ACL Policy 与 Client Token 管理 → 验证 Nomad `GET /v1/operator/snapshot` 备份与恢复。
+- [ ] **Docker 管理**：在一台 Ubuntu 与一台 Rocky Linux 主机上（节点均不能访问外网）由 NomadDeck 中转安装指定版本 Docker，验证安装包签名与 SHA256 校验、依赖预检、版本锁定与托管 `daemon.json` 生效 → 为一台预装发行版 `docker.io` 的主机验证识别为 `external`，并在无运行中容器时完成“转为托管” → 配置镜像拉取代理（分别验证沿用系统代理与单独填写），用「从节点测试」验证连通，之后 Nomad 部署的 Docker Job 能经该代理拉取镜像 → 对 Nomad 集群执行 Docker 滚动升级，验证 `live-restore` 下运行中容器与 Nomad 任务不中断、升级后 Nomad Docker 驱动恢复健康；人为让某节点升级后验活失败，验证熔断并可回退到上一版本。
 - [ ] **Nomad + Vault 联动**：在 Nomad 与 Vault 均启用自签 TLS 的前提下创建联动配置，并添加两个分别限制不同 Namespace 的 Role（其中一个使用 `templated` Policy）→ Plan 预览（验证作用范围标识、Auth Mount 归属隔离与单点入口告警；临时开启 `verify_https_client` 时验证 mTLS 冲突检测）→ 首次 Apply 双向打通（Nomad CA 写入 Vault `jwks_ca_pem`、完整 JWT Role 参数、滚动重启 Nomad）→ 再新增一个 Role 并 Apply，验证 Nomad 节点未重启 → Doctor 四段式体检并验证真实 JWT Login 成功，且越权 Namespace Job 被 Vault 拒绝。
 - [ ] **Job 全生命周期**：分别通过可视化动态编排器（覆盖顶层 `variable`、`constraint`、`reschedule`、`update`、`lifecycle` Sidecar、Docker `mount`/`bind_options`/`logging`、`resources.memory_max`、Group/Task 级 `service`/`check`、`volume`/`volume_mount`、`env`/`template`/`vault`/`identity` 块与 AST 校验附加片段，验证现网漂移检测与回填）、纯 Go Compose 导入（含阻断项校验）与原生 HCL 编辑器（含本地 HCL2 AST 差异警告）提交 Job → 验证 Apply 提交的 Job JSON 与 Plan 审阅内容一致、绑定 `JobModifyIndex` 的并发冲突保护与 Plan Diff 后下发 → 经 SSE 实时查看 Allocation 日志 → 停止/重新启动/修改版本并经 Nomad 原生 Revert 回滚（回滚后可视化结构同步恢复）/Purge 删除。
 - [ ] **Nomad 运行态工作台**：在不登录 Nomad 原生 UI 的前提下完成以下验证 → 两个浏览器同时打开同一 Job，验证状态变化实时刷新且控制面对 Nomad 只发起一路阻塞查询 → 验证 Allocation 详情展示的宿主机地址与端口可直接访问服务，Task 实时 CPU/内存折线与 `nomad alloc status -stats` 一致 → 发起带金丝雀的更新并在 Deployments 中 Promote，再对另一次部署执行 Fail → 经 Task Group 卡片扩缩副本数，验证生成 `source=scale` 的版本记录且不被判定为漂移，可视化模式与字面量 `count` 的 HCL 模式均已同步、再次 Apply 不会撤销扩缩，`count` 为变量的 HCL 模式在编辑时出现恢复提示 → 立即触发 Periodic Job 并派发一个 Parameterized Job，验证 ID 含 `/` 的子 Job 详情、版本与操作接口均可正常访问，不同 Namespace 下的同名 Job 互不混淆 → 用文件浏览器预览日志文件并下载，验证 `secrets/` 目录只列出文件名且不可读取内容 → 打开交互式终端执行命令、运行一个 Job Action，验证票据重放与跨站 `Origin` 被拒绝、注销会话后终端立即断开，审计中有开始与结束记录且无输入输出内容 → 对 Client 节点切换调度资格并 Drain，在拓扑视图中观察 Allocation 迁移 → 在 Evaluations 中查看一次资源不足导致的调度失败详情 → 创建、带 `cas` 修改并删除 Variable，验证原文查看写审计 → 查看 CSI 卷/插件与 Server 列表。

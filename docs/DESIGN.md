@@ -323,6 +323,7 @@ nomad-deck/
 | `auth_path` | TEXT | 目标 Vault 上的 JWT Auth Mount 路径（默认按 Nomad 集群名隔离，如 `jwt-nomad-<cluster>`） |
 | `config_json` | TEXT | 联动级参数（`aud`、`jwks_url`、`jwks_mode`、`default_role`、身份令牌 `ttl`；工作负载 Role 与 Policy 见 `integration_roles`） |
 | `nomad_config_sha256` | TEXT | 最近一次下发到 Nomad 节点的 `60-vault.hcl` 渲染内容摘要（用于判断 Apply 是否需要滚动重启 Nomad） |
+| `nomad_side_enabled` | INTEGER | Nomad 侧联动配置（`60-vault.hcl` 与 `tls/vault-ca.crt`）是否已纳入源集群的配置代际（首次 Apply 开始下发 Nomad 侧时置 `1`，删除联动时先置 `0` 并滚动移除后再删除记录） |
 | `status` | TEXT | `draft` / `applied` / `drifted` / `failed` |
 | `last_doctor_json` | TEXT | 最近一次四段式全链路体检结果快照 |
 | `last_applied_at` | TEXT | 最近一次下发时间 |

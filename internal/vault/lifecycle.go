@@ -548,6 +548,9 @@ func (s *Service) runRotateCA(ctx context.Context, t *ops.Task, clusterID string
 		}
 	}
 	_ = t.Checkpoint(map[string]any{"phase": "overlap"})
+	if err := s.notifyCA(ctx, t, clusterID, "向联动集群下发双 CA 信任链"); err != nil {
+		return err
+	}
 	ca, err := s.caSigner(cl)
 	if err != nil {
 		return err
@@ -564,9 +567,25 @@ func (s *Service) runRotateCA(ctx context.Context, t *ops.Task, clusterID string
 	if err := db.UpdateClusterTLS(ctx, s.DB.Writer, cl.Cluster, s.DB.Now()); err != nil {
 		return err
 	}
-	return s.rolling(ctx, t, cl, "移除旧 CA", confirmSingle, func(nc *nodeCtx, ms []*db.ClusterNode) error {
+	if err := s.rolling(ctx, t, cl, "移除旧 CA", confirmSingle, func(nc *nodeCtx, ms []*db.ClusterNode) error {
 		return s.applyGeneration(ctx, nc, cl, ms, ca, newOnly)
-	})
+	}); err != nil {
+		return err
+	}
+	return s.notifyCA(ctx, t, clusterID, "向联动集群下发新 CA 信任链")
+}
+
+func (s *Service) notifyCA(ctx context.Context, t *ops.Task, clusterID, title string) error {
+	if s.OnCAChange == nil {
+		return nil
+	}
+	step, err := t.Step(title, "")
+	if err != nil {
+		return err
+	}
+	err = s.OnCAChange(ctx, clusterID, step.Logf)
+	step.Finish(err, nil)
+	return err
 }
 
 // ---- Upgrade ----
@@ -767,6 +786,11 @@ func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, c
 	if confirmName != cl.Name {
 		return nil, badRequest("请输入集群名称以确认卸载")
 	}
+	if s.InUse != nil {
+		if why := s.InUse(ctx, clusterID); why != "" {
+			return nil, conflict("cluster_in_use", "%s", why)
+		}
+	}
 	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return nil, err
@@ -813,6 +837,11 @@ func (s *Service) DeleteUndeployed(ctx context.Context, actor audit.Actor, clust
 	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return err
+	}
+	if s.InUse != nil {
+		if why := s.InUse(ctx, clusterID); why != "" {
+			return conflict("cluster_in_use", "%s", why)
+		}
 	}
 	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
 	if err != nil {

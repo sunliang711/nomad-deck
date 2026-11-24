@@ -1,6 +1,9 @@
 package server
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestVaultClusterAPI(t *testing.T) {
 	e := newEnv(t)
@@ -157,5 +160,100 @@ func TestNomadClusterAPI(t *testing.T) {
 	}
 	if code, _ := root.do("DELETE", "/api/v1/clusters/"+id, nil, nil); code != 204 {
 		t.Fatal("an undeployed nomad cluster can be deleted")
+	}
+}
+
+func TestNomadGovernanceDockerIntegrationAPI(t *testing.T) {
+	e := newEnv(t)
+	root := e.setup(t)
+	var ids []string
+	for i, n := range []string{"g1", "g2"} {
+		code, b := root.do("POST", "/api/v1/nodes", map[string]any{"name": n, "host": "10.3.0." + string(rune('1'+i)), "ssh_user": "ops", "use_sudo": true}, nil)
+		if code != 201 {
+			t.Fatalf("create node: %d %v", code, b)
+		}
+		ids = append(ids, b["node"].(map[string]any)["id"].(string))
+	}
+	_, b := root.do("POST", "/api/v1/clusters", map[string]any{"type": "nomad", "name": "n", "mode": "single",
+		"nodes": []any{map[string]any{"node_id": ids[0]}}}, nil)
+	nid := b["cluster"].(map[string]any)["id"].(string)
+	_, b = root.do("POST", "/api/v1/clusters", map[string]any{"type": "vault", "name": "v", "mode": "single",
+		"nodes": []any{map[string]any{"node_id": ids[1]}}}, nil)
+	vid := b["cluster"].(map[string]any)["id"].(string)
+
+	// Governance needs a deployed cluster; Vault clusters are rejected.
+	if code, b := root.do("GET", "/api/v1/nomad/"+nid+"/namespaces", nil, nil); code != 409 || errCode(b) != "not_initialized" {
+		t.Fatalf("namespaces before deploy: %d %v", code, b)
+	}
+	if code, _ := root.do("GET", "/api/v1/nomad/"+vid+"/namespaces", nil, nil); code != 400 {
+		t.Fatal("governance on a Vault cluster must be rejected")
+	}
+	if code, b := root.do("POST", "/api/v1/clusters/"+vid+"/gossip/rotate", map[string]any{"current_password": adminPass}, nil); code != 400 ||
+		errCode(b) != "wrong_cluster_type" {
+		t.Fatalf("gossip rotation on Vault: %d %v", code, b)
+	}
+
+	// Docker state of an unprobed host.
+	if code, b := root.do("GET", "/api/v1/nodes/"+ids[0]+"/docker", nil, nil); code != 200 || b["docker"].(map[string]any)["mode"] != "absent" {
+		t.Fatalf("docker view: %d %v", code, b)
+	}
+	if code, b := root.do("POST", "/api/v1/nodes/"+ids[0]+"/docker/install", map[string]any{"version": "27.3.1", "use_proxy": false}, nil); code != 409 ||
+		errCode(b) != "node_not_probed" {
+		t.Fatalf("docker install on an unprobed host: %d %v", code, b)
+	}
+	if code, b := root.do("PUT", "/api/v1/clusters/"+nid+"/docker/defaults", map[string]any{"auto_install": true}, nil); code != 400 {
+		t.Fatalf("auto install without a version: %d %v", code, b)
+	}
+	if code, b := root.do("PUT", "/api/v1/clusters/"+nid+"/docker/defaults", map[string]any{"version": "27.3.1", "auto_install": true,
+		"pull_proxy": map[string]any{"mode": "custom", "url": "http://proxy:3128", "username": "u"}, "pull_proxy_password": "p"}, nil); code != 204 {
+		t.Fatalf("docker defaults: %d %v", code, b)
+	}
+	_, b = root.do("GET", "/api/v1/nodes/"+ids[0]+"/docker", nil, nil)
+	def := b["docker"].(map[string]any)["cluster_defaults"].(map[string]any)
+	if def["pull_proxy_password_set"] != true || def["pull_proxy"].(map[string]any)["password_encrypted"] != nil {
+		t.Fatalf("proxy password must be stored encrypted and never returned: %v", def)
+	}
+
+	// Integrations: type checks, defaults and the uninstall guard.
+	if code, _ := root.do("POST", "/api/v1/integrations", map[string]any{"name": "x", "source_cluster_id": vid, "target_cluster_id": nid}, nil); code != 400 {
+		t.Fatal("source must be Nomad and target Vault")
+	}
+	code, b := root.do("POST", "/api/v1/integrations", map[string]any{"name": "prod", "source_cluster_id": nid, "target_cluster_id": vid}, nil)
+	if code != 201 || b["integration"].(map[string]any)["auth_path"] != "jwt-nomad-n" {
+		t.Fatalf("create integration: %d %v", code, b)
+	}
+	iid := b["integration"].(map[string]any)["id"].(string)
+	if code, _ := root.do("POST", "/api/v1/integrations", map[string]any{"name": "second", "source_cluster_id": nid, "target_cluster_id": vid}, nil); code != 409 {
+		t.Fatal("one Vault target per Nomad cluster")
+	}
+	if code, _ := root.do("POST", "/api/v1/integrations/"+iid+"/roles", map[string]any{"role_name": "web", "secret_paths": []string{"secret/a"}}, nil); code != 400 {
+		t.Fatal("roles need a nomad_namespace bound claim")
+	}
+	if code, b := root.do("POST", "/api/v1/integrations/"+iid+"/roles", map[string]any{"role_name": "web", "secret_paths": []string{"secret/a"},
+		"bound_claims": map[string]string{"nomad_namespace": "default"}}, nil); code != 200 {
+		t.Fatalf("add role: %d %v", code, b)
+	}
+	if code, b := root.do("POST", "/api/v1/integrations/"+iid+"/job-example", map[string]any{"role": "web"}, nil); code != 200 ||
+		!strings.Contains(b["hcl"].(string), `role = "web"`) {
+		t.Fatalf("job example: %d %v", code, b)
+	}
+	if code, b := root.do("DELETE", "/api/v1/clusters/"+nid, nil, nil); code != 409 || errCode(b) != "cluster_in_use" {
+		t.Fatalf("a cluster used by an integration must not be deleted: %d %v", code, b)
+	}
+	viewer := e.makeViewer(t, root)
+	if code, _ := viewer.do("GET", "/api/v1/integrations", nil, nil); code != 200 {
+		t.Fatal("viewer can list integrations")
+	}
+	if code, _ := viewer.do("POST", "/api/v1/integrations/"+iid+"/apply", map[string]any{}, nil); code != 403 {
+		t.Fatal("viewer cannot apply")
+	}
+	if code, _ := viewer.do("POST", "/api/v1/nomad/"+nid+"/acl/tokens", map[string]any{"name": "x"}, nil); code != 403 {
+		t.Fatal("viewer cannot issue tokens")
+	}
+	if code, _ := root.do("DELETE", "/api/v1/integrations/"+iid, nil, nil); code != 204 {
+		t.Fatal("a draft integration is deleted at once")
+	}
+	if code, _ := root.do("DELETE", "/api/v1/clusters/"+nid, nil, nil); code != 204 {
+		t.Fatal("cluster can be deleted once the integration is gone")
 	}
 }

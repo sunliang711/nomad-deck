@@ -2,7 +2,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 LDFLAGS := -s -w -X nomad-deck/internal/version.Version=$(VERSION) -X nomad-deck/internal/version.Commit=$(COMMIT)
 
-.PHONY: build test vet run clean it it-host it-vault-hosts it-vault it-nomad-hosts it-nomad
+.PHONY: build test vet run clean it it-host it-vault-hosts it-vault it-nomad-hosts it-nomad it-integration
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/nomad-deck ./cmd/nomad-deck
@@ -73,3 +73,10 @@ it-nomad: it-nomad-hosts
 		-e ND_E2E_HOSTS=nn1,nn2,nn3,nn4,nn5 -e ND_E2E_USER=deck -e ND_E2E_PASSWORD=deck-password-1 \
 		-e ND_E2E_FROM -e ND_E2E_TO nomad-deck-linux-host:it -test.run TestE2ENomadCluster -test.v -test.timeout 90m
 
+# End-to-end integration test (Nomad -> Vault, Docker) on the first three
+# Nomad test hosts.
+it-integration: it-nomad-hosts
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(IT_ARCH) go test -c -tags integration -o bin/integration-e2e.test ./internal/integration
+	docker run --rm --network nd-nomad-it -v $(CURDIR)/bin:/t --entrypoint /t/integration-e2e.test \
+		-e ND_E2E_HOSTS=nn1,nn2,nn3 -e ND_E2E_USER=deck -e ND_E2E_PASSWORD=deck-password-1 \
+		nomad-deck-linux-host:it -test.run TestE2EIntegration -test.v -test.timeout 90m

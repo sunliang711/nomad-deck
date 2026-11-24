@@ -68,6 +68,24 @@ type Service struct {
 	// a standby; AuditPath overrides the audit log location.
 	RestartNode func(ctx context.Context, m *db.ClusterNode) error
 	AuditPath   string
+	// InUse reports why a cluster cannot be removed ("" when it can),
+	// e.g. an integration that still references it.
+	InUse func(ctx context.Context, clusterID string) string
+	// OnCAChange is called after the cluster CA bundle changed (before
+	// nodes move to the new CA, and after the old CA is dropped), so
+	// integrations can update the peers that trust this cluster.
+	OnCAChange func(ctx context.Context, clusterID string, log func(string, ...any)) error
+}
+
+// AdminClient returns a client for the active node using the managed
+// admin token (for integrations).
+func (s *Service) AdminClient(ctx context.Context, clusterID string) (*Client, error) {
+	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	c, _, err := s.adminClient(ctx, cl)
+	return c, err
 }
 
 // Settings stored in clusters.config_json for Vault clusters.

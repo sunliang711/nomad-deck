@@ -12,6 +12,7 @@ import (
 	"nomad-deck/internal/auth"
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/hosts"
+	"nomad-deck/internal/integration"
 	"nomad-deck/internal/netx"
 	"nomad-deck/internal/nomad"
 	"nomad-deck/internal/ops"
@@ -30,6 +31,7 @@ type API struct {
 	Releases       *release.Provider
 	Vault          *vault.Service
 	Nomad          *nomad.Service
+	Integrations   *integration.Service
 	Log            *slog.Logger
 	AllowedOrigins map[string]bool
 	TrustedProxies []netip.Prefix
@@ -93,6 +95,9 @@ func (a *API) Handler() http.Handler {
 			r.Get("/vault/{id}/kv/list", a.vaultKVList)
 			r.Get("/vault/{id}/kv/metadata", a.vaultKVMetadata)
 			r.Get("/nodes/{id}/docker", a.getDocker)
+			r.Get("/integrations", a.listIntegrations)
+			r.Get("/integrations/{id}", a.getIntegration)
+			r.Get("/integrations/{id}/roles", a.listIntegrationRoles)
 			r.Get("/nomad/{id}/namespaces", a.nomadListNamespaces)
 			r.Get("/nomad/{id}/node-pools", a.nomadListNodePools)
 			r.Get("/nomad/{id}/acl/policies", a.nomadListPolicies)
@@ -187,6 +192,17 @@ func (a *API) Handler() http.Handler {
 				r.Post("/clusters/{id}/docker/upgrade/plan", a.clusterDockerPlan)
 				r.Post("/clusters/{id}/docker/upgrade", a.clusterDockerUpgrade)
 				r.Put("/clusters/{id}/docker/defaults", a.putDockerDefaults)
+
+				r.Post("/integrations", a.createIntegration)
+				r.Put("/integrations/{id}", a.updateIntegration)
+				r.Delete("/integrations/{id}", a.deleteIntegration)
+				r.Post("/integrations/{id}/roles", a.putIntegrationRole)
+				r.Put("/integrations/{id}/roles/{role_id}", a.putIntegrationRole)
+				r.Delete("/integrations/{id}/roles/{role_id}", a.deleteIntegrationRole)
+				r.Post("/integrations/{id}/plan", a.planIntegration)
+				r.Post("/integrations/{id}/apply", a.applyIntegration)
+				r.Post("/integrations/{id}/doctor", a.doctorIntegration)
+				r.Post("/integrations/{id}/job-example", a.integrationJobExample)
 
 				r.Put("/settings", a.putSettings)
 				r.Put("/settings/proxy", a.putProxy)

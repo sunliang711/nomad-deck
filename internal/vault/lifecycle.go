@@ -221,7 +221,7 @@ func (s *Service) NodeJoin(ctx context.Context, actor audit.Actor, clusterID, no
 		return nil, err
 	}
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.node_join", TargetType: "cluster", TargetID: clusterID,
-		Locks: []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}, {Key: ops.HostLock(nodeID, "vault"), Mode: ops.Exclusive}},
+		Locks:       []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}, {Key: ops.HostLock(nodeID, "vault"), Mode: ops.Exclusive}},
 		TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID, "use_proxy": hc.useProxy, "version": cl.Settings.Version},
 		Run: func(ctx context.Context, t *ops.Task) error {
 			err := s.runJoin(ctx, t, cl, m.ID, hc)
@@ -415,7 +415,7 @@ func (s *Service) NodeService(ctx context.Context, actor audit.Actor, clusterID,
 	}
 	m := target[0]
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.node_service", TargetType: "cluster", TargetID: clusterID,
-		Locks: []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}, {Key: ops.HostLock(nodeID, "vault"), Mode: ops.Exclusive}},
+		Locks:       []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}, {Key: ops.HostLock(nodeID, "vault"), Mode: ops.Exclusive}},
 		TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID, "action": action, "confirm_single": confirmSingle},
 		Run: func(ctx context.Context, t *ops.Task) (err error) {
 			nc, err := s.openNode(ctx, t, m, action)

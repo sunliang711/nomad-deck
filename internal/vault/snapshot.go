@@ -17,6 +17,7 @@ import (
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/ops"
 	"nomad-deck/internal/release"
+	"nomad-deck/internal/snapstore"
 )
 
 func (s *Service) snapshotDir(ctx context.Context, clusterID string) string {
@@ -45,7 +46,7 @@ func (s *Service) takeSnapshot(ctx context.Context, cl *cluster, admin *Client, 
 	}
 	id := db.NewID()
 	path := filepath.Join(s.snapshotDir(ctx, cl.ID), id+".snap")
-	w, err := createSnapshotFile(s.Keys, path, id)
+	w, err := snapstore.Create(s.Keys, path, id)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +54,7 @@ func (s *Service) takeSnapshot(ctx context.Context, cl *cluster, admin *Client, 
 		w.Abort()
 		return nil, fmt.Errorf("导出 Raft 快照失败：%w", err)
 	}
-	if w.size == 0 {
+	if w.Size() == 0 {
 		w.Abort()
 		return nil, errors.New("Raft 快照为空")
 	}
@@ -63,15 +64,15 @@ func (s *Service) takeSnapshot(ctx context.Context, cl *cluster, admin *Client, 
 	}
 	gen := cu.SealGeneration
 	snap := &db.Snapshot{ID: id, ClusterID: cl.ID, ClusterType: "vault", ProductVersion: h.Version, SealGeneration: &gen,
-		CredentialGeneration: credGen, FilePath: path, SizeBytes: w.size, SHA256: sha, TriggerType: trigger, TriggeredBy: by,
+		CredentialGeneration: credGen, FilePath: path, SizeBytes: w.Size(), SHA256: sha, TriggerType: trigger, TriggeredBy: by,
 		CreatedAt: s.DB.Now()}
 	// Verify the stored file decrypts end to end before registering it.
-	r, err := openSnapshotFile(s.Keys, path, id, sha)
+	r, err := snapstore.Open(s.Keys, path, id, sha)
 	if err == nil {
 		var n int64
 		n, err = io.Copy(io.Discard, r)
 		r.Close()
-		if err == nil && n != w.size {
+		if err == nil && n != w.Size() {
 			err = errors.New("snapshot length mismatch")
 		}
 	}
@@ -188,14 +189,14 @@ func (s *Service) WriteArchive(ctx context.Context, actor audit.Actor, clusterID
 	if err != nil {
 		return notFound(err)
 	}
-	r, err := openSnapshotFile(s.Keys, sn.FilePath, sn.ID, sn.SHA256)
+	r, err := snapstore.Open(s.Keys, sn.FilePath, sn.ID, sn.SHA256)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.snapshot_download", ResourceType: "cluster",
 		ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"snapshot_id": sn.ID}})
-	return writeArchive(w, r, ArchiveMeta{ClusterName: cl.Name, ClusterType: "vault", ProductVersion: sn.ProductVersion,
+	return snapstore.WriteArchive(w, r, snapstore.ArchiveMeta{ClusterName: cl.Name, ClusterType: "vault", ProductVersion: sn.ProductVersion,
 		SealGeneration: sn.SealGeneration, CreatedAt: sn.CreatedAt}, passphrase)
 }
 
@@ -206,7 +207,7 @@ func (s *Service) ImportArchive(ctx context.Context, actor audit.Actor, clusterI
 		src.Close()
 		return nil, err
 	}
-	meta, r, err := readArchive(src, passphrase)
+	meta, r, err := snapstore.ReadArchive(src, passphrase)
 	if err != nil {
 		return nil, badRequest("%v", err)
 	}
@@ -216,7 +217,7 @@ func (s *Service) ImportArchive(ctx context.Context, actor audit.Actor, clusterI
 	}
 	id := db.NewID()
 	path := filepath.Join(s.snapshotDir(ctx, cl.ID), id+".snap")
-	w, err := createSnapshotFile(s.Keys, path, id)
+	w, err := snapstore.Create(s.Keys, path, id)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +230,7 @@ func (s *Service) ImportArchive(ctx context.Context, actor audit.Actor, clusterI
 		return nil, err
 	}
 	snap := &db.Snapshot{ID: id, ClusterID: cl.ID, ClusterType: "vault", ProductVersion: meta.ProductVersion,
-		SealGeneration: meta.SealGeneration, CredentialGeneration: "uploaded:" + meta.ArchiveID, FilePath: path, SizeBytes: w.size,
+		SealGeneration: meta.SealGeneration, CredentialGeneration: "uploaded:" + meta.ArchiveID, FilePath: path, SizeBytes: w.Size(),
 		SHA256: sha, TriggerType: "uploaded", TriggeredBy: actor.Name, CreatedAt: s.DB.Now()}
 	if err := db.InsertSnapshot(ctx, s.DB.Writer, snap); err != nil {
 		_ = os.Remove(path)
@@ -368,7 +369,7 @@ func (s *Service) runRestore(ctx context.Context, t *ops.Task, actor audit.Actor
 			if err != nil {
 				return err
 			}
-			r, err := openSnapshotFile(s.Keys, sn.FilePath, sn.ID, sn.SHA256)
+			r, err := snapstore.Open(s.Keys, sn.FilePath, sn.ID, sn.SHA256)
 			if err != nil {
 				return err
 			}

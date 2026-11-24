@@ -47,6 +47,12 @@ type Service struct {
 	// ExtraFiles returns integration fragments of a member's config
 	// generation (e.g. 60-vault.hcl and tls/vault-ca.crt).
 	ExtraFiles func(ctx context.Context, c *db.Cluster, m *db.ClusterNode, gen int) (map[string]string, error)
+	// InUse reports why a cluster cannot be uninstalled ("" when it can),
+	// e.g. an applied integration that still references it.
+	InUse func(ctx context.Context, clusterID string) string
+	// OnCAChange is called after the cluster CA bundle changed, so
+	// integrations can push the new trust bundle to their peers.
+	OnCAChange func(ctx context.Context, clusterID string, log func(string, ...any)) error
 }
 
 // Settings stored in clusters.config_json for Nomad clusters.
@@ -90,6 +96,9 @@ type ClientSettings struct {
 	RawExec     bool              `json:"raw_exec"`
 	Denylist    []string          `json:"driver_denylist,omitempty"`
 	CNI         bool              `json:"cni"`
+	// CPUTotalCompute overrides the fingerprinted CPU capacity (MHz) on
+	// hosts where Nomad cannot detect the CPU frequency.
+	CPUTotalCompute int `json:"cpu_total_compute,omitempty"`
 }
 
 // MemberConfig is stored in cluster_nodes.node_config_json.
@@ -254,6 +263,9 @@ func validateClient(c *ClientSettings) error {
 			return badRequest("驱动名称 %q 不合法", d)
 		}
 	}
+	if c.CPUTotalCompute < 0 || c.CPUTotalCompute > 10_000_000 {
+		return badRequest("cpu_total_compute 不合法")
+	}
 	if c.Docker.ImageGCDelay != "" {
 		if _, err := time.ParseDuration(c.Docker.ImageGCDelay); err != nil {
 			return badRequest("镜像回收延迟格式不正确")
@@ -261,6 +273,14 @@ func validateClient(c *ClientSettings) error {
 	}
 	if c.Docker.AuthConfig != "" && !reHostPath.MatchString(c.Docker.AuthConfig) {
 		return badRequest("私有仓库认证文件路径不合法")
+	}
+	return nil
+}
+
+func validURL(s string) error {
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return badRequest("public_api_url 需为 http(s) 地址")
 	}
 	return nil
 }
@@ -319,9 +339,8 @@ func (s *Service) CreateCluster(ctx context.Context, actor audit.Actor, in Creat
 		return nil, badRequest("端口不合法")
 	}
 	if in.PublicAPIURL != "" {
-		u, err := url.Parse(in.PublicAPIURL)
-		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-			return nil, badRequest("public_api_url 需为 http(s) 地址")
+		if err := validURL(in.PublicAPIURL); err != nil {
+			return nil, err
 		}
 	}
 	if in.AllowInsecureHTTP && in.VerifyHTTPSClient {
@@ -745,6 +764,11 @@ func (s *Service) DeleteUndeployed(ctx context.Context, actor audit.Actor, clust
 	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return err
+	}
+	if s.InUse != nil {
+		if why := s.InUse(ctx, clusterID); why != "" {
+			return conflict("cluster_in_use", "%s", why)
+		}
 	}
 	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
 	if err != nil {

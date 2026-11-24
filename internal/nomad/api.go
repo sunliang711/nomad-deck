@@ -298,9 +298,27 @@ type AutopilotHealth struct {
 	Servers          []ServerHealth `json:"Servers"`
 }
 
-// Autopilot reads the autopilot health report. LastContact is rendered as
-// a duration string by the server; it is kept as text.
+// Autopilot reads the autopilot health report. Nomad answers 429 with the
+// same body while the cluster is unhealthy, so both outcomes decode.
+// LastContact is rendered as a duration string by the server; it is kept
+// as text.
 func (c *Client) Autopilot(ctx context.Context) (*AutopilotHealth, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Addr+"/v1/operator/autopilot/health", nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.Token != "" {
+		req.Header.Set("X-Nomad-Token", c.Token)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != 200 && resp.StatusCode != 429 {
+		return nil, &APIError{Status: resp.StatusCode, Message: strings.TrimSpace(string(body))}
+	}
 	var raw struct {
 		Healthy          bool `json:"Healthy"`
 		FailureTolerance int  `json:"FailureTolerance"`
@@ -309,8 +327,8 @@ func (c *Client) Autopilot(ctx context.Context) (*AutopilotHealth, error) {
 			LastContact json.RawMessage `json:"LastContact"`
 		} `json:"Servers"`
 	}
-	if err := c.Request(ctx, http.MethodGet, "operator/autopilot/health", nil, &raw); err != nil {
-		return nil, err
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, &APIError{Status: resp.StatusCode, Message: strings.TrimSpace(string(body))}
 	}
 	h := &AutopilotHealth{Healthy: raw.Healthy, FailureTolerance: raw.FailureTolerance}
 	for _, s := range raw.Servers {
@@ -468,9 +486,7 @@ func (c *Client) SetEligibility(ctx context.Context, id string, eligible bool) e
 	return c.Request(ctx, http.MethodPost, "node/"+url.PathEscape(id)+"/eligibility", map[string]string{"Eligibility": v}, nil)
 }
 
-// DrainNode starts a drain with a deadline (0 = no deadline); a nil spec
-// with cancel=true stops a drain and keeps the node ineligible unless
-// markEligible is set.
+// DrainNode starts a drain with a deadline (0 = no deadline).
 func (c *Client) DrainNode(ctx context.Context, id string, deadline time.Duration, ignoreSystem bool, meta map[string]string) error {
 	body := map[string]any{"DrainSpec": map[string]any{"Deadline": int64(deadline), "IgnoreSystemJobs": ignoreSystem},
 		"Meta": meta}
@@ -510,4 +526,36 @@ func (c *Client) KeyringOp(ctx context.Context, op, key string) error {
 		return fmt.Errorf("unknown keyring op %q", op)
 	}
 	return c.Request(ctx, http.MethodPut, "agent/keyring/"+op, map[string]string{"Key": key}, nil)
+}
+
+// TransferLeadership asks the leader to hand leadership to the server with
+// the given Raft ID.
+func (c *Client) TransferLeadership(ctx context.Context, id string) error {
+	return c.Request(ctx, http.MethodPut, "operator/raft/transfer-leadership?id="+url.QueryEscape(id), nil, nil)
+}
+
+// ForceLeave removes a failed or stopped server from the gossip pool.
+func (c *Client) ForceLeave(ctx context.Context, node string) error {
+	return c.Request(ctx, http.MethodPost, "agent/force-leave?prune=true&node="+url.QueryEscape(node), nil, nil)
+}
+
+// NudgeRaft writes the scheduler configuration back unchanged (with CAS),
+// committing a no-op log entry. Raft refuses snapshots after a membership
+// change until a normal entry has been applied; on a quiet cluster this
+// provides one.
+func (c *Client) NudgeRaft(ctx context.Context) error {
+	var cur struct {
+		SchedulerConfig map[string]any `json:"SchedulerConfig"`
+	}
+	if err := c.Request(ctx, http.MethodGet, "operator/scheduler/configuration", nil, &cur); err != nil {
+		return err
+	}
+	idx, _ := cur.SchedulerConfig["ModifyIndex"].(float64)
+	cfg := map[string]any{}
+	for k, v := range cur.SchedulerConfig {
+		if k != "CreateIndex" && k != "ModifyIndex" {
+			cfg[k] = v
+		}
+	}
+	return c.Request(ctx, http.MethodPost, "operator/scheduler/configuration?cas="+strconv.FormatUint(uint64(idx), 10), cfg, nil)
 }

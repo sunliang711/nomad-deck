@@ -13,7 +13,7 @@ func sampleConfig(role string) NodeConfig {
 		HTTPPort: 4646, RPCPort: 4647, SerfPort: 4648, Generation: 3, Servers: []string{"10.0.0.11", "10.0.0.12", "10.0.0.13"},
 		BootstrapN: 3, GossipKey: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=", TLS: true, Telemetry: true,
 		UI: UISettings{Label: "prod", LabelBG: "red"}, NodePool: "default", Meta: map[string]string{"rack": "r1"},
-		HostVolumes: []HostVolume{{Name: "data", Path: "/srv/data"}}, RawExec: true, Denylist: []string{"java"}, CNI: true,
+		HostVolumes: []HostVolume{{Name: "data", Path: "/srv/data"}}, RawExec: true, Denylist: []string{"java"}, CNI: true, CPUTotal: 4000,
 		Extra: map[string]string{"60-vault.hcl": "# Managed by NomadDeck\nvault {\n  enabled = true\n}\n"}}
 }
 

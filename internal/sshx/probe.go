@@ -20,7 +20,7 @@ if [ -r /etc/os-release ]; then
   emit os_id "$ID"; emit os_id_like "$ID_LIKE"; emit os_version_id "$VERSION_ID"
   emit os_codename "${VERSION_CODENAME:-}"; emit os_pretty "$PRETTY_NAME"
 fi
-for t in systemctl journalctl systemd-run tar gzip sha256sum; do
+for t in systemctl journalctl systemd-run tar gzip sha256sum ip curl wget; do
   if command -v "$t" >/dev/null 2>&1; then emit "has_$t" 1; else emit "has_$t" 0; fi
 done
 for pm in apt-get dnf yum; do
@@ -158,6 +158,11 @@ func ParseProbe(out string, localMid time.Time) *ProbeResult {
 		if !ok {
 			p.Missing = append(p.Missing, t)
 		}
+	}
+	// Optional tools: required only by some roles (ip for Nomad clients,
+	// curl or wget for the image pull proxy test).
+	for _, t := range []string{"ip", "curl", "wget"} {
+		p.Tools[t] = raw["has_"+t] == "1"
 	}
 	return p
 }

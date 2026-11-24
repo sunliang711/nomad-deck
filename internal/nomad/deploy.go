@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -37,6 +38,13 @@ func (s *Service) preflight(ctx context.Context, members []*db.ClusterNode) ([]c
 			out = append(out, cluster.PreflightIssue{NodeID: n.ID, Node: n.Name, Severity: sev, Message: fmt.Sprintf(format, args...)})
 		}
 		if IsClient(m.Role) {
+			var probe struct {
+				Tools map[string]bool `json:"tools"`
+			}
+			_ = json.Unmarshal([]byte(n.ProbeJSON), &probe)
+			if probe.Tools != nil && !probe.Tools["ip"] {
+				add("block", "缺少 ip 命令（iproute2），Nomad Client 无法完成网络指纹识别，请先安装 iproute2 并重新测试主机")
+			}
 			if n.SELinuxMode == "enforcing" {
 				add("warn", "SELinux 处于 enforcing，请确认 Docker 与 CNI 的策略允许 Nomad 任务运行")
 			}
@@ -115,6 +123,9 @@ type genInput struct {
 	// extra overrides the integration fragments of a member (nil = ask
 	// the ExtraFiles hook).
 	extra map[string]map[string]string
+	// reuseLeaf keeps each member's current certificate and key (used to
+	// spread a new trust bundle before any certificate changes issuer).
+	reuseLeaf bool
 }
 
 func (s *Service) nodeConfig(gi *genInput, m *db.ClusterNode, gen int) NodeConfig {
@@ -128,13 +139,14 @@ func (s *Service) nodeConfig(gi *genInput, m *db.ClusterNode, gen int) NodeConfi
 		HTTPPort: cl.Settings.HTTPPort, RPCPort: cl.Settings.RPCPort, SerfPort: cl.Settings.SerfPort, Generation: gen,
 		Servers: addrs, BootstrapN: len(addrs), GossipKey: gi.gossip, TLS: cl.TLSEnabled, VerifyHTTPS: cl.Settings.VerifyHTTPSClient,
 		UI: cl.Settings.UI, Telemetry: !cl.Settings.DisableTelemetry, JobGC: cl.Settings.JobGCThreshold, NodePool: mc.NodePool,
-		Meta: mc.Meta, HostVolumes: mc.HostVolumes, Docker: mc.Docker, RawExec: mc.RawExec, Denylist: mc.Denylist, CNI: mc.CNI}
+		Meta: mc.Meta, HostVolumes: mc.HostVolumes, Docker: mc.Docker, RawExec: mc.RawExec, Denylist: mc.Denylist, CNI: mc.CNI,
+		CPUTotal: mc.CPUTotalCompute}
 }
 
 // buildGeneration renders a complete config generation for a node: the HCL
 // fragments, integration fragments and (with TLS) a fresh node certificate
 // and the CA bundle.
-func (s *Service) buildGeneration(ctx context.Context, gi *genInput, m *db.ClusterNode, n *db.Node, gen int) ([]GenerationFile, *pki.Material, error) {
+func (s *Service) buildGeneration(ctx context.Context, gi *genInput, m *db.ClusterNode, n *db.Node, gen int, current *pki.Material) ([]GenerationFile, *pki.Material, error) {
 	nc := s.nodeConfig(gi, m, gen)
 	if gi.extra != nil {
 		nc.Extra = gi.extra[m.ID]
@@ -155,8 +167,9 @@ func (s *Service) buildGeneration(ctx context.Context, gi *genInput, m *db.Clust
 		mc := memberConfig(m)
 		names := cluster.NodeHosts(n, m.AdvertiseAddr, gi.cl.PublicAPIURL, append(roleDNS(m.Role, gi.cl.Region), mc.ExtraSANs...))
 		cn := roleDNS(m.Role, gi.cl.Region)[0]
-		leaf, err = gi.ca.Issue(pki.Request{CommonName: cn, Hosts: names}, now)
-		if err != nil {
+		if current != nil {
+			leaf = current
+		} else if leaf, err = gi.ca.Issue(pki.Request{CommonName: cn, Hosts: names}, now); err != nil {
 			return nil, nil, err
 		}
 		if err := pki.Verify(leaf.CertPEM, leaf.KeyPEM, gi.caBundle, names, now, 24*time.Hour); err != nil {
@@ -199,7 +212,24 @@ func (s *Service) pushGeneration(ctx context.Context, nc *cluster.NodeCtx, role 
 func (s *Service) applyGeneration(ctx context.Context, nc *cluster.NodeCtx, gi *genInput, m *db.ClusterNode) error {
 	mc := memberConfig(m)
 	gen := mc.ConfigGeneration + 1
-	files, leaf, err := s.buildGeneration(ctx, gi, m, nc.Node, gen)
+	var current *pki.Material
+	if gi.reuseLeaf && gi.cl.TLSEnabled && mc.ConfigGeneration > 0 {
+		dir := GenerationDir(mc.ConfigGeneration)
+		cert, err := nc.Run(ctx, "cat "+sshx.Quote(dir+"/tls/agent.pem"))
+		if err != nil {
+			return fmt.Errorf("read current certificate: %w", err)
+		}
+		key, err := nc.Run(ctx, "cat "+sshx.Quote(dir+"/tls/agent-key.pem"))
+		if err != nil {
+			return fmt.Errorf("read current key: %w", err)
+		}
+		exp, err := pki.NotAfter(cert)
+		if err != nil {
+			return err
+		}
+		current = &pki.Material{CertPEM: cert, KeyPEM: key, NotAfter: exp}
+	}
+	files, leaf, err := s.buildGeneration(ctx, gi, m, nc.Node, gen, current)
 	if err != nil {
 		return err
 	}

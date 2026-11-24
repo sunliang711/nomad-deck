@@ -45,9 +45,12 @@ type Cluster struct {
 }
 
 // AAD helpers bind ciphertexts to their storage location.
-func ClusterCAKeyAAD(id string) string      { return "clusters.ca_key_encrypted:" + id }
-func ClusterClientKeyAAD(id string) string  { return "clusters.client_key_encrypted:" + id }
-func ClusterGossipKeyAAD(id string) string  { return "clusters.gossip_key_encrypted:" + id }
+func ClusterCAKeyAAD(id string) string     { return "clusters.ca_key_encrypted:" + id }
+func ClusterClientKeyAAD(id string) string { return "clusters.client_key_encrypted:" + id }
+func ClusterGossipKeyAAD(id string) string { return "clusters.gossip_key_encrypted:" + id }
+func ClusterGossipPendingAAD(id string) string {
+	return "clusters.gossip_key_pending_encrypted:" + id
+}
 func ClusterAdminTokenAAD(id string) string { return "clusters.admin_token_encrypted:" + id }
 func VaultRootTokenAAD(id string) string {
 	return "vault_secrets_custody.bootstrap_root_token_encrypted:" + id
@@ -84,6 +87,7 @@ func init() {
 		EncryptedField{Name: "clusters.ca_key_encrypted", Query: `SELECT id, ca_key_encrypted FROM clusters WHERE ca_key_encrypted != ''`},
 		EncryptedField{Name: "clusters.client_key_encrypted", Query: `SELECT id, client_key_encrypted FROM clusters WHERE client_key_encrypted != ''`},
 		EncryptedField{Name: "clusters.gossip_key_encrypted", Query: `SELECT id, gossip_key_encrypted FROM clusters WHERE gossip_key_encrypted != ''`},
+		EncryptedField{Name: "clusters.gossip_key_pending_encrypted", Query: `SELECT id, gossip_key_pending_encrypted FROM clusters WHERE gossip_key_pending_encrypted != ''`},
 		EncryptedField{Name: "clusters.admin_token_encrypted", Query: `SELECT id, admin_token_encrypted FROM clusters WHERE admin_token_encrypted != ''`},
 		EncryptedField{Name: "vault_secrets_custody.bootstrap_root_token_encrypted",
 			Query: `SELECT cluster_id, bootstrap_root_token_encrypted FROM vault_secrets_custody WHERE bootstrap_root_token_encrypted != ''`},
@@ -365,8 +369,16 @@ func SetClusterAdminToken(ctx context.Context, q Querier, id, enc, state string,
 	return err
 }
 
-// SetClusterGossipKey stores the encrypted gossip key.
-func SetClusterGossipKey(ctx context.Context, q Querier, id, enc string, now time.Time) error {
-	_, err := q.ExecContext(ctx, `UPDATE clusters SET gossip_key_encrypted = ?, updated_at = ? WHERE id = ?`, enc, FormatTime(now), id)
+// SetClusterGossipKeys stores the encrypted active and pending gossip keys.
+func SetClusterGossipKeys(ctx context.Context, q Querier, id, active, pending string, now time.Time) error {
+	_, err := q.ExecContext(ctx, `UPDATE clusters SET gossip_key_encrypted = ?, gossip_key_pending_encrypted = ?, updated_at = ? WHERE id = ?`,
+		active, pending, FormatTime(now), id)
 	return err
+}
+
+// GetClusterGossipPending returns the encrypted pending gossip key.
+func GetClusterGossipPending(ctx context.Context, q Querier, id string) (string, error) {
+	var v string
+	err := q.QueryRowContext(ctx, `SELECT gossip_key_pending_encrypted FROM clusters WHERE id = ?`, id).Scan(&v)
+	return v, err
 }

@@ -1,4 +1,6 @@
-package vault
+// Package snapstore stores cluster Raft snapshots encrypted at rest and
+// writes and reads passphrase-protected portable snapshot archives.
+package snapstore
 
 import (
 	"bufio"
@@ -49,7 +51,7 @@ type snapHeader struct {
 // SnapshotAAD binds a wrapped snapshot data key to its snapshot.
 func SnapshotAAD(id string) string { return "cluster_snapshots.data_key:" + id }
 
-type snapWriter struct {
+type Writer struct {
 	f      *os.File
 	w      *bufio.Writer
 	body   hash.Hash
@@ -61,7 +63,7 @@ type snapWriter struct {
 	size   int64
 }
 
-func createSnapshotFile(keys *crypto.Keyring, path, id string) (*snapWriter, error) {
+func Create(keys *crypto.Keyring, path, id string) (*Writer, error) {
 	dataKey := make([]byte, 32)
 	prefix := make([]byte, 8)
 	if _, err := rand.Read(dataKey); err != nil {
@@ -89,10 +91,10 @@ func createSnapshotFile(keys *crypto.Keyring, path, id string) (*snapWriter, err
 	w.WriteByte(1)
 	_ = binary.Write(w, binary.BigEndian, uint32(len(hdr)))
 	w.Write(hdr)
-	return &snapWriter{f: f, w: w, body: sha256.New(), gcm: gcm, prefix: prefix, id: id, buf: make([]byte, 0, snapChunkSize)}, nil
+	return &Writer{f: f, w: w, body: sha256.New(), gcm: gcm, prefix: prefix, id: id, buf: make([]byte, 0, snapChunkSize)}, nil
 }
 
-func (s *snapWriter) Write(p []byte) (int, error) {
+func (s *Writer) Write(p []byte) (int, error) {
 	n := 0
 	for len(p) > 0 {
 		room := snapChunkSize - len(s.buf)
@@ -124,7 +126,7 @@ func chunkAAD(id string, i uint32, final bool) []byte {
 	return []byte(id + ":" + strconv.FormatUint(uint64(i), 10) + ":" + strconv.FormatBool(final))
 }
 
-func (s *snapWriter) flush(final bool) error {
+func (s *Writer) flush(final bool) error {
 	ct := s.gcm.Seal(nil, chunkNonce(s.prefix, s.index), s.buf, chunkAAD(s.id, s.index, final))
 	var l [4]byte
 	binary.BigEndian.PutUint32(l[:], uint32(len(s.buf)))
@@ -141,7 +143,7 @@ func (s *snapWriter) flush(final bool) error {
 }
 
 // Close writes the final chunk, syncs the file and returns the body digest.
-func (s *snapWriter) Close() (string, error) {
+func (s *Writer) Close() (string, error) {
 	if err := s.flush(true); err != nil {
 		s.f.Close()
 		return "", err
@@ -158,14 +160,14 @@ func (s *snapWriter) Close() (string, error) {
 }
 
 // Abort removes a partially written file.
-func (s *snapWriter) Abort() {
+func (s *Writer) Abort() {
 	s.f.Close()
 	_ = os.Remove(s.f.Name())
 }
 
-// openSnapshotFile verifies the body digest and returns a reader of the
+// Open verifies the body digest and returns a reader of the
 // decrypted snapshot.
-func openSnapshotFile(keys *crypto.Keyring, path, wantID, wantSHA string) (io.ReadCloser, error) {
+func Open(keys *crypto.Keyring, path, wantID, wantSHA string) (io.ReadCloser, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -333,8 +335,8 @@ func sealChunks(dst io.Writer, src io.Reader, gcm cipher.AEAD, prefix []byte, id
 	}
 }
 
-// writeArchive encrypts a snapshot stream into a portable archive.
-func writeArchive(dst io.Writer, src io.Reader, meta ArchiveMeta, passphrase string) error {
+// WriteArchive encrypts a snapshot stream into a portable archive.
+func WriteArchive(dst io.Writer, src io.Reader, meta ArchiveMeta, passphrase string) error {
 	if len(passphrase) < vaultbackup.MinPassphrase {
 		return fmt.Errorf("passphrase must be at least %d characters", vaultbackup.MinPassphrase)
 	}
@@ -364,9 +366,9 @@ func writeArchive(dst io.Writer, src io.Reader, meta ArchiveMeta, passphrase str
 	return w.Flush()
 }
 
-// readArchive opens a portable archive; a wrong passphrase surfaces as an
+// ReadArchive opens a portable archive; a wrong passphrase surfaces as an
 // authentication error on the first read.
-func readArchive(src io.ReadCloser, passphrase string) (*ArchiveMeta, io.ReadCloser, error) {
+func ReadArchive(src io.ReadCloser, passphrase string) (*ArchiveMeta, io.ReadCloser, error) {
 	r := bufio.NewReaderSize(src, 256<<10)
 	fixed := make([]byte, 16)
 	if _, err := io.ReadFull(r, fixed); err != nil || string(fixed[:4]) != archiveMagic || fixed[4] != 1 {
@@ -411,3 +413,6 @@ func readArchive(src io.ReadCloser, passphrase string) (*ArchiveMeta, io.ReadClo
 	}{r, src}
 	return &meta, chunkReader(body, passKey(passphrase, salt, t, m, p), prefix, hex.EncodeToString(hsum[:])), nil
 }
+
+// Size returns the number of plaintext bytes written.
+func (s *Writer) Size() int64 { return s.size }

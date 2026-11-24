@@ -19,3 +19,11 @@ func (d driver) Status(ctx context.Context, clusterID string) (any, error) {
 	}
 	return rep, nil
 }
+
+func (d driver) ListSnapshots(ctx context.Context, clusterID string) (any, error) {
+	snaps, err := d.Service.ListSnapshots(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return snaps, nil
+}

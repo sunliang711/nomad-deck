@@ -155,6 +155,11 @@ func FollowStep(ctx context.Context, c *Client, s StepSpec) (*StepResult, error)
 		offset += int64(len(chunk))
 		switch {
 		case r.Status == "success" || r.Status == "failed":
+			// Output written after this poll's log read but before the
+			// result was persisted: read the tail once more.
+			if rest, _, err := pollStep(ctx, c, s, offset); err == nil && len(rest) > 0 && s.Log != nil {
+				_, _ = s.Log.Write(rest)
+			}
 			return r, nil
 		case r.Status == "running" && !r.UnitActive:
 			// The wrapper died without recording an outcome (killed or host rebooted).
@@ -195,11 +200,15 @@ func CheckStep(ctx context.Context, c *Client, s StepSpec) (*StepResult, error) 
 func pollStep(ctx context.Context, c *Client, s StepSpec, offset int64) ([]byte, *StepResult, error) {
 	res, log, _ := stepPaths(s.Product, s.OpID, s.Step)
 	marker := "<<ND-" + randomMarker() + ">>"
+	// The unit state is read before the result file: the wrapper persists
+	// the final result before its unit exits, so "inactive" followed by a
+	// "running" result really means the wrapper died. The other order races
+	// with a step that finishes between the two reads.
 	script := fmt.Sprintf(`if [ -f %[1]s ]; then tail -c +%[2]d %[1]s; fi
 printf '\n%[3]s\n'
-cat %[4]s 2>/dev/null || printf '{"status":"missing"}'
-printf '\n%[3]s\n'
 systemctl is-active %[5]s 2>/dev/null || true
+printf '\n%[3]s\n'
+cat %[4]s 2>/dev/null || printf '{"status":"missing"}'
 `, Quote(log), offset+1, marker, Quote(res), UnitName(s.OpID, s.Step))
 	out, err := c.Run(ctx, script, RunOptions{Sudo: true})
 	if err != nil {
@@ -210,10 +219,10 @@ systemctl is-active %[5]s 2>/dev/null || true
 		return nil, nil, errors.New("unexpected step poll output")
 	}
 	r := &StepResult{}
-	if err := json.Unmarshal(bytes.TrimSpace(parts[1]), r); err != nil {
+	if err := json.Unmarshal(bytes.TrimSpace(parts[2]), r); err != nil {
 		r.Status = "missing"
 	}
-	state := strings.TrimSpace(string(parts[2]))
+	state := strings.TrimSpace(string(parts[1]))
 	r.UnitActive = state == "active" || state == "activating" || state == "reloading"
 	if offset >= 1<<62 {
 		return nil, r, nil

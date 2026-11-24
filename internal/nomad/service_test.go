@@ -18,17 +18,23 @@ import (
 	"nomad-deck/internal/ops"
 )
 
+var testActor = audit.Actor{Name: "tester"}
+
 type svcEnv struct {
-	t  *testing.T
-	ls *localServer
-	s  *Service
-	cl *db.Cluster
+	t       *testing.T
+	ls      *localServer
+	servers []*localServer
+	s       *Service
+	cl      *db.Cluster
 }
 
 // newSvcEnv wires a Service to a local Nomad server: the cluster and its
 // single server member point at the local process.
-func newSvcEnv(t *testing.T) *svcEnv {
-	ls := startLocalServer(t)
+func newSvcEnv(t *testing.T) *svcEnv { return newSvcEnvN(t, 1) }
+
+func newSvcEnvN(t *testing.T, size int) *svcEnv {
+	lss := startLocalCluster(t, size)
+	ls := lss[0]
 	ctx := context.Background()
 	dir := t.TempDir()
 	d, err := db.Open(ctx, filepath.Join(dir, "t.db"))
@@ -43,7 +49,11 @@ func newSvcEnv(t *testing.T) *svcEnv {
 	s := &Service{DB: d, Keys: keys, Audit: &audit.Recorder{DB: d, Log: log}, Ops: engine, DataDir: dir, Log: log,
 		PollEvery: 200 * time.Millisecond, JoinTimeout: 20 * time.Second}
 	now := time.Now()
-	c := &db.Cluster{ID: db.NewID(), Name: "local", Type: "nomad", Mode: "single", Region: "global", Datacenter: "dc1",
+	mode := "single"
+	if size > 1 {
+		mode = "cluster"
+	}
+	c := &db.Cluster{ID: db.NewID(), Name: "local", Type: "nomad", Mode: mode, Region: "global", Datacenter: "dc1",
 		TLSEnabled: true, CACertPEM: ls.caPEM, ConfigJSON: `{"http_port":` + strconv.Itoa(ls.http) + `}`, CreatedAt: now, UpdatedAt: now}
 	err = d.WithTx(ctx, func(tx *sql.Tx) error {
 		if err := db.InsertCluster(ctx, tx, c); err != nil {
@@ -53,19 +63,25 @@ func newSvcEnv(t *testing.T) *svcEnv {
 			VALUES ('k', 'k', 'ed25519', 'x', 'x', 'x', 1, ?, ?)`, db.FormatTime(now), db.FormatTime(now)); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`INSERT INTO nodes (id, name, host, ssh_user, ssh_key_id, created_at, updated_at) VALUES ('h1', 'local1', '127.0.0.1', 'root', 'k', ?, ?)`,
-			db.FormatTime(now), db.FormatTime(now)); err != nil {
-			return err
+		for i, x := range lss {
+			hid := "h" + strconv.Itoa(i+1)
+			if _, err := tx.Exec(`INSERT INTO nodes (id, name, host, ssh_user, ssh_key_id, created_at, updated_at) VALUES (?, ?, '127.0.0.1', 'root', 'k', ?, ?)`,
+				hid, x.name, db.FormatTime(now), db.FormatTime(now)); err != nil {
+				return err
+			}
+			if err := db.InsertClusterNode(ctx, tx, &db.ClusterNode{ID: db.NewID(), ClusterID: c.ID, ClusterType: "nomad", NodeID: hid,
+				Role: RoleServer, AdvertiseAddr: "127.0.0.1", APIAddr: x.addr(), InstallState: "installed",
+				NodeConfigJSON: `{"node_name":"` + x.name + `"}`, CreatedAt: now.Add(time.Duration(i) * time.Second), UpdatedAt: now}); err != nil {
+				return err
+			}
 		}
-		return db.InsertClusterNode(ctx, tx, &db.ClusterNode{ID: db.NewID(), ClusterID: c.ID, ClusterType: "nomad", NodeID: "h1",
-			Role: RoleServer, AdvertiseAddr: "127.0.0.1", APIAddr: ls.addr(), InstallState: "installed",
-			NodeConfigJSON: `{"node_name":"local1"}`, CreatedAt: now, UpdatedAt: now})
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ls.waitLeader(ctx)
-	return &svcEnv{t: t, ls: ls, s: s, cl: c}
+	return &svcEnv{t: t, ls: ls, servers: lss, s: s, cl: c}
 }
 
 func (e *svcEnv) load() *nomadCluster {
@@ -166,4 +182,123 @@ func waitTask(t *testing.T, s *Service, id string) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatal("task timeout")
+}
+
+func (e *svcEnv) member(name string) *db.ClusterNode {
+	ms, _ := db.ListClusterNodes(context.Background(), e.s.DB.Reader, e.cl.ID)
+	for _, m := range ms {
+		if m.NodeName == name {
+			return m
+		}
+	}
+	e.t.Fatalf("no member %s", name)
+	return nil
+}
+
+func TestLocalClusterGateAndRemoval(t *testing.T) {
+	e := newSvcEnvN(t, 3)
+	ctx := context.Background()
+	if err := e.s.bootstrap(ctx, e.load(), t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	cl := e.load()
+	ms, _ := db.ListClusterNodes(ctx, e.s.DB.Reader, cl.ID)
+	for _, m := range ms {
+		if err := e.s.waitHealthyServer(ctx, cl, m, t.Logf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, m := range ms {
+		g, err := e.s.CheckGate(ctx, cl.ID, m.NodeID)
+		if err != nil || !g.Allowed || g.FailureTolerance != 1 || g.Voters != 3 {
+			t.Fatalf("gate %s: %+v %v", m.NodeName, g, err)
+		}
+	}
+	// Leadership transfer and rolling order (leader last among servers).
+	leader := e.s.leaderMember(ctx, cl, ms)
+	if leader == nil {
+		t.Fatal("no leader member")
+	}
+	order := e.s.rollingOrder(ctx, cl, ms)
+	if order[len(order)-1].ID != leader.ID {
+		t.Fatalf("leader must be last: %s", order[len(order)-1].NodeName)
+	}
+	api, _, err := e.s.apiClient(ctx, cl, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raft, _ := api.RaftConfiguration(ctx)
+	var target RaftServer
+	for _, sv := range raft {
+		if !sv.Leader {
+			target = sv
+			break
+		}
+	}
+	if err := api.TransferLeadership(ctx, target.ID); err != nil {
+		t.Fatalf("transfer leadership: %v", err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if l := e.s.leaderMember(ctx, cl, ms); l != nil && l.ID != leader.ID {
+			t.Logf("leadership moved from %s to %s", leader.NodeName, l.NodeName)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("leadership did not move")
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	// Stop local3: a healthy server may no longer go down, the failed one may.
+	e.servers[2].stop()
+	down := e.member("local3")
+	deadline = time.Now().Add(60 * time.Second)
+	for {
+		g, err := e.s.CheckGate(ctx, cl.ID, down.NodeID)
+		if err == nil && !g.TargetHealthy {
+			if !g.Allowed {
+				t.Fatalf("an unhealthy server with a healthy majority should pass: %+v", g)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("local3 never reported unhealthy: %+v %v", g, err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	g, err := e.s.CheckGate(ctx, cl.ID, e.member("local1").NodeID)
+	if err != nil || g.Allowed || g.FailureTolerance != 0 {
+		t.Fatalf("with one server down a healthy server must be blocked: %+v %v", g, err)
+	}
+	api, _, _ = e.s.apiClient(ctx, cl, down.ID)
+	raft, _ = api.RaftConfiguration(ctx)
+	if sv, ok := raftServerOf(cl, down, raft); ok {
+		if err := api.RemovePeer(ctx, sv.ID); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		t.Log("autopilot already removed the dead server from raft")
+	}
+	_ = api.ForceLeave(ctx, "local3.global")
+	raft, _ = api.RaftConfiguration(ctx)
+	if len(raft) != 2 {
+		t.Fatalf("raft after removal: %+v", raft)
+	}
+	// Snapshot and restore without SSH.
+	snap, err := e.s.takeSnapshot(ctx, cl, "manual", "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := e.s.Restore(ctx, testActor, cl.ID, snap.ID, RestoreInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitTask(t, e.s, task.ID)
+	if c := e.load(); c.MaintenanceMode || c.InitState != db.InitInitialized {
+		t.Fatalf("after restore: maintenance=%v init=%s", c.MaintenanceMode, c.InitState)
+	}
+	views, _ := e.s.ListSnapshots(ctx, cl.ID)
+	if len(views) != 1 || views[0].CredentialGeneration == "" {
+		t.Fatalf("snapshots: %+v", views)
+	}
 }

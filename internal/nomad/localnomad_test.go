@@ -16,14 +16,17 @@ import (
 	"nomad-deck/internal/pki"
 )
 
-// localServer runs a real single-node Nomad server on 127.0.0.1 with TLS
-// and ACLs, rendered by RenderFiles. Skipped without a nomad binary or
-// with -short.
+// localServer runs a real Nomad server on 127.0.0.1 with TLS and ACLs,
+// rendered by RenderFiles. Skipped without a nomad binary or with -short.
 type localServer struct {
 	t      *testing.T
+	name   string
+	bin    string
 	dir    string
 	caPEM  string
 	http   int
+	rpc    int
+	serf   int
 	cmd    *exec.Cmd
 	log    *bytes.Buffer
 	gossip string
@@ -38,7 +41,10 @@ func freePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-func startLocalServer(t *testing.T) *localServer {
+func startLocalServer(t *testing.T) *localServer { return startLocalCluster(t, 1)[0] }
+
+// startLocalCluster starts size servers that join each other over gossip.
+func startLocalCluster(t *testing.T, size int) []*localServer {
 	if testing.Short() {
 		t.Skip("skipping real Nomad test in -short mode")
 	}
@@ -46,60 +52,85 @@ func startLocalServer(t *testing.T) *localServer {
 	if err != nil {
 		t.Skip("nomad binary not found")
 	}
-	dir, err := os.MkdirTemp("", "ndn")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
 	now := time.Now()
 	caM, _ := pki.NewCA("local nomad CA", pki.CATTL, now)
 	ca, _ := pki.ParseCA(caM.CertPEM, caM.KeyPEM)
-	leaf, err := ca.Issue(pki.Request{CommonName: "server.global.nomad",
-		Hosts: []string{"server.global.nomad", "localhost", "127.0.0.1"}}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
 	key, _ := GenerateGossipKey()
-	ls := &localServer{t: t, dir: dir, caPEM: caM.CertPEM, http: freePort(t), log: &bytes.Buffer{}, gossip: key}
-	cfg := NodeConfig{Region: "global", Datacenter: "dc1", NodeName: "local1", Role: RoleServer, Advertise: "127.0.0.1",
-		HTTPPort: ls.http, RPCPort: freePort(t), SerfPort: freePort(t), Generation: 1, Servers: []string{"127.0.0.1"},
-		BootstrapN: 1, GossipKey: key, TLS: true, Telemetry: true}
-	files, err := RenderFiles(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cdir := filepath.Join(dir, "conf")
-	os.MkdirAll(filepath.Join(cdir, "tls"), 0o700)
-	files = append(files, GenerationFile{Name: "tls/ca.pem", Content: []byte(caM.CertPEM)},
-		GenerationFile{Name: "tls/agent.pem", Content: []byte(leaf.CertPEM)},
-		GenerationFile{Name: "tls/agent-key.pem", Content: []byte(leaf.KeyPEM)})
-	for _, f := range files {
-		c := strings.ReplaceAll(string(f.Content), GenerationDir(1), cdir)
-		c = strings.ReplaceAll(c, DataDir, filepath.Join(dir, "data"))
-		c = strings.ReplaceAll(c, `bind_addr  = "0.0.0.0"`, `bind_addr  = "127.0.0.1"`)
-		if err := os.WriteFile(filepath.Join(cdir, f.Name), []byte(c), 0o600); err != nil {
+	var out []*localServer
+	for i := 0; i < size; i++ {
+		dir, err := os.MkdirTemp("", "ndn")
+		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		out = append(out, &localServer{t: t, name: fmt.Sprintf("local%d", i+1), bin: bin, dir: dir, caPEM: caM.CertPEM,
+			http: freePort(t), rpc: freePort(t), serf: freePort(t), log: &bytes.Buffer{}, gossip: key})
 	}
-	ls.cmd = exec.Command(bin, "agent", "-config", cdir)
+	var join []string
+	for _, ls := range out {
+		join = append(join, fmt.Sprintf("%q", fmt.Sprintf("127.0.0.1:%d", ls.serf)))
+	}
+	for _, ls := range out {
+		leaf, err := ca.Issue(pki.Request{CommonName: "server.global.nomad",
+			Hosts: []string{"server.global.nomad", "localhost", "127.0.0.1"}}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := NodeConfig{Region: "global", Datacenter: "dc1", NodeName: ls.name, Role: RoleServer, Advertise: "127.0.0.1",
+			HTTPPort: ls.http, RPCPort: ls.rpc, SerfPort: ls.serf, Generation: 1, Servers: []string{"127.0.0.1"},
+			BootstrapN: size, GossipKey: key, TLS: true, Telemetry: true}
+		files, err := RenderFiles(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cdir := filepath.Join(ls.dir, "conf")
+		os.MkdirAll(filepath.Join(cdir, "tls"), 0o700)
+		files = append(files, GenerationFile{Name: "tls/ca.pem", Content: []byte(caM.CertPEM)},
+			GenerationFile{Name: "tls/agent.pem", Content: []byte(leaf.CertPEM)},
+			GenerationFile{Name: "tls/agent-key.pem", Content: []byte(leaf.KeyPEM)})
+		for _, f := range files {
+			c := strings.ReplaceAll(string(f.Content), GenerationDir(1), cdir)
+			c = strings.ReplaceAll(c, DataDir, filepath.Join(ls.dir, "data"))
+			c = strings.ReplaceAll(c, `bind_addr  = "0.0.0.0"`, `bind_addr  = "127.0.0.1"`)
+			if f.Name == "10-base.hcl" && size > 1 {
+				c = strings.Replace(c, "\n}\n\nacl {", "\n  server_join {\n    retry_join = ["+strings.Join(join, ", ")+"]\n  }\n}\n\nacl {", 1)
+			}
+			if err := os.WriteFile(filepath.Join(cdir, f.Name), []byte(c), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ls.start()
+		t.Cleanup(func() {
+			ls.stop()
+			if t.Failed() {
+				t.Logf("%s log:\n%s", ls.name, ls.log.String())
+			}
+		})
+	}
+	return out
+}
+
+func (ls *localServer) start() {
+	ls.cmd = exec.Command(ls.bin, "agent", "-config", filepath.Join(ls.dir, "conf"))
 	ls.cmd.Stdout, ls.cmd.Stderr = ls.log, ls.log
 	if err := ls.cmd.Start(); err != nil {
-		t.Fatal(err)
+		ls.t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = ls.cmd.Process.Signal(os.Interrupt)
-		done := make(chan struct{})
-		go func() { _ = ls.cmd.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(15 * time.Second):
-			_ = ls.cmd.Process.Kill()
-		}
-		if t.Failed() {
-			t.Logf("nomad log:\n%s", ls.log.String())
-		}
-	})
-	return ls
+}
+
+func (ls *localServer) stop() {
+	if ls.cmd == nil || ls.cmd.Process == nil {
+		return
+	}
+	_ = ls.cmd.Process.Signal(os.Interrupt)
+	done := make(chan struct{})
+	go func() { _ = ls.cmd.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		_ = ls.cmd.Process.Kill()
+	}
+	ls.cmd = nil
 }
 
 func (ls *localServer) addr() string { return fmt.Sprintf("https://127.0.0.1:%d", ls.http) }

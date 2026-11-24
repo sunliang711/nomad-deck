@@ -257,6 +257,7 @@ nomad-deck/
 | `client_key_encrypted` | TEXT | 加密存储的控制面专用客户端 TLS 私钥 |
 | `client_cert_expires_at` | TEXT | 控制面客户端 TLS 证书到期时间（纳入临期巡检与续期范围） |
 | `gossip_key_encrypted` | TEXT | 加密存储的当前生效 Nomad Gossip 密钥（16/32 字节 Base64；轮换期间另存待生效密钥，轮换完成后替换） |
+| `gossip_key_pending_encrypted` | TEXT | 加密存储的待生效 Nomad Gossip 密钥（仅在 Gossip 密钥轮换期间存在，轮换中断后重新发起时沿用同一密钥续做，轮换完成后清空） |
 | `public_api_url` | TEXT | 集群对外统一业务入口（如 LB/VIP/域名，优先用于 Nomad ↔ Vault 联动的 `jwks_url` 与 `vault.address`） |
 | `api_endpoints_json` | TEXT | 控制面访问该集群的故障切换 HTTP API 入口列表（逐节点直连操作仍优先使用 `cluster_nodes.api_addr`） |
 | `admin_token_encrypted` | TEXT | 加密存储的管理 Token（Nomad Management Token，其 Secret 由控制面预先生成并在 Bootstrap 前落库；Vault 日常管理 Token 见托管表） |
@@ -496,13 +497,14 @@ nomad-deck/
         - 由于 Secret 在调用前已经持久化，“Bootstrap 成功但凭据未保存”的窗口不存在。受控恢复入口提供两种方式：补录已有 Management Token；或按 Nomad 官方重置流程，读取 Bootstrap 失败响应中的 reset index，经 SSH 写入 Leader 数据目录下的 `server/acl-bootstrap-reset` 文件后重新执行上述 Bootstrap。
      6. 启动全部 Client，通过 Nomad HTTP API 验证所有节点进入 `ready` 状态。
 2. **统一 Raft 仲裁门禁、扩缩容、证书轮换与配置变更**：
-   - **统一仲裁门禁**：所有可能中断 Server 节点的变更入口（单节点/批量停服、重启、卸载、配置变更、缩容、升级）均强制经过统一 Raft 仲裁门禁——读取 Autopilot 健康接口 `/v1/operator/autopilot/health`（逐台给出 `Healthy`、`Voter`、`LastContact` 与日志索引，以及集群级 `FailureTolerance`），并以 `/v1/operator/raft/configuration` 核对成员列表；仅当目标节点下线后剩余健康 Voter 仍满足多数派时才放行（目标节点健康时要求当前 `FailureTolerance ≥ 1`；目标节点本身已不健康时要求其余健康 Voter 构成多数派），批量操作逐台重新评估（单机或显式维护操作须二次强确认）。
+   - **统一仲裁门禁**：所有可能中断 Server 节点的变更入口（单节点/批量停服、重启、卸载、配置变更、缩容、升级）均强制经过统一 Raft 仲裁门禁——读取 Autopilot 健康接口 `/v1/operator/autopilot/health`（逐台给出 `Healthy`、`Voter`、`LastContact` 与日志索引，以及集群级 `FailureTolerance`），并以 `/v1/operator/raft/configuration` 核对成员列表；容错数取 Autopilot 报告值与“健康 Voter 数减多数派所需数”中较严格者（Autopilot 的报告在成员变更后可能滞后于 Raft 配置），仅当目标节点下线后剩余健康 Voter 仍满足多数派时才放行（目标节点健康时要求当前 `FailureTolerance ≥ 1`；目标节点本身已不健康时要求其余健康 Voter 构成多数派），批量操作逐台重新评估（单机或显式维护操作须二次强确认）。
    - **单节点安全扩缩容**：
      - **扩容（Join）**：向已有集群新增 Server 或 Client 节点，自动签发新节点证书、分发二进制与配置、按需刷新既有 Server/Client 的 `retry_join` 配置并确认新节点加入 Raft 且追平或进入 `ready` 状态；
-     - **缩容（Remove）**：摘除 Client 时先标记 `ineligible`、触发 `drain` 并**轮询等待疏散完全结束**；摘除 Server 时若目标为 Leader 则先执行安全移交/降级，校验剩余在线健康 Voter 满足仲裁后调用 `operator raft remove-peer` 移出成员，随后停止并清理该节点配置防止其借 `retry_join` 重新加入；**`server_client` 双角色节点严格按顺序同时执行 Client 疏散与 Server 移出两套流程**。
+     - **缩容（Remove）**：摘除 Client 时先标记 `ineligible`、触发 `drain` 并**轮询等待疏散完全结束**；摘除 Server 时先经仲裁门禁校验剩余在线健康 Voter 满足多数派，若目标为 Leader 则先经 Raft 领导权移交接口交给其他投票成员，随后停止该节点服务、等待剩余成员确认 Leader，再调用 `operator raft remove-peer` 移出成员并将其从 Gossip 成员中剔除，最后清理该节点的目录与 systemd 单元，防止其借 `retry_join` 重新加入（仍在运行的 Server 被移出 Raft 后会被 Leader 依据 Gossip 成员重新加入，因此移出成员必须在停服之后执行）；**`server_client` 双角色节点严格按顺序同时执行 Client 疏散与 Server 移出两套流程**。
    - **完整证书生命周期**：支持节点证书与控制面客户端证书一键续期并滚动分发；支持受控 CA 轮换（先下发包含新旧双 CA 的信任链并同步更新联动 Vault 的 `jwks_ca_pem` → 滚动重签节点与客户端证书 → 验证全部切换后移除旧 CA）。
    - **Gossip 密钥轮换**：生成新密钥并暂存 → 经 Nomad Gossip Keyring 接口在全部 Server 安装新密钥 → 切换为主用密钥 → 确认全部 Server 已使用新密钥后移除旧密钥 → 以新配置代际更新 `10-base.hcl` 中的 `encrypt`，保证后续重启使用新密钥 → 替换 `gossip_key_encrypted`。整个过程无需重启 Server。
    - 配置托管管理（UI 表单化编辑）：Docker 驱动（privileged、volumes、image GC、私有仓库 auth）、CNI、raw_exec、Driver Denylist、Host Volumes（支持远端自动创建目录与防误删校验）、Client Meta、UI 跨链接与环境标签、Telemetry。
+   - **Client 主机前置条件与资源指纹**：含 Client 角色的主机须具备 `ip` 命令（iproute2），缺失时部署前检查直接拦截；无法识别 CPU 频率的主机（部分虚拟化或 ARM 环境）可在节点托管配置中设置 `cpu_total_compute` 覆盖 CPU 总算力，否则该 Client 没有可调度的 CPU 资源。
    - **版本代际原子配置变更**：构建全新完整配置代际目录 `/opt/nomad-deck/nomad/etc/releases/<gen>/`（含本代际引用的全部 TLS 材料）→ 对整目录执行 `nomad config validate` → 校验通过后通过原子软链将 `nomad.d` 指向新代际 → 经仲裁门禁按顺序重启服务 → HTTP API 验活；若验活失败立即原子切回上一代际软链并重启恢复。
 3. **版本升级、版本跨度校验与安全熔断**：
    - 升级前强制展示升级计划（Dry-Run 预览：当前版本、目标版本、版本跨度校验结果、节点执行顺序、保留版本数、是否使用系统代理），并**自动执行一次升级前 Raft 快照与配置备份（校验通过后才允许继续）**。

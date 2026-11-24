@@ -1,4 +1,4 @@
-package vault
+package snapstore
 
 import (
 	"bytes"
@@ -20,7 +20,7 @@ func TestSnapshotFileRoundTrip(t *testing.T) {
 		rand.Read(data)
 		path := filepath.Join(dir, "s"+string(rune('a'+size%26))+".snap")
 		os.Remove(path)
-		w, err := createSnapshotFile(keys, path, "snap1")
+		w, err := Create(keys, path, "snap1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -29,7 +29,7 @@ func TestSnapshotFileRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r, err := openSnapshotFile(keys, path, "snap1", sha)
+		r, err := Open(keys, path, "snap1", sha)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -37,14 +37,14 @@ func TestSnapshotFileRoundTrip(t *testing.T) {
 		if err != nil || !bytes.Equal(got, data) {
 			t.Fatalf("size %d: round trip failed (%v)", size, err)
 		}
-		if _, err := openSnapshotFile(keys, path, "other", sha); err == nil {
+		if _, err := Open(keys, path, "other", sha); err == nil {
 			t.Fatal("wrong record id must fail")
 		}
 		if size > 0 {
 			raw, _ := os.ReadFile(path)
 			raw[len(raw)-20] ^= 1
 			os.WriteFile(path, raw, 0o600)
-			if _, err := openSnapshotFile(keys, path, "snap1", sha); err == nil {
+			if _, err := Open(keys, path, "snap1", sha); err == nil {
 				t.Fatal("tampered body must fail the digest check")
 			}
 		}
@@ -60,10 +60,10 @@ func TestPortableArchive(t *testing.T) {
 		rand.Read(data)
 		var buf bytes.Buffer
 		gen := 2
-		if err := writeArchive(&buf, bytes.NewReader(data), ArchiveMeta{ClusterName: "c", ClusterType: "vault", SealGeneration: &gen}, "a long passphrase"); err != nil {
+		if err := WriteArchive(&buf, bytes.NewReader(data), ArchiveMeta{ClusterName: "c", ClusterType: "vault", SealGeneration: &gen}, "a long passphrase"); err != nil {
 			t.Fatal(err)
 		}
-		meta, r, err := readArchive(io.NopCloser(bytes.NewReader(buf.Bytes())), "a long passphrase")
+		meta, r, err := ReadArchive(io.NopCloser(bytes.NewReader(buf.Bytes())), "a long passphrase")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,7 +71,7 @@ func TestPortableArchive(t *testing.T) {
 		if err != nil || !bytes.Equal(got, data) || *meta.SealGeneration != 2 {
 			t.Fatalf("size %d: %v", size, err)
 		}
-		_, r, err = readArchive(io.NopCloser(bytes.NewReader(buf.Bytes())), "the wrong passphrase")
+		_, r, err = ReadArchive(io.NopCloser(bytes.NewReader(buf.Bytes())), "the wrong passphrase")
 		if err == nil {
 			if _, err = io.ReadAll(r); err == nil {
 				t.Fatal("wrong passphrase must fail")

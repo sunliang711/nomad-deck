@@ -117,6 +117,7 @@ type NodeConfig struct {
 	RawExec     bool
 	Denylist    []string
 	CNI         bool
+	CPUTotal    int
 	// Extra holds integration fragments (e.g. 60-vault.hcl, tls/vault-ca.crt)
 	// keyed by file name relative to the generation directory.
 	Extra map[string]string
@@ -198,6 +199,9 @@ func RenderBase(c NodeConfig) string {
 		fmt.Fprintf(&b, "client {\n  enabled   = true\n")
 		if c.NodePool != "" {
 			fmt.Fprintf(&b, "  node_pool = %q\n", c.NodePool)
+		}
+		if c.CPUTotal > 0 {
+			fmt.Fprintf(&b, "  cpu_total_compute = %d\n", c.CPUTotal)
 		}
 		fmt.Fprintf(&b, "\n  server_join {\n    retry_join = %s\n  }\n}\n\n", quoteList(join))
 	}

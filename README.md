@@ -8,7 +8,7 @@ NomadDeck 是一个使用 Go 开发的 Nomad 与 Vault 集群可视化运维控�
 
 ## 参考脚本目录
 
-本项目的运维流程与配置规范参考自以下本地目录中的原型脚本（本项目全新设计集群布局，不兼容既有单机脚本安装的旧节点）：
+本项目的运维流程与配置规范参考自以下本地目录中的原型脚本（仅用于研发阶段本地对照，正式对外发布前清理路径引用；本项目全新设计集群布局，不兼容既有单机脚本安装的旧节点）：
 
 - Nomad 参考脚本：`/Users/eagle/.local/apps/init/tools/nomad`
 - Vault 参考脚本：`/Users/eagle/.local/apps/init/tools/vault`

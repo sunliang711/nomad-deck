@@ -134,7 +134,7 @@ nomad-deck/
 │   ├── nomad/                      # Nomad 节点 SSH 编排、HCL 渲染、扩缩容与滚动升级、Nomad HTTP API 客户端
 │   ├── vault/                      # Vault 节点 SSH 编排、Raft 集群组网、托管解封、扩缩容与滚动升级、Vault HTTP API 客户端
 │   ├── integration/                # Nomad <-> Vault JWT Workload Identity 双向联动编排与四段式体检
-│   ├── job/                        # Job 生命周期、HCL 脚手架、纯 Go Compose 转 HCL、实时 Alloc 日志代理
+│   ├── job/                        # Job 生命周期、可视化动态编排模型与 HCL 渲染/反解、纯 Go Compose 转 HCL、实时 Alloc 日志代理
 │   ├── ops/                        # 异步长任务引擎（任务队列、集群级互斥锁、步骤状态机、SSE 实时日志广播、崩溃恢复）
 │   ├── cron/                       # 平台定时任务调度与执行历史
 │   ├── audit/                      # 统一审计记录与敏感字段强制脱敏
@@ -286,8 +286,8 @@ nomad-deck/
 | `created_at` / `updated_at` | TEXT | 时间戳 |
 
 ### 4.9 `job_templates` 与 `job_revisions`（Nomad Job 模板与版本历史）
-- `job_templates`：`id`、`cluster_id`（可空表示跨集群通用模板）、`name`、`job_id`、`namespace`、`hcl_content`、`source_type`（`hcl` / `scaffold` / `compose` / `imported`）、`description`、`created_at`、`updated_at`。
-- `job_revisions`：`id`、`cluster_id`、`namespace`、`job_id`、`revision_no`、`hcl_content`、`plan_summary`、`submitted_by`、`created_at`（支持在 UI 中对比历史版本与一键回滚）。
+- `job_templates`：`id`、`cluster_id`（可空表示跨集群通用模板）、`name`、`job_id`、`namespace`、`edit_mode`（`visual` / `hcl`）、`form_spec_json`（可视化动态编排结构 JSON，可空）、`hcl_content`、`source_type`（`visual` / `hcl` / `compose` / `imported`）、`description`、`created_at`、`updated_at`。
+- `job_revisions`：`id`、`cluster_id`、`namespace`、`job_id`、`revision_no`、`edit_mode`（`visual` / `hcl`）、`form_spec_json`（可空）、`hcl_content`、`plan_summary`、`submitted_by`、`created_at`（支持在 UI 中对比历史版本、按原编辑模式回填与一键回滚）。
 
 ### 4.10 `operation_tasks` 与 `operation_task_steps`（异步运维任务与步骤追踪）
 - `operation_tasks`：`id`、`action`（如 `nomad.install`、`nomad.upgrade`、`vault.init`、`vault.unseal`、`cluster.node_join`、`cluster.node_remove`、`cluster.cert_renew`、`integration.apply`、`cluster.uninstall`、`snapshot.restore`）、`target_type`、`target_id`、`status`（`pending` / `running` / `success` / `failed` / `rolled_back` / `interrupted` / `cancelled`）、`params_redacted_json`、`triggered_by`、`started_at`、`finished_at`、`error_message`。
@@ -438,11 +438,21 @@ nomad-deck/
 通过 Nomad HTTP API（自动携带该集群加密托管的 Management Token，支持按集群多入口自动故障切换）实现全部操作：
 
 1. **Job 列表与详情**：按集群、Namespace、类型（`service`/`batch`/`system`/`sysbatch` + Periodic 标识）、状态过滤；详情页展示 Task Groups、Allocations、部署状态、健康检查与事件时间线。
-2. **三种提交方式**：
-   - **HCL 编辑器**：语法高亮、支持从模板加载、一键调用 `/v1/jobs/parse` & `/v1/validate/job` 校验；
-   - **Docker Job 表单向导**：可视化配置镜像、端口映射、环境变量、Host Volume / Docker Mount、CPU/内存、健康检查、Vault Workload Identity 与 Template，实时生成标准 HCL；
-   - **Docker Compose 导入**：粘贴或上传 `docker-compose.yml`，由后端使用纯 Go（`gopkg.in/yaml.v3`）解析转换，不依赖控制面宿主机安装 Docker CLI。支持转换字段白名单为：`image`、`ports`、`volumes`（bind 与命名卷）、`environment`、`command`、`entrypoint`、`deploy.replicas`、`deploy.resources.limits.{cpus,memory}`（兼容 `cpus`/`mem_limit`）；对 `build`、`depends_on`、`healthcheck`、`networks`、`configs`、`secrets`、`profiles` 等无原生等价结构的字段生成结构化警告并跳过。
-3. **Plan 预览再提交与版本回滚**：提交前调用 `/v1/job/{id}/plan` 返回结构化 Diff（新增/修改/销毁的 Task Group 与资源调度预估），管理员确认后再执行提交，并自动记录一份快照到 `job_revisions` 支持后续一键回滚。
+2. **双模式 Job 编排工作台（可视化动态编排 + 原生 HCL 源码）**：
+   - **可视化动态编排模式（Visual Builder）**：
+     - 基于结构化 `JobSpec` JSON 模型提供嵌套式动态卡片编辑，左侧增删配置块，右侧实时渲染标准缩进的 Nomad HCL 预览，最终统一以标准 HCL 提交：
+       - **Job 级**：基本信息（Job ID、Namespace、类型 `service`/`batch`/`system`/`sysbatch`、Datacenters、Priority）、`periodic` 定时调度、`update` 滚动发布策略；
+       - **Group 级（支持动态增删多个）**：副本数 `count`、`network`（网络模式与动态端口映射）、`volume`（Host Volume / CSI 卷声明）、`service`（Nomad / Consul 服务注册及 HTTP/TCP 健康检查）、`restart` 重启策略；
+       - **Task 级（每个 Group 下支持动态增删多个）**：驱动配置（`docker` / `exec` / `raw_exec`、镜像、命令、参数、端口）、`env` 动态键值对、`volume_mount` 卷挂载映射、`resources`（CPU/内存）、`vault` 与 `identity`（Workload Identity 取密）、`template`（配置文件与机密渲染模板）。
+     - **跨字段联动防呆**：`volume_mount` 下拉联动当前 Group 已声明的 `volume`（声明 Host Volume 时联动展示目标集群 Client 节点已配置的 Host Volume 列表）；`service.port` 与 Task 端口下拉联动当前 Group `network` 已定义的端口名；`vault` / `identity` 下拉联动该 Nomad 集群在「集群联动」中已打通的 Vault Role。
+     - **高级 HCL 兜底槽位**：Job、Group、Task 卡片底部各提供折叠式「附加原生 HCL 片段」输入框，少量冷门参数可直接填写并在渲染时原样拼接进对应块，无需为此放弃可视化编辑。
+   - **原生 HCL 源码模式**：基于 CodeMirror 6 提供完整 HCL 语法高亮、模板加载、一键调用 `/v1/jobs/parse` 与 `/v1/validate/job` 校验，满足任意复杂 HCL2 语法需求。
+   - **双模式切换与防丢规则**：
+     - **可视化 → HCL（无损切换）**：随时一键转为 HCL 源码继续编辑高级语法；
+     - **已保存可视化 Job 二次编辑**：`job_templates` 与 `job_revisions` 双存 `edit_mode`、`form_spec_json` 与 `hcl_content`，重新编辑或回滚历史版本时直接还原可视化卡片状态；
+     - **外部/手写 HCL → 可视化（受控反解）**：调用后端 `parse-to-visual` 接口（底层经 Nomad `/v1/jobs/parse` 转为标准 Job JSON），将常用块映射回可视化表单；若检测到注释或表单未覆盖的高级块（如自定义 `affinity`、`scaling`、`device`），弹窗明确列出未覆盖项与变更风险，经管理员确认后再切入可视化模式。
+   - **Docker Compose 导入**：粘贴或上传 `docker-compose.yml`，由后端使用纯 Go（`gopkg.in/yaml.v3`）解析转换（不依赖控制面宿主机安装 Docker CLI），同时产出标准 HCL 与可视化 `JobSpec`（支持导入后进入可视化编排或直接以 HCL 模式审阅修改）。支持转换字段白名单为：`image`、`ports`、`volumes`（bind 与命名卷）、`environment`、`command`、`entrypoint`、`deploy.replicas`、`deploy.resources.limits.{cpus,memory}`（兼容 `cpus`/`mem_limit`）；对 `build`、`depends_on`、`healthcheck`、`networks`、`configs`、`secrets`、`profiles` 等无原生等价结构的字段生成结构化警告并跳过。
+3. **Plan 预览再提交与版本回滚**：提交前调用 `/v1/job/{id}/plan` 返回结构化 Diff（新增/修改/销毁的 Task Group 与资源调度预估），管理员确认后再执行提交，并自动记录一份快照（含 `edit_mode`、`form_spec_json` 与 `hcl_content`）到 `job_revisions` 支持后续对比与一键回滚。
 4. **生命周期控制**：
    - **启动 / 恢复**：对已停止（`dead`）的 Job 一键重新提交/启动；
    - **停止（Stop）**：调用 `DELETE /v1/job/{id}` 保留历史定义；
@@ -511,7 +521,7 @@ nomad-deck/
 | **单节点服务与日志** | `POST /api/v1/clusters/{id}/nodes/{node_id}/service/{start\|stop\|restart}`<br>`PUT /api/v1/clusters/{id}/nodes/{node_id}/config`<br>`GET /api/v1/clusters/{id}/nodes/{node_id}/logs/stream` (SSE) | 单节点服务启停重启、托管配置更新（临时目录校验+原子落位+回滚）、实时 `journalctl` 日志流 |
 | **Vault 专有能力** | `POST /api/v1/vault/{cluster_id}/init`<br>`POST /api/v1/vault/{cluster_id}/unseal`<br>`PUT /api/v1/vault/{cluster_id}/custody`<br>`POST /api/v1/vault/{cluster_id}/custody/backup`<br>`GET/POST/DELETE /api/v1/vault/{cluster_id}/auth`<br>`GET/PUT/DELETE /api/v1/vault/{cluster_id}/policies/{name}`<br>`GET /api/v1/vault/{cluster_id}/kv/mounts`<br>`GET/PUT/DELETE /api/v1/vault/{cluster_id}/kv/{mount}/*` | 集群初始化并加密托管、单节点/全集群一键解封、自动解封开关、二次验密离线备份、Auth/Policy 管理、多引擎 KV 挂载查询与 Secret 读写 |
 | **Nomad-Vault 联动** | `GET/POST/PUT/DELETE /api/v1/integrations`<br>`POST /api/v1/integrations/{id}/plan`<br>`POST /api/v1/integrations/{id}/apply`<br>`POST /api/v1/integrations/{id}/doctor`<br>`POST /api/v1/integrations/{id}/job-example` | 联动配置管理、变更预览（含 mTLS 冲突与入口高可用检测）、双向一键下发、四段式链路体检、测试 Job 生成 |
-| **Nomad Job 管理** | `GET /api/v1/nomad/{cluster_id}/jobs`<br>`GET /api/v1/nomad/{cluster_id}/jobs/{job_id}`<br>`POST /api/v1/nomad/{cluster_id}/jobs/scaffold`<br>`POST /api/v1/nomad/{cluster_id}/jobs/compose-convert`<br>`POST /api/v1/nomad/{cluster_id}/jobs/validate`<br>`POST /api/v1/nomad/{cluster_id}/jobs/plan`<br>`POST /api/v1/nomad/{cluster_id}/jobs/apply`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/{start\|stop\|restart\|purge}`<br>`GET /api/v1/nomad/{cluster_id}/jobs/{job_id}/revisions`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/logs/stream` (SSE)<br>`GET /api/v1/nomad/{cluster_id}/jobs/export` | Job 查询与详情、脚手架/Compose 转换、校验/Plan/提交、启动/停止/重启/Purge、历史版本回滚、Allocation 实时日志流、批量导出 HCL |
+| **Nomad Job 管理** | `GET /api/v1/nomad/{cluster_id}/jobs`<br>`GET /api/v1/nomad/{cluster_id}/jobs/{job_id}`<br>`GET/POST/PUT/DELETE /api/v1/job-templates`<br>`POST /api/v1/nomad/{cluster_id}/jobs/render`<br>`POST /api/v1/nomad/{cluster_id}/jobs/parse-to-visual`<br>`POST /api/v1/nomad/{cluster_id}/jobs/compose-convert`<br>`POST /api/v1/nomad/{cluster_id}/jobs/validate`<br>`POST /api/v1/nomad/{cluster_id}/jobs/plan`<br>`POST /api/v1/nomad/{cluster_id}/jobs/apply`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/{start\|stop\|restart\|purge}`<br>`GET /api/v1/nomad/{cluster_id}/jobs/{job_id}/revisions`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/logs/stream` (SSE)<br>`GET /api/v1/nomad/{cluster_id}/jobs/export` | Job 查询与详情、Job 模板管理、可视化 Spec 渲染 HCL、HCL 受控反解为可视化 Spec、Compose 转换、校验/Plan/提交、启动/停止/重启/Purge、历史版本回滚、Allocation 实时日志流、批量导出 HCL |
 | **运维任务追踪** | `GET /api/v1/operations`<br>`GET /api/v1/operations/{task_id}`<br>`GET /api/v1/operations/{task_id}/stream` (SSE) | 查看历史运维任务、逐节点步骤状态与实时终端输出流 |
 | **定时任务** | `GET/POST/PUT/DELETE /api/v1/cron-jobs`<br>`POST /api/v1/cron-jobs/{id}/run`<br>`GET /api/v1/cron-jobs/{id}/runs` | 定时任务管理、启停与 Cron 修改、手动触发、执行历史查看 |
 | **审计日志** | `GET /api/v1/audit-logs`<br>`GET /api/v1/audit-logs/{id}` | 多条件分页检索（时间、动作、资源、结果、关键字）与脱敏详情查看 |
@@ -542,7 +552,7 @@ nomad-deck/
 6. **集群联动（Integrations）**：Nomad ↔ Vault JWT Workload Identity 配置列表、Plan 预览、一键双向 Apply、可视化四段式链路体检图、一键生成示例 Job。
 7. **Nomad Job 中心**：
    - Job 列表与详情（Allocation 状态、资源、事件、实时日志终端）；
-   - Job 创建/编辑工作台（HCL 编辑器 + Docker 表单脚手架 + Compose 导入 → Validate → Plan Diff 预览 → Apply）；
+   - 双模式 Job 创建/编辑工作台：可视化动态编排器（嵌套增删 `group`/`task`/`network`/`volume`/`volume_mount`/`service`/`env`/`template`/`vault` 块 + 跨字段联动下拉 + 附加原生 HCL 片段 + 右侧实时 HCL 预览）与原生 HCL CodeMirror 编辑器，支持模板保存、Compose 导入、受控反解、Validate → Plan Diff 预览 → Apply；
    - 启动/停止/重启/Purge、历史版本 Diff 与一键回滚、导出 HCL。
 8. **运维任务中心（Operations）**：所有长耗时任务的时间线、逐节点步骤状态与可回放的完整终端日志。
 9. **定时任务（Schedules）**：内置与自定义定时任务列表、Cron 表达式编辑、启停开关、立即执行与历史记录。
@@ -560,7 +570,7 @@ nomad-deck/
 2. **远端执行与任务引擎**：纯 Go SSH/SFTP 连接池、TOFU 指纹校验、幂等一键推公钥、SELinux/免密 `sudo` 探测、控制面预解压中转下载与 SHA256 校验、异步长任务队列（含集群互斥锁、崩溃恢复与 SSE 实时日志推流）。
 3. **Vault 驱动与托管解封**：Vault 集群部署（TLS + Raft + `disable_mlock`）、初始化与加密托管（含专用运维 Token 派生）、节点级 API 一键解封与自动解封巡检、单节点扩缩容与证书续期、滚动升级与自动回滚、Raft 快照管理、Auth/Policy/多引擎 KV 管理、Doctor 体检。
 4. **Nomad 驱动与集群联动**：Nomad 单机/集群部署（按角色区分 `nomad`/`root` 运行用户、专属 SAN 证书、Gossip/ACL）、临时目录校验+原子落位配置管理、单节点扩缩容与证书续期、滚动升级与自动回滚、Nomad-Vault JWT 双向 TLS 信任联动与四段式体检、Consul 扩展接口预留。
-5. **Nomad Job 中心**：Job 列表/详情、脚手架与纯 Go Compose 转换、Validate/Plan/Apply、启停重启与 Purge、版本回滚、Allocation SSE 实时日志流、HCL 导出。
+5. **Nomad Job 中心**：Job 列表/详情、可视化动态编排与 HCL 渲染/受控反解、原生 HCL 编辑、纯 Go Compose 转换、模板管理、Validate/Plan/Apply、启停重启与 Purge、版本回滚、Allocation SSE 实时日志流、HCL 导出。
 6. **平台运营闭环**：定时任务（含节点级健康巡检、CA/节点证书告警、自动解封巡检、Raft 快照登记与轮转、日志清理）、加密迁移包（`.ndbundle`）导出/预检/外键一致导入还原、系统设置。
 7. **Web 管理端与单二进制打包**：React + Tailwind 全套管理端页面、`go:embed` 静态资源嵌入、Makefile 与 systemd/Docker 部署产物。
 
@@ -571,6 +581,6 @@ nomad-deck/
 - [ ] **Vault 集群全流程**：在 UI 一键部署 3 节点 TLS + Raft Vault 集群 → 一键初始化并验证 Unseal Keys/Root Token/派生 Admin Token 加密托管（节点磁盘无明文密钥）→ 重启某台 Vault 节点验证单节点状态展示与控制面一键解封/自动解封生效 → 验证单节点扩容 Join、证书一键续期、安全缩容 Remove 与滚动升级（含故障回滚演练）→ 实时 SSE 查看 `journalctl` 日志与 Raft 快照创建/下载。
 - [ ] **Nomad 集群全流程**：在 UI 部署 3 节点 Nomad 集群（验证纯 Server 运行于 `nomad` 用户、Client 运行于 `root` 用户，含 Docker/CNI/Host Volume 配置与专属 SAN TLS 证书）→ 启停重启单节点与实时 SSE 日志查看 → 验证单节点扩容 Join、证书一键续期、安全缩容 Remove 与滚动升级/自动回滚演练 → 验证同集群并发操作互斥拦截 → 运行 Doctor 体检全绿。
 - [ ] **Nomad + Vault 联动**：在 Nomad 与 Vault 均启用自签 TLS 的前提下创建联动配置 → Plan 预览（验证 mTLS 冲突检测与单点入口告警）→ Apply 一键双向打通（含 Nomad CA 写入 Vault `jwks_ca_pem` 与滚动重启 Nomad）→ 四段式体检全绿 → 运行生成的测试 Job 成功从 Vault 指定 KV 引擎读取机密。
-- [ ] **Job 全生命周期**：通过表单脚手架、纯 Go Compose 导入与 HCL 编辑器提交 Job → Plan Diff 预览后下发 → 经 SSE 实时查看 Allocation 日志 → 停止/重新启动/修改版本并回滚/Purge 删除。
+- [ ] **Job 全生命周期**：分别通过可视化动态编排器（动态增删 `group`/`task`/`volume`/`service`/`env`/`vault` 块与附加 HCL 片段、验证二次编辑回填）、纯 Go Compose 导入与原生 HCL 编辑器（含受控反解警告验证）提交 Job → Plan Diff 预览后下发 → 经 SSE 实时查看 Allocation 日志 → 停止/重新启动/修改版本并回滚/Purge 删除。
 - [ ] **定时任务与审计**：手动触发健康巡检、CA/节点证书检查与 Raft 快照任务均成功；审计日志完整记录全部操作且无任何明文私钥/Token/Unseal Key 泄露。
 - [ ] **环境迁移还原**：导出加密 `.ndbundle` → 在全新空实例启动 `nomad-deck`（不同 `master.key`）→ 上传迁移包完成 Dry-Run 预检并 `replace` 还原 → 还原后直接免重新配置连接全部主机、集群、触发 Vault 解封与管理 Nomad Job；并验证 `merge` 模式在存在同名冲突时外键引用保持一致。

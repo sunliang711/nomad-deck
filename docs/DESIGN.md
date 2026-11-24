@@ -39,7 +39,8 @@
 | **数据库** | SQLite WAL（`modernc.org/sqlite`） | 纯 Go 零 CGO 依赖，单文件存储；采用读写分离连接池（单写连接 + `busy_timeout`）消除并发写锁冲突 |
 | **加密与鉴权** | AES-256-GCM、Argon2id、Ed25519、`ProtonMail/go-crypto/openpgp` | 主密钥信封加密敏感凭据、口令加密迁移包、HTTPS `Secure`+`HttpOnly` Cookie 承载服务端会话、HashiCorp 官方 PGP 签名校验、NomadDeck 自身发布包 Ed25519 签名校验 |
 | **定时任务** | `robfig/cron/v3` | 内置运维巡检、证书监控、自动解封巡检与 Raft 快照定时调度（支持防重入与漏执行策略） |
-| **实时推送** | SSE（Server-Sent Events） | 统一用于单向实时推流（SSH 运维任务日志、`journalctl` 节点日志、Nomad Allocation 日志），绑定会话可即时撤销，规避跨站 WebSocket 劫持与反代 Upgrade 兼容问题 |
+| **实时推送** | SSE（Server-Sent Events）为主，WebSocket 仅用于交互式终端 | SSE 统一用于单向实时推流（SSH 运维任务日志、`journalctl` 节点日志、Nomad Allocation 日志、Nomad 运行态变化），绑定会话可即时撤销；只有 Nomad Exec 与 Job Actions 的双向终端使用 WebSocket，并以一次性票据与严格同源校验防范跨站劫持 |
+| **前端可视化组件** | `xterm.js`、轻量图表库 | 浏览器内交互式终端；资源利用实时折线与拓扑容量条 |
 | **唯一 ID 与配置解析** | `oklog/ulid/v2`、`BurntSushi/toml`、`gopkg.in/yaml.v3`、`hashicorp/hcl/v2` | 时间有序 ID；极简 TOML 启动配置；纯 Go 解析 Compose YAML；官方 HCL2 AST 解析与 `hclwrite` 编码渲染 |
 | **前端技术栈** | React 18 + TypeScript + Vite + Tailwind CSS + `lucide-react` + CodeMirror 6（HCL 编辑） | 编译后通过 `go:embed` 直接打入后端二进制 |
 | **服务监听与发布** | 默认监听 `0.0.0.0:8555`（HTTPS）、GitHub Releases | 单端口同时承载 Web 管理端、REST API 与 SSE；控制面从 GitHub Release 拉取新版本完成自更新 |
@@ -90,7 +91,7 @@
 ```
 
 - **SSH + SFTP 通道**仅用于操作系统与进程层操作：探测主机架构、安装/卸载/升级二进制、分发配置文件与 TLS 证书、执行 `systemctl` 启停重启、读取 `journalctl` 服务日志、配置 Docker/CNI/Host Volume。
-- **HTTP/HTTPS API 通道**用于高频控制面与业务操作：查询 Nomad 集群拓扑与 Leader 状态、Job 校验/Plan/提交/启停/重启/Purge、流式拉取 Allocation 日志、查询 Vault 健康与密封状态、执行初始化/解封/Auth/Policy/KV 管理、触发 Raft Snapshot。
+- **HTTP/HTTPS API 通道**用于高频控制面与业务操作：查询 Nomad 集群拓扑与 Leader 状态、Job 校验/Plan/提交/启停/重启/Purge、Deployment/Allocation/Client 节点等运行态查看与操作、资源利用统计、Allocation 文件浏览与交互式终端、流式拉取 Allocation 日志、查询 Vault 健康与密封状态、执行初始化/解封/Auth/Policy/KV 管理、触发 Raft Snapshot。
 
 ### 3.2 被管节点目录规范（全新集群布局）
 
@@ -138,6 +139,7 @@ nomad-deck/
 │   ├── vault/                      # Vault 节点 SSH 编排、Raft 集群组网、托管解封、扩缩容与滚动升级、Vault HTTP API 客户端
 │   ├── integration/                # Nomad <-> Vault JWT Workload Identity 双向联动编排与四段式体检
 │   ├── job/                        # Job 生命周期、可视化动态编排模型与 HCL 渲染/反解、纯 Go Compose 转 HCL、实时 Alloc 日志代理
+│   ├── workbench/                  # Nomad 运行态工作台：阻塞查询订阅复用、资源统计采样、文件浏览、Exec/Action WebSocket 转发
 │   ├── ops/                        # 异步长任务引擎（任务队列、集群级互斥锁、步骤状态机、SSE 实时日志广播、崩溃恢复）
 │   ├── cron/                       # 平台定时任务调度与执行历史
 │   ├── audit/                      # 统一审计记录与敏感字段强制脱敏
@@ -177,7 +179,7 @@ nomad-deck/
 ### 4.2 `system_settings`（系统全局设置）
 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- |
-| `key` | TEXT PK | 配置键（如 `release.mirror_url`、`release.download_mode`、`release.pgp_public_key`、`ssh.timeout_sec`、`ssh.max_concurrency`、`proxy.url`、`audit.retention_days`、`ops.retention_days`、`snapshot.dir`、`auth.session_ttl_hours`、`auth.session_idle_minutes`、`cron.timezone`、`defaults.nomad_version`、`defaults.vault_version`、`release.cni_checksums`、`upgrade.max_minor_skip`、`self_update.channel`、`self_update.schedule`、`self_update.last_result`、`control_plane.activated`） |
+| `key` | TEXT PK | 配置键（如 `release.mirror_url`、`release.download_mode`、`release.pgp_public_key`、`ssh.timeout_sec`、`ssh.max_concurrency`、`proxy.url`、`audit.retention_days`、`ops.retention_days`、`snapshot.dir`、`auth.session_ttl_hours`、`auth.session_idle_minutes`、`cron.timezone`、`defaults.nomad_version`、`defaults.vault_version`、`release.cni_checksums`、`upgrade.max_minor_skip`、`nomad.stats_interval_seconds`、`nomad.exec_idle_minutes`、`nomad.exec_max_minutes`、`observability.grafana_url_template`、`self_update.channel`、`self_update.schedule`、`self_update.last_result`、`control_plane.activated`） |
 | `value` | TEXT | JSON 序列化配置值（含敏感项的设置使用 `is_secret=1` 并存入加密值） |
 | `is_secret` | INTEGER | `0` 明文 / `1` AES-256-GCM 密文 |
 | `updated_at` | TEXT | 更新时间 |
@@ -242,7 +244,7 @@ nomad-deck/
 | `init_state` | TEXT | 集群初始化状态（`uninitialized` / `init_in_doubt` / `initialized`；在调用 Init/Bootstrap 前先置为 `init_in_doubt`，确认结果并持久落库后置为 `initialized`） |
 | `maintenance_mode` | INTEGER | 集群维护/隔离模式（`0` 正常 / `1` 维护或待核对，期间暂停自动巡检与自动解封） |
 | `maintenance_reason` | TEXT | 维护/隔离原因（如 `snapshot_restore`、`needs_reconcile`、`manual_maintenance`） |
-| `config_json` | TEXT | 集群级默认配置（如 Nomad `job_gc_threshold`、Telemetry、UI、Edition；Vault API/Cluster 端口策略） |
+| `config_json` | TEXT | 集群级默认配置（如 Nomad `job_gc_threshold`、Telemetry、UI、Edition、`exec_enabled` 交互式终端开关；Vault API/Cluster 端口策略） |
 | `health_status` | TEXT | `healthy` / `degraded` / `sealed` / `uninitialized` / `unreachable` |
 | `created_at` / `updated_at` | TEXT | 时间戳 |
 
@@ -312,7 +314,7 @@ nomad-deck/
 
 ### 4.9 `job_templates` 与 `job_revisions`（Nomad Job 模板与版本历史）
 - `job_templates`：`id`、`cluster_id`（可空表示跨集群通用模板）、`name`、`job_id`、`namespace`、`edit_mode`（`visual` / `hcl`）、`renderer_version`、`form_spec_json`（可视化动态编排结构 JSON，可空）、`hcl_content`、`hcl_sha256`、`source_type`（`visual` / `hcl` / `compose` / `imported`）、`description`、`created_at`、`updated_at`。
-- `job_revisions`：`id`、`cluster_id`、`namespace`、`job_id`、`revision_no`、`edit_mode`（`visual` / `hcl`）、`renderer_version`、`form_spec_json`（可空）、`hcl_content`、`hcl_sha256`、`remote_job_version`、`eval_id`、`submit_status`（`submitted` / `in_doubt` / `confirmed` / `failed`）、`plan_summary`、`submitted_by`、`created_at`（支持现网漂移检测、版本对比与按权威表示回填；回滚优先使用 Nomad 原生 Job 版本，本表负责保存每个 Nomad 版本对应的可视化编排结构与原始 HCL，并在 Nomad 已回收旧版本时作为重新提交的来源）。
+- `job_revisions`：`id`、`cluster_id`、`namespace`、`job_id`、`revision_no`、`source`（由 NomadDeck 发起的变更来源：`workbench` 编排工作台提交 / `scale` 扩缩副本数 / `revert` 版本回滚）、`edit_mode`（`visual` / `hcl`）、`renderer_version`、`form_spec_json`（可空）、`hcl_content`、`hcl_sha256`、`remote_job_version`、`eval_id`、`submit_status`（`submitted` / `in_doubt` / `confirmed` / `failed`）、`plan_summary`、`submitted_by`、`created_at`（支持现网漂移检测、版本对比与按权威表示回填；回滚优先使用 Nomad 原生 Job 版本，本表负责保存每个 Nomad 版本对应的可视化编排结构与原始 HCL，并在 Nomad 已回收旧版本时作为重新提交的来源）。
 
 ### 4.10 `operation_tasks` 与 `operation_task_steps`（异步运维任务与步骤追踪）
 - `operation_tasks`：`id`、`action`（如 `nomad.install`、`nomad.upgrade`、`vault.init`、`vault.unseal`、`cluster.node_join`、`cluster.node_remove`、`cluster.cert_renew`、`cluster.gossip_rotate`、`vault.rekey`、`integration.apply`、`cluster.uninstall`、`snapshot.restore`、`system.self_update`）、`target_type`、`target_id`、`lock_mode`（`exclusive` / `shared`）、`remote_op_id`（写入目标机 `/opt/nomad-deck/<product>/.op.lock` 的幂等标识，同时作为远端临时 systemd 单元名 `nomad-deck-op-<remote_op_id>-<step>` 的组成部分）、`intent_json`（结构化执行意图与步骤检查点，用于崩溃后核对，不含明文凭据）、`status`（`pending` / `running` / `success` / `failed` / `rolled_back` / `interrupted` / `needs_reconcile` / `cancelled`）、`params_redacted_json`、`triggered_by`、`started_at`、`finished_at`、`error_message`。
@@ -374,7 +376,7 @@ nomad-deck/
    - 密码采用 Argon2id 哈希；生产环境强制经 HTTPS 访问，登录态使用 `Secure + HttpOnly + SameSite=Lax` Cookie 承载随机会话令牌，服务端在 `admin_sessions` 中保存其哈希并逐请求校验（含绝对过期 `auth.session_ttl_hours` 与空闲过期 `auth.session_idle_minutes`）。
    - 会话按设备独立管理：登出只删除当前会话；修改密码时保留当前会话并删除该账号其他会话；停用账号删除其全部会话；管理员可在「账号与会话」页查看并注销任意会话；迁移导入整表清空会话。
    - 所有变更类请求强制校验 `Origin`/`Referer` 及与会话绑定的 CSRF Token（`X-CSRF-Token`），严格限制带凭据 CORS 仅允许同源或显式白名单。
-   - 活跃 SSE 连接绑定 `session_id`，会话被删除或过期时主动断开对应的 SSE 流，并对单会话并发流数量、缓冲区大小与慢消费者实施上限保护。
+   - 活跃 SSE 连接与交互式终端 WebSocket 均绑定 `session_id`，会话被删除或过期时主动断开对应的 SSE 流与终端，并对单会话并发流数量、缓冲区大小与慢消费者实施上限保护。WebSocket 仅用于交互式终端，其票据与同源校验机制见 5.7。
    - 同一账号或来源 IP 连续失败达阈值（默认 5 次）触发指数退避锁定，并写入审计日志。
 5. **管理员账号管理与本机救援**：
    - 全部管理员权限对等（`v1.0.0` 不区分角色）。已登录管理员可新增、停用、启用其他管理员账号或为其重置密码，所有操作二次验证当前管理员密码并写入审计；系统禁止停用最后一个启用状态的管理员。
@@ -446,10 +448,12 @@ nomad-deck/
    - 区分两类故障回滚策略：**新版本尚未初始化存储/变更数据格式前的启动失败**，可安全原子切回旧版二进制软链并重启恢复；**新版本已加入集群或可能已完成磁盘状态迁移后的异常（以及跨小版本/大版本升级）**，禁止自动降级二进制，立即熔断中止后续节点并引导管理员按升级前快照执行标准恢复。
    - 集群滚动顺序：**先所有非 Leader Server（逐台校验重新加入 Raft、在线 Voter 与复制进度恢复正常）→ 再 Leader Server → 最后按批次升级 Client（可选先 Drain 等待疏散完成再升级再取消 Drain）**。
 4. **节点与集群 Doctor 体检**：检查 systemd 状态、运行用户与角色匹配性、二进制与元数据版本一致性、托管配置代际完整性、TLS 证书链与到期时间、HTTP API 可达性、Raft Leader 与在线 Voter 健康、Docker/CNI/Vault/Consul 集成状态，返回结构化检查项列表（`OK`/`WARN`/`FAIL` 及修复建议）。
-5. **Namespace 与 ACL 治理（走 Nomad HTTP API）**：
+5. **Namespace、Node Pool 与 ACL 治理（走 Nomad HTTP API）**：
    - **Namespace 管理**：列表、创建、编辑描述、删除（存在运行中 Job 时禁止删除）；集群部署完成后自动确保 `default` Namespace 存在。Namespace 是 Nomad ↔ Vault 联动中 `bound_claims` 的授权边界，联动 Role 与 Job 编排器的 Namespace 下拉均引用此处的列表。
    - **ACL Policy 管理**：Policy HCL 在线编辑、校验与删除，提供“只读运维”“单 Namespace 部署者”等常用模板。
-   - **ACL Token 管理**：为人员或 CI 签发绑定 Policy 的 Client Token（可设过期时间），Secret 仅在签发时展示一次、不入库；支持查看、吊销。控制面自身持有的 Management Token 不在列表中暴露 Secret。
+   - **ACL Role 管理**：创建与编辑聚合多个 Policy 的 Role，签发 Token 时可绑定 Role。
+   - **Node Pool 管理**：列表、创建、编辑描述与 Meta、删除（存在节点或 Job 引用时禁止删除），并展示每个 Pool 的节点数与运行中 Job 数；Client 托管配置与 Job 编排器的 Node Pool 下拉引用此处的列表。
+   - **ACL Token 管理**：为人员或 CI 签发绑定 Policy 或 Role 的 Client Token（可设过期时间），Secret 仅在签发时展示一次、不入库；支持查看、吊销。控制面自身持有的 Management Token 不在列表中暴露 Secret。
 
 ### 5.4 Vault 节点与集群管理（含加密托管解封）
 
@@ -513,7 +517,7 @@ nomad-deck/
 
 通过 Nomad HTTP API（自动携带该集群加密托管的 Management Token，支持按集群多入口自动故障切换）实现全部操作：
 
-1. **Job 列表与详情**：按集群、Namespace、类型（`service`/`batch`/`system`/`sysbatch` + Periodic 标识）、状态过滤；详情页展示 Task Groups、Allocations、部署状态、健康检查与事件时间线。
+1. **Job 列表与详情**：按集群、Namespace、类型（`service`/`batch`/`system`/`sysbatch` + Periodic/Parameterized 标识）、状态过滤；详情页的概览、版本、定义、部署、Allocation、Evaluation、服务、子 Job 等视图以及运行端口、资源利用、文件浏览与交互式终端见 5.7。
 2. **双模式 Job 编排工作台（可视化动态编排 + 原生 HCL 源码）**：
    - **可视化动态编排模式（Visual Builder）**：
      - 基于结构化 `JobSpec` JSON 模型提供嵌套式动态卡片编辑，后端统一使用 **`hashicorp/hcl/v2/hclwrite`** 以 HCL Token 编码渲染标准 HCL（不做字符串拼接，天然正确处理引号、插值与 heredoc），最低覆盖以下全部层级的可视化动态块与配置项：
@@ -551,7 +555,56 @@ nomad-deck/
 5. **实时 Allocation 日志**：选择任意 Allocation 与 Task，支持切换 `stdout` / `stderr`、拉取尾部历史行与开启实时 Follow 流（后端对接 Nomad `/v1/client/fs/logs/{alloc_id}?follow=true` 经 **SSE** 推送至前端日志终端，支持关键字过滤与日志下载）。
 6. **Job 导出**：支持单 Job 或整集群批量导出 `.nomad.hcl` 压缩包。
 
-### 5.7 定时任务与 Raft 快照恢复体系
+### 5.7 Nomad 运行态工作台（原生 Web UI 常用能力集成）
+
+NomadDeck 在管理端内集成 Nomad 原生 Web UI 的常用查看与操作能力，管理员无需另行登录原生 UI。全部请求由控制面携带该集群托管的 Management Token 代理至 Nomad HTTP API，浏览器不接触任何 Nomad Token；全部变更类操作写审计。Nomad 原生 UI 保持开启并保留跨链接，作为企业版专属功能（Sentinel、资源配额、Optimize 等）的入口。依赖较新 Nomad 版本的能力（如原始提交源码需 1.6 及以上、Job Actions 需 1.7 及以上、动态 Host Volume 需 1.10 及以上）按集群实际版本自动启用或隐藏。
+
+1. **实时刷新机制**：
+   - 列表与详情数据由控制面以 Nomad 阻塞查询（`index` + `wait` 参数）感知变化，再经 SSE 推送到浏览器；同一集群的同一查询被多个浏览器订阅时共享一个上游阻塞查询，订阅全部断开 60 秒后回收。
+   - 每个浏览器标签页使用一条 SSE 连接复用该页全部订阅；控制面在 HTTPS 下启用 HTTP/2，规避浏览器对同一来源的并发连接数限制。
+   - 页面切到后台时，前端暂停订阅与资源统计轮询，回到前台后重新同步。
+2. **全局导航与搜索**：Region 与 Namespace 切换器（含“全部 Namespace”）；顶部全局搜索调用 Nomad 模糊搜索接口 `/v1/search/fuzzy`，可直接跳转 Job、Allocation、Client 节点、Namespace、Variables 与 CSI 卷。
+3. **Job 视图**：
+   - **列表**：按状态、类型、Namespace、Node Pool、Datacenter 过滤，每行展示 Allocation 状态分布条与最近一次 Deployment 状态；Periodic/Parameterized 父 Job 展示子 Job 数量。
+   - **概览**：运行状态面板（期望、运行中、启动中、失败、丢失的 Allocation 计数，当前 Deployment 进度与健康 Allocation 数）、Task Group 列表、最近 Allocation 与最近 Evaluation 摘要。
+   - **版本（Versions）**：基于 `/v1/job/:id/versions?diffs=true` 展示各版本及逐字段 Diff，回滚按 5.6 执行。
+   - **定义（Definition）**：展示 Job JSON 与原始提交源码（`/v1/job/:id/submission` 返回提交时的 HCL 与变量），可一键进入编排工作台编辑；现网 Job 被外部修改时，以该提交源码作为重新编辑的首选依据。
+   - **部署（Deployments）**：Deployment 历史及各 Task Group 的期望、已放置、健康、不健康、金丝雀计数；对待确认的金丝雀执行 Promote（全部或指定 Task Group），对异常部署执行 Fail、暂停或恢复。
+   - **Allocations 与 Clients**：Allocation 列表（按状态、Client 节点、Task Group 过滤）；`system` 与 `sysbatch` Job 额外提供按 Client 节点展示的运行状态矩阵。
+   - **Evaluations**：该 Job 的 Evaluation 列表，展开查看触发原因、状态与调度失败详情（资源不足的维度、被约束排除的节点数及原因），用于排查 Allocation 未能放置的原因。
+   - **服务（Services）**：该 Job 注册的 Nomad 原生服务，以及每个实例的地址、端口、标签与健康检查结果。
+   - **Periodic 与 Parameterized**：Periodic Job 展示下次触发时间并支持立即触发（`periodic/force`）与查看历次子 Job；Parameterized Job 依据 `meta_required`、`meta_optional` 与 `payload` 要求生成派发表单（Payload 支持文本与文件上传，并提示 Nomad 的 16 KiB 上限），派发后跳转到生成的子 Job。
+   - **扩缩副本数**：在 Task Group 卡片上直接调整 `count`（Job 定义了 `scaling` 块时限制在 `min` 与 `max` 之间），经 `/v1/job/:id/scale` 提交并填写原因；提交后读取 Nomad 生成的新 Job 版本写入 `job_revisions`（来源标记为 `scale`，可视化模式同步更新 `count`），不会被判定为外部漂移。
+4. **Task Group 视图**：组内全部 Allocation、组内运行中 Allocation 的 CPU 与内存实际用量合计及其与申请量的对比、Volume 请求、扩缩副本数入口与 Scaling 事件历史。
+5. **Allocation 与 Task 视图**：
+   - **基本信息**：所在 Client 节点、Datacenter、客户端状态与期望状态、所属 Job 版本、状态描述、重调度链（前驱与后继 Allocation 及原因）、抢占信息。
+   - **运行端口**：读取 Allocation 的已分配网络资源，逐条展示端口标签、宿主机地址与端口（`HostIP:Value`）、容器内映射端口（`to`）及网络模式，可一键复制访问地址；Job 列表与概览同时汇总展示各 Allocation 的对外地址。
+   - **资源利用**：经 `/v1/client/allocation/:id/stats` 按系统设置 `nomad.stats_interval_seconds`（默认 2 秒）获取各 Task 的实时用量：CPU（MHz、占申请量百分比、被限流时间）与内存（RSS、Cache、总用量、是否超出 `memory` 动用 `memory_max`）。前端保留最近 5 分钟数据绘制折线，数据不在控制面持久化；同一 Allocation 被多个页面查看时，控制面在一个采样周期内只请求一次。历史趋势依赖 Nomad Telemetry 指标与外部 Prometheus/Grafana，详情页按系统设置 `observability.grafana_url_template` 生成 Grafana 跳转链接。
+   - **Task 状态与事件**：各 Task 的生命周期类型（prestart、sidecar、poststart、poststop）、状态、重启次数与完整事件时间线（镜像拉取、启动失败原因、OOM、被信号终止等）。
+   - **健康检查**：Nomad 原生服务检查结果（`/v1/allocation/:id/checks`）及 Deployment 健康判定。
+   - **日志**：stdout/stderr、尾部历史、实时跟随、关键字过滤与下载，机制见 5.6。
+   - **文件浏览**：经 `/v1/client/fs/ls` 与 `/v1/client/fs/stat` 浏览 Allocation 目录（`alloc/`、`<task>/local/`、`<task>/secrets/` 等）；文本文件在线预览（经 `/v1/client/fs/readat` 读取，单次预览上限 1 MiB），任意文件可流式下载；`secrets/` 目录下文件的预览与下载须二次确认并写审计。
+   - **操作**：重启单个 Task、重启 Allocation 内全部 Task、停止 Allocation（由调度器重新放置）、向 Task 发送信号，均写审计。
+6. **交互式终端（Exec）与 Job Actions**：
+   - 在 Task 上打开浏览器内终端，默认命令 `/bin/sh`，可改为其他命令；Job 中 `action` 块定义的预置动作以按钮列出，点击后在同一终端组件中执行并展示输出。
+   - Nomad 的 Exec 与 Action 接口基于 WebSocket，这是 NomadDeck 中唯一使用 WebSocket 的场景。控制面在浏览器与 Nomad 之间双向转发数据帧，并施加以下约束：
+     - 浏览器先通过受 CSRF 保护的 `POST` 申请一次性 Exec 票据（绑定会话、集群、Allocation、Task 与命令，30 秒内有效，仅可使用一次），再携带票据发起 WebSocket 升级；
+     - 升级请求严格校验 `Origin` 与管理端同源，并校验票据所属会话与当前会话一致；
+     - 会话被注销或过期时立即关闭其全部终端；单会话并发终端数（默认 5）、空闲超时（默认 15 分钟）与最长时长（默认 4 小时）均有上限；
+     - 审计记录终端的开始与结束时间、集群、Allocation、Task、命令与时长，不记录键盘输入与终端输出（可能包含机密）；
+     - 每个集群可在集群配置中关闭 Exec（`clusters.config_json` 的 `exec_enabled`，默认开启），Client 托管配置同时提供 Nomad 侧的 `disable_remote_exec` 开关。
+   - 以反向代理方式部署（`tls.mode = proxy`）时，代理须放行 WebSocket 升级，部署文档提供示例配置。
+7. **Client 节点视图**：
+   - **列表**：状态、调度资格、Drain 状态、Node Pool、Datacenter、Nomad 版本、运行中 Allocation 数、已分配 CPU 与内存占比；与 NomadDeck 主机资产及集群成员一一关联，可互相跳转。
+   - **详情**：宿主机实时资源利用（`/v1/client/stats` 返回的 CPU、内存与磁盘用量，前端保留最近 5 分钟折线）、已分配资源与容量对比、运行中 Allocation、驱动检测与健康状态、Host Volume、CSI 插件、节点属性与 Meta、节点事件。
+   - **操作**：切换调度资格；发起 Drain（可设截止时间、是否保留 system Job、是否立即强制 Drain）与取消 Drain；对已下线节点执行 Purge。Client Meta 的修改统一经托管配置 `72-client-meta.hcl` 下发，Nomad 动态 Meta 只读展示，避免两套来源互相覆盖。
+8. **Server 视图**：Server 成员列表（地址、状态、Region、Datacenter、版本、是否 Leader）、Raft 成员与投票状态、Autopilot 健康，与 5.3 的集群管理页联动。
+9. **拓扑视图（Topology）**：按 Datacenter 分组展示全部 Client 节点，每个节点以内存与 CPU 两条容量条呈现各 Allocation 的占用，可按 Job 或 Namespace 高亮，点击跳转对应 Allocation；顶部汇总集群总容量、已分配量与剩余量，用于判断剩余容量与调度是否均衡。
+10. **存储视图**：CSI 卷列表与详情（所属插件、访问模式、读写占用、占用该卷的 Allocation）、CSI 插件列表及健康的 Controller 与 Node 数量，支持注销未被占用的 CSI 卷；Nomad 1.10 及以上版本额外展示动态 Host Volume。
+11. **Variables**：按 Namespace 与路径树浏览 Nomad Variables，支持创建、编辑与删除；写入携带 `cas` 防止并发覆盖（冲突返回 409 要求刷新重读）；值默认遮蔽，显示原文需主动点击并写审计；界面标注 `nomad/jobs/<job_id>` 等可被对应 Job 直接读取的约定路径。
+12. **Evaluation 全局视图**：集群全部 Evaluation 列表，可按状态（含 blocked）、触发类型与 Job 过滤，用于排查调度积压。
+
+### 5.8 定时任务与 Raft 快照恢复体系
 
 使用 `robfig/cron/v3` 驱动平台级后台定时任务，所有任务按统一配置时区（`cron.timezone`）调度，具备 `overlap_policy`（默认 `skip_if_running`，防止上次未结束或手工触发与定时任务重叠）、`misfire_policy`（重启后默认 `skip` 避免补跑风暴）与 `operation_task_id` 关联（最终执行结果由底层异步任务驱动）：
 
@@ -570,13 +623,13 @@ nomad-deck/
 
 > **自定义定时任务**：同时支持管理员新增自定义定时任务（支持类型：指定集群 Raft 快照、指定节点/集群 Doctor 体检、指定 Nomad 集群 Job 全量导出备份、静态 Vault JWKS 公钥同步）。Nomad 业务层的 Periodic Job 归口在「Job 管理」页面展示与触发，与平台运维定时任务职责清晰分离。
 
-### 5.8 审计日志与强制脱敏
+### 5.9 审计日志与强制脱敏
 
-- **全覆盖**：登录/登出/改密、管理员账号新增/停用/重置密码与会话注销、本机重置密码与主密钥轮换、SSH 密钥管理、节点增删与公钥推送、集群创建/部署/扩缩容/证书续期与 CA 轮换/Gossip 密钥轮换/凭据补录/配置修改/启停/升级/卸载/维护态切换/快照恢复、Nomad Namespace/ACL Policy/ACL Token 管理、Vault 初始化/Root Token 吊销/解封/手动封存/Rekey/应急签发运维 Token/策略与密钥操作、集群联动与 Role 下发、Job 提交/启停/重启/回滚/Purge、定时任务修改与触发、迁移导出/导入与控制面激活、控制面自更新/预约升级/版本回退、系统设置修改全部强制写审计。
+- **全覆盖**：登录/登出/改密、管理员账号新增/停用/重置密码与会话注销、本机重置密码与主密钥轮换、SSH 密钥管理、节点增删与公钥推送、集群创建/部署/扩缩容/证书续期与 CA 轮换/Gossip 密钥轮换/凭据补录/配置修改/启停/升级/卸载/维护态切换/快照恢复、Nomad Namespace/Node Pool/ACL Policy/ACL Role/ACL Token 管理、Nomad 运行态操作（Deployment Promote/Fail/暂停、扩缩副本数、Periodic 立即触发、Parameterized 派发、Allocation 停止与 Task 重启及发送信号、Client 节点调度资格/Drain/Purge、CSI 卷注销、Variables 增删改与查看原文、`secrets/` 文件预览与下载、交互式终端与 Job Action 的开始与结束）、Vault 初始化/Root Token 吊销/解封/手动封存/Rekey/应急签发运维 Token/策略与密钥操作、集群联动与 Role 下发、Job 提交/启停/重启/回滚/Purge、定时任务修改与触发、迁移导出/导入与控制面激活、控制面自更新/预约升级/版本回退、系统设置修改全部强制写审计。
 - **关联追溯**：涉及异步运维任务的操作，审计记录直接关联 `operation_task_id`，管理员可在审计详情页一键展开查看每台节点的脱敏命令输出与回滚轨迹。
 - **强制脱敏**：请求体、命令参数与实时日志流在落盘和推送前统一经脱敏器过滤（匹配 `token`、`password`、`passphrase`、`secret`、`private_key`、`unseal_key`、`gossip_key`、`authorization`、PEM 私钥块及敏感 CLI 参数），全部替换为 `<redacted>`。
 
-### 5.9 环境迁移（导出与导入还原）
+### 5.10 环境迁移（导出与导入还原）
 
 采用**口令加密的可移植迁移包（`.ndbundle`）**，实现跨机器灾备重建与环境一键复制，消除直接拷贝 SQLite 与 `master.key` 的耦合风险（大体积 Raft 快照文件不打入迁移包，支持在快照管理页下载可移植口令加密快照归档并在目标环境上传登记恢复）：
 
@@ -592,7 +645,7 @@ nomad-deck/
      - `merge`（增量合并）：按外键依赖顺序（`ssh_keys` → `nodes` → `clusters` → `cluster_nodes` / `vault_secrets_custody` / `vault_unseal_key_generations` → `cluster_integrations` → `integration_roles` → `job_templates` / `cron_jobs`）导入，维护完整的 `old_id -> target_id` 映射表，**不仅重写 SQL 外键，还按结构化规则重写 JSON 字段内嵌引用**（如 `cron_jobs.payload_json` 中的 `cluster_id`/`node_id`）；强绑定的 `vault_secrets_custody`、`vault_unseal_key_generations` 与 `cluster_nodes` 仅跟随所属集群整组一致处理，`integration_roles` 跟随所属联动整组处理。
    - **重加密、会话隔离与防双活安全接管**：所有敏感字段使用目标环境自身的主密钥重新加密写入；事务内**清空 `admin_sessions`，提交后立即断开所有已建立的 SSE 流**，导入前后的任何会话均不能继续使用；清空内存 SSH/API 客户端缓存后，**`replace` 还原默认保持 `cron_jobs` 与 `auto_unseal_by_deck` 处于暂停待命态**，避免源、目标两个控制面同时巡检与解封同一集群，待管理员下线旧控制面后手动点击「激活控制面」恢复自动调度，并全流程写入审计日志。
 
-### 5.10 Consul 可选扩展预留
+### 5.11 Consul 可选扩展预留
 
 为避免未来接入 Consul 时推倒重来，设计层面预留以下干净边界（`v1.0.0` 仅实现 Nomad 与 Vault）：
 
@@ -600,7 +653,7 @@ nomad-deck/
 2. **数据模型通用化**：`clusters.type`、`cluster_nodes.role` 与 `cluster_integrations.integration_type` 均为开放文本枚举，无需改表结构即可承载 Consul 集群与 `nomad_consul` 联动。
 3. **Nomad 配置预留**：Nomad 集群配置模型中保留可选 `consul` 配置节与 `65-consul.hcl` 槽位，当前默认关闭。
 
-### 5.11 控制面部署、监听端口与自更新
+### 5.12 控制面部署、监听端口与自更新
 
 1. **部署形态与目录**：
    - 推荐以 systemd 服务方式部署在独立 Linux 宿主机，基础目录为 `/opt/nomad-deck-control`（与被管节点的 `/opt/nomad-deck` 区分）：
@@ -652,7 +705,12 @@ nomad-deck/
 | **集群 Raft 快照** | `GET /api/v1/clusters/{id}/snapshots`<br>`POST /api/v1/clusters/{id}/snapshots`<br>`POST /api/v1/clusters/{id}/snapshots/upload`<br>`GET /api/v1/clusters/{id}/snapshots/{snapshot_id}/download`<br>`POST /api/v1/clusters/{id}/snapshots/{snapshot_id}/restore`<br>`DELETE /api/v1/clusters/{id}/snapshots/{snapshot_id}` | 快照列表查询、手动创建加密快照、上传登记可移植快照归档、下载归档、状态机驱动的安全快照恢复（区分标准与 force 模式）、删除过期快照 |
 | **单节点服务与日志** | `POST /api/v1/clusters/{id}/nodes/{node_id}/service/{start\|stop\|restart}`<br>`PUT /api/v1/clusters/{id}/nodes/{node_id}/config`<br>`GET /api/v1/clusters/{id}/nodes/{node_id}/logs/stream` (SSE) | 经仲裁门禁的单节点服务启停重启、托管配置更新（代际目录校验+原子软链+回滚）、实时 `journalctl` 日志流 |
 | **Vault 专有能力** | `POST /api/v1/vault/{cluster_id}/init`<br>`POST /api/v1/vault/{cluster_id}/unseal`<br>`POST /api/v1/vault/{cluster_id}/seal`<br>`PUT /api/v1/vault/{cluster_id}/custody`<br>`POST /api/v1/vault/{cluster_id}/custody/backup`<br>`POST /api/v1/vault/{cluster_id}/custody/recover-token`<br>`POST /api/v1/vault/{cluster_id}/rekey`<br>`GET /api/v1/vault/{cluster_id}/key-generations`<br>`GET/POST/DELETE /api/v1/vault/{cluster_id}/auth`<br>`GET/PUT/DELETE /api/v1/vault/{cluster_id}/policies/{name}`<br>`GET /api/v1/vault/{cluster_id}/kv/mounts`<br>`GET/PUT/DELETE /api/v1/vault/{cluster_id}/kv/item?mount=...&path=...` | 集群初始化并加密托管（初始化后吊销 Root Token）、单节点/全集群一键解封、手动安全封存（写入自动解封抑制）、自动解封开关、二次验密离线备份、经 `generate-root` 应急重签运维 Token、带验证的 Unseal Key 轮换与代际查看（不返回密钥原文）、Auth/Policy 管理、支持嵌套 Mount 路径与 CAS/区分删除语义的 KV 管理 |
-| **Nomad 治理** | `GET/POST/PUT/DELETE /api/v1/nomad/{cluster_id}/namespaces`<br>`GET/PUT/DELETE /api/v1/nomad/{cluster_id}/acl/policies/{name}`<br>`GET/POST /api/v1/nomad/{cluster_id}/acl/tokens`<br>`DELETE /api/v1/nomad/{cluster_id}/acl/tokens/{accessor_id}` | Namespace 管理、ACL Policy 编辑、Client Token 签发（Secret 仅返回一次）与吊销 |
+| **Nomad 治理** | `GET/POST/PUT/DELETE /api/v1/nomad/{cluster_id}/namespaces`<br>`GET/POST/PUT/DELETE /api/v1/nomad/{cluster_id}/node-pools`<br>`GET/PUT/DELETE /api/v1/nomad/{cluster_id}/acl/policies/{name}`<br>`GET/POST/PUT/DELETE /api/v1/nomad/{cluster_id}/acl/roles`<br>`GET/POST /api/v1/nomad/{cluster_id}/acl/tokens`<br>`DELETE /api/v1/nomad/{cluster_id}/acl/tokens/{accessor_id}` | Namespace 与 Node Pool 管理、ACL Policy 与 Role 编辑、Client Token 签发（Secret 仅返回一次）与吊销 |
+| **Nomad 运行态：订阅与搜索** | `GET /api/v1/nomad/{cluster_id}/watch?topics=...` (SSE)<br>`GET /api/v1/nomad/{cluster_id}/search?q=...` | 单连接复用的运行态变化订阅（基于共享阻塞查询）、全局模糊搜索 |
+| **Nomad 运行态：Job 视图** | `GET /api/v1/nomad/{cluster_id}/jobs/{job_id}/{summary\|versions\|submission\|deployments\|allocations\|evaluations\|services\|children\|scale}`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/scale`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/periodic/force`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/dispatch`<br>`POST /api/v1/nomad/{cluster_id}/deployments/{deployment_id}/{promote\|fail\|pause\|resume}` | Job 概览、版本 Diff、原始提交源码、Deployment、Allocation、Evaluation、服务、子 Job 与扩缩状态；扩缩副本数、Periodic 立即触发、Parameterized 派发、金丝雀 Promote 与部署 Fail/暂停/恢复 |
+| **Nomad 运行态：Allocation** | `GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/stats`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/checks`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/fs/{ls\|stat\|readat\|download}?path=...`<br>`POST /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/{restart\|stop\|signal}`<br>`POST /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/exec-ticket`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/exec?ticket=...` (WebSocket) | Allocation 详情（含运行端口、Task 事件与重调度链）、实时资源用量、健康检查、文件浏览预览与下载、重启/停止/发送信号、申请一次性终端票据、交互式终端与 Job Action 双向转发 |
+| **Nomad 运行态：节点与集群** | `GET /api/v1/nomad/{cluster_id}/clients`<br>`GET /api/v1/nomad/{cluster_id}/clients/{node_id}`<br>`GET /api/v1/nomad/{cluster_id}/clients/{node_id}/stats`<br>`POST /api/v1/nomad/{cluster_id}/clients/{node_id}/{eligibility\|drain\|purge}`<br>`GET /api/v1/nomad/{cluster_id}/servers`<br>`GET /api/v1/nomad/{cluster_id}/topology`<br>`GET /api/v1/nomad/{cluster_id}/evaluations` | Client 节点列表与详情、宿主机实时资源用量、调度资格/Drain/Purge、Server 成员、拓扑容量视图、全局 Evaluation 列表 |
+| **Nomad 运行态：存储与 Variables** | `GET /api/v1/nomad/{cluster_id}/volumes`<br>`GET/DELETE /api/v1/nomad/{cluster_id}/volumes/{volume_id}`<br>`GET /api/v1/nomad/{cluster_id}/plugins`<br>`GET /api/v1/nomad/{cluster_id}/variables?prefix=...`<br>`GET/PUT/DELETE /api/v1/nomad/{cluster_id}/variables/item?path=...&namespace=...`<br>`POST /api/v1/nomad/{cluster_id}/variables/item/reveal?path=...&namespace=...` | CSI 卷与插件、动态 Host Volume、注销 CSI 卷；Variables 路径树浏览、带 `cas` 的增删改、默认遮蔽与审计的原文查看 |
 | **Nomad-Vault 联动** | `GET/POST/PUT/DELETE /api/v1/integrations`<br>`GET/POST/PUT/DELETE /api/v1/integrations/{id}/roles`<br>`POST /api/v1/integrations/{id}/plan`<br>`POST /api/v1/integrations/{id}/apply`<br>`POST /api/v1/integrations/{id}/doctor`<br>`POST /api/v1/integrations/{id}/job-example` | 联动配置与工作负载 Role 管理、变更预览（含作用范围、mTLS 冲突、资源归属与入口高可用检测）、双锁一键下发（仅 Nomad 侧配置变化时滚动重启）、四段式体检与真实 JWT Login 验证、按 Role 生成测试 Job |
 | **Nomad Job 管理** | `GET /api/v1/nomad/{cluster_id}/jobs`<br>`GET /api/v1/nomad/{cluster_id}/jobs/{job_id}`<br>`GET/POST/PUT/DELETE /api/v1/job-templates`<br>`POST /api/v1/nomad/{cluster_id}/jobs/render`<br>`POST /api/v1/nomad/{cluster_id}/jobs/parse-to-visual`<br>`POST /api/v1/nomad/{cluster_id}/jobs/compose-convert`<br>`POST /api/v1/nomad/{cluster_id}/jobs/validate`<br>`POST /api/v1/nomad/{cluster_id}/jobs/plan`<br>`POST /api/v1/nomad/{cluster_id}/jobs/apply`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/{start\|stop\|restart\|purge}`<br>`GET /api/v1/nomad/{cluster_id}/jobs/{job_id}/revisions`<br>`POST /api/v1/nomad/{cluster_id}/jobs/{job_id}/revert`<br>`GET /api/v1/nomad/{cluster_id}/allocs/{alloc_id}/logs/stream` (SSE)<br>`GET /api/v1/nomad/{cluster_id}/jobs/export` | Job 查询与详情、Job 模板管理、可视化 Spec 经 `hclwrite` 渲染 HCL、HCL 本地 AST 预检+受控反解、Compose 转换、校验/绑定 `plan_hash` 与 `JobModifyIndex` 的 Plan-Apply、启动/停止/重启/Purge、现网漂移检测与版本回滚、Allocation 实时日志流、批量导出 HCL |
 | **运维任务追踪** | `GET /api/v1/operations`<br>`GET /api/v1/operations/{task_id}`<br>`GET /api/v1/operations/{task_id}/stream` (SSE) | 查看历史运维任务、逐节点步骤状态与实时脱敏终端输出流 |
@@ -677,7 +735,12 @@ nomad-deck/
    - 集群向导（单机/多节点 Server+Client 拓扑、统一业务入口、显式 TLS/Gossip/ACL 一键配置）；
    - 节点管理（安装、单节点扩容 Join 与安全缩容 Remove、经仲裁门禁的启停重启、托管配置表单：Docker/CNI/Host Volume/Meta/TLS/Telemetry/UI、版本升级与滚动升级向导、节点/客户端证书续期与 CA 轮换、维护态与崩溃核对解锁、凭据应急恢复、Dry-Run 卸载、Doctor 体检）；
    - 快照管理子页（Raft 快照列表、手动创建、上传登记、下载与安全恢复向导）；
-   - 治理子页（Namespace 管理、ACL Policy 编辑器与模板、Client Token 签发与吊销）；
+   - 治理子页（Namespace 与 Node Pool 管理、ACL Policy 编辑器与模板、ACL Role、Client Token 签发与吊销）；
+   - **运行态工作台**（与 Nomad 原生 UI 常用页面对应，顶部提供 Region/Namespace 切换与全局搜索，数据实时刷新）：
+     - Jobs：列表与状态分布条、Job 详情（概览、版本 Diff、定义与原始提交源码、Deployments 与金丝雀 Promote、Allocations、system Job 的节点矩阵、Evaluations 调度失败详情、Services、子 Job、扩缩副本数、Periodic 立即触发、Parameterized 派发表单）；
+     - Task Group 与 Allocation 详情：运行端口与访问地址、Task 实时 CPU/内存折线、Task 事件时间线、健康检查、日志终端、文件浏览器、交互式终端与 Job Action 按钮、重启/停止/发送信号；
+     - Clients：节点列表、节点详情（宿主机实时资源折线、已分配与容量对比、驱动健康、Host Volume、事件）、调度资格切换与 Drain；
+     - Servers、Topology 拓扑容量视图、Storage（CSI 卷与插件、动态 Host Volume）、Variables（路径树、遮蔽显示、CAS 编辑）、全局 Evaluations；
    - 内嵌实时终端抽屉（经 SSE 查看 `journalctl -u nomad` 实时日志与部署/升级实时输出）。
 5. **Vault 集群**：
    - Raft 集群部署向导（自动 CA/TLS 证书签发、Swap 预检与统一业务入口配置）；
@@ -686,14 +749,14 @@ nomad-deck/
    - Vault 管理子页（Auth 方法、Policy HCL 编辑器、支持嵌套挂载路径与 CAS 并发保护的多引擎 KV 浏览与 Secret 编辑）。
 6. **集群联动（Integrations）**：Nomad ↔ Vault JWT Workload Identity 配置列表、联动下的工作负载 Role 列表（每个 Role 配置 `bound_claims` 权限边界与 `explicit`/`templated` Policy 模式）、标明作用范围（仅 Vault 侧或需重启 Nomad）的 Plan 预览、一键 Apply、可视化四段式链路体检图（含端到端 JWT Login 验证）、一键生成示例 Job。
 7. **Nomad Job 中心**：
-   - Job 列表与详情（Allocation 状态、资源、事件、实时日志终端）；
+   - Job 列表与详情（与「运行态工作台」中的 Jobs 视图为同一组页面，详情页可直接进入编辑）；
    - 双模式 Job 创建/编辑工作台：可视化动态编排器（覆盖顶层 `variable`、Job/Group 级 `constraint`/`update`、Group 级 `network`/`port`/`volume`/`service`/`check`/`restart`/`reschedule`/`ephemeral_disk`、Task 级 `lifecycle`（Sidecar）、Docker `config`（含 `mount`/`bind_options`/`logging`/`force_pull`/`network_mode`/`volumes`）、`env`/`volume_mount`/`resources`（含 `memory_max`）/`logs`/`service`/`check`/`vault`/`identity`/`template` 动态增删 + 跨字段联动下拉 + AST 校验的附加原生 HCL 片段 + 右侧实时 HCL 预览）与原生 HCL CodeMirror 编辑器，支持模板保存、现网漂移检测、Compose 导入（含阻断级校验）、本地 HCL2 AST 预检+受控反解、Validate → 绑定 `JobModifyIndex` 的 Plan Diff 预览 → Apply；
    - 启动/停止/重启/Purge、历史版本 Diff 与一键回滚、导出 HCL。
 8. **运维任务中心（Operations）**：所有长耗时任务的时间线、逐节点步骤状态、崩溃后待核对任务操作与可回放的脱敏终端日志。
 9. **定时任务（Schedules）**：内置与自定义定时任务列表、Cron 表达式与防重入/漏执行策略编辑、启停开关、立即执行与关联 `operation_task_id` 的历史记录。
 10. **审计日志（Audit Logs）**：按动作/资源/结果/时间筛选、查看脱敏操作摘要与关联的运维任务日志。
 11. **环境迁移（Migration）**：向导式导出（二次验密 + 勾选范围 + 设置迁移口令下载 `.ndbundle`）与导入（上传 + 口令解密 → Dry-Run 绑定预检 → 全局维护屏障下选择 `replace`/`merge` 一键还原 → 确认旧实例下线后一键「激活控制面」）。
-12. **系统设置（Settings）**：下载模式（直连/中转）、镜像源与 PGP 验签公钥、CNI 版本摘要登记、升级版本跨度上限、HTTP/SOCKS5 代理、时区、默认版本号、SSH 超时与并发度、会话有效期、日志与快照保留天数。
+12. **系统设置（Settings）**：下载模式（直连/中转）、镜像源与 PGP 验签公钥、CNI 版本摘要登记、升级版本跨度上限、资源统计采样间隔、交互式终端空闲与最长时长、Grafana 跳转链接模板、HTTP/SOCKS5 代理、时区、默认版本号、SSH 超时与并发度、会话有效期、日志与快照保留天数。
 13. **账号与会话（Accounts）**：当前管理员改密、本人活跃会话列表与注销；管理员账号列表、新增、停用/启用与重置密码。
 14. **版本与升级（Version）**：并排显示当前版本与最新版本及更新说明，提供立即升级（分阶段展示下载、校验、备份、重启、确认，完成后自动刷新页面）、预约升级（目标版本、等待时长、检查间隔、剩余时间与下次检查倒计时）、最近一次升级结果与回退到上一版本；容器部署或开发模式下禁用升级操作并说明原因。
 
@@ -707,7 +770,7 @@ nomad-deck/
 2. **远端执行与任务引擎**：纯 Go SSH/SFTP 连接池、TOFU 指纹校验、固定命令模板与参数白名单/受保护 staging 原子落位、幂等一键推公钥、SELinux/免密 `sudo`/Swap/Docker/`machine_id` 探测、PGP 签名+SHA256 双校验预解压中转下载与 CNI 固定摘要校验、异步长任务队列（共享/独占两种模式的集群锁与主机产品锁、远端步骤以临时 systemd 单元执行、按产品分离的 `.op.lock` 崩溃核对与 SSE 实时日志推流）。
 3. **Vault 驱动与托管解封**：Vault 集群部署（TLS + Raft + `disable_mlock` + `LimitCORE=0` + Swap 预检）、`init_in_doubt` 治理与 Shamir 两阶段 Raft 加入、密钥代际托管、orphan 周期性 Admin Token 与 Root Token 吊销、`generate-root` 应急重签、带验证的 Rekey、手动安全封存抑制与节点级解封、离线紧急备份、基于 Autopilot 的统一 Raft 仲裁门禁、单节点扩缩容与证书/CA 轮换、版本跨度校验与升级前快照/熔断、按密钥代际的 Raft 快照安全恢复状态机、Auth/Policy/支持嵌套路径与 CAS 的 KV v2 管理、Doctor 体检。
 4. **Nomad 驱动与集群联动**：Nomad 单机/集群部署（按角色区分 `nomad`/`root` 运行用户、显式 TLS 配置且 `verify_https_client` 默认关闭、专属 SAN 证书、Gossip 与预生成 Secret 的 ACL Bootstrap）、版本代际目录原子软链配置管理、基于 Autopilot 的统一 Raft 仲裁门禁、单节点扩缩容（含 `server_client` 双角色与 Drain 等待）、证书/CA/Gossip 密钥轮换、版本跨度校验升级与熔断、Namespace/ACL Policy/ACL Token 治理、Nomad-Vault 双向 TLS 信任联动（多 Role 模型、`explicit`/`templated` Policy、`role_type="jwt"`、`user_claim_json_pointer`、`bound_claims`、资源归属隔离、仅 Nomad 侧配置变化时滚动重启）及端到端 JWT Login 体检、Consul 扩展接口预留。
-5. **Nomad Job 中心**：Job 列表/详情、基于 `hcl/v2` 的可视化动态编排与受限 AST 附加片段、本地 AST 预检+受控反解、原生 HCL 编辑、纯 Go Compose 转换（含阻断校验）、模板管理、现网漂移检测、按 `plan_hash` 提交审阅时 Job JSON 并绑定 `JobModifyIndex` 的 Validate/Plan/Apply、启停重启与 Purge、基于 Nomad 原生 Revert 的版本回滚、Allocation SSE 实时日志流、HCL 导出。
+5. **Nomad Job 中心**：Job 列表/详情、基于 `hcl/v2` 的可视化动态编排与受限 AST 附加片段、本地 AST 预检+受控反解、原生 HCL 编辑、纯 Go Compose 转换（含阻断校验）、模板管理、现网漂移检测、按 `plan_hash` 提交审阅时 Job JSON 并绑定 `JobModifyIndex` 的 Validate/Plan/Apply、启停重启与 Purge、基于 Nomad 原生 Revert 的版本回滚、Allocation SSE 实时日志流、HCL 导出；Nomad 运行态工作台（共享阻塞查询的 SSE 订阅、全局搜索、Job 各视图与 Deployment/扩缩/Periodic/Dispatch 操作、运行端口、Task 与节点实时资源统计、Allocation 文件浏览、基于一次性票据的 Exec/Action WebSocket 终端、Client 节点调度资格与 Drain、Server/拓扑/存储/Variables/Evaluation 视图、Node Pool 与 ACL Role 管理）。
 6. **平台运营闭环**：定时任务（含防重入/漏执行/关联 `operation_task_id`、节点级健康巡检、CA/客户端/节点证书告警、Vault Token 续租、自动解封巡检、共享锁模式的 Raft 快照登记与互斥轮转、自更新版本检查、日志清理）、二次验密加密迁移包（`.ndbundle`，含步骤日志文件）导出/绑定预检/全局维护屏障下外键与 JSON 内引用一致还原/防双活激活、系统设置。
 7. **控制面自更新**：GitHub Release 版本查询、Ed25519 签名与 SHA256 校验、升级屏障、升级前数据库备份、软链原子切换与退出码 `75` 重启、新版本就绪确认、启动失败自动回退、手动回退、预约升级；发布流水线产出各平台程序包、`SHA256SUMS` 与 `SHA256SUMS.sig`。
 8. **Web 管理端与单二进制打包**：React + Tailwind 全套管理端页面、`go:embed` 静态资源嵌入、Makefile 与 systemd（主服务与回退单元）/Docker 部署产物。
@@ -721,6 +784,7 @@ nomad-deck/
 - [ ] **Nomad 集群全流程**：在 UI 部署 3 节点 Nomad 集群（验证纯 Server 跑 `nomad` 用户、Client 跑 `root` 用户、专属 SAN 与 `public_api_url` 证书、版本代际原子软链配置、`verify_https_client` 默认关闭且浏览器可直接打开 Nomad 原生 UI）→ 验证 ACL Bootstrap 前 Secret 已落库，并模拟 Bootstrap 响应丢失后经 `/v1/acl/token/self` 确认进入 `initialized` → 验证单节点扩容 Join、证书续期、Gossip 密钥轮换、`server_client` 双角色缩容（等待 Drain 完成 + Raft `remove-peer`）、仲裁门禁拦截多数派停服、升级前快照与熔断策略 → 验证共享/独占锁互斥规则，并在远端步骤执行中杀死控制面进程，验证远端临时单元继续运行、重启后进入 `needs_reconcile` 并按单元状态完成核对恢复 → 验证 Namespace、ACL Policy 与 Client Token 管理 → 验证 Nomad `GET /v1/operator/snapshot` 备份与恢复。
 - [ ] **Nomad + Vault 联动**：在 Nomad 与 Vault 均启用自签 TLS 的前提下创建联动配置，并添加两个分别限制不同 Namespace 的 Role（其中一个使用 `templated` Policy）→ Plan 预览（验证作用范围标识、Auth Mount 归属隔离与单点入口告警；临时开启 `verify_https_client` 时验证 mTLS 冲突检测）→ 首次 Apply 双向打通（Nomad CA 写入 Vault `jwks_ca_pem`、完整 JWT Role 参数、滚动重启 Nomad）→ 再新增一个 Role 并 Apply，验证 Nomad 节点未重启 → Doctor 四段式体检并验证真实 JWT Login 成功，且越权 Namespace Job 被 Vault 拒绝。
 - [ ] **Job 全生命周期**：分别通过可视化动态编排器（覆盖顶层 `variable`、`constraint`、`reschedule`、`update`、`lifecycle` Sidecar、Docker `mount`/`bind_options`/`logging`、`resources.memory_max`、Group/Task 级 `service`/`check`、`volume`/`volume_mount`、`env`/`template`/`vault`/`identity` 块与 AST 校验附加片段，验证现网漂移检测与回填）、纯 Go Compose 导入（含阻断项校验）与原生 HCL 编辑器（含本地 HCL2 AST 差异警告）提交 Job → 验证 Apply 提交的 Job JSON 与 Plan 审阅内容一致、绑定 `JobModifyIndex` 的并发冲突保护与 Plan Diff 后下发 → 经 SSE 实时查看 Allocation 日志 → 停止/重新启动/修改版本并经 Nomad 原生 Revert 回滚（回滚后可视化结构同步恢复）/Purge 删除。
+- [ ] **Nomad 运行态工作台**：在不登录 Nomad 原生 UI 的前提下完成以下验证 → 两个浏览器同时打开同一 Job，验证状态变化实时刷新且控制面对 Nomad 只发起一路阻塞查询 → 验证 Allocation 详情展示的宿主机地址与端口可直接访问服务，Task 实时 CPU/内存折线与 `nomad alloc status -stats` 一致 → 发起带金丝雀的更新并在 Deployments 中 Promote，再对另一次部署执行 Fail → 经 Task Group 卡片扩缩副本数，验证生成 `source=scale` 的版本记录且不被判定为漂移 → 立即触发 Periodic Job 并派发一个 Parameterized Job → 用文件浏览器预览日志文件并下载，验证 `secrets/` 目录需二次确认 → 打开交互式终端执行命令、运行一个 Job Action，验证票据重放与跨站 `Origin` 被拒绝、注销会话后终端立即断开，审计中有开始与结束记录且无输入输出内容 → 对 Client 节点切换调度资格并 Drain，在拓扑视图中观察 Allocation 迁移 → 在 Evaluations 中查看一次资源不足导致的调度失败详情 → 创建、带 `cas` 修改并删除 Variable，验证原文查看写审计 → 查看 CSI 卷/插件与 Server 列表。
 - [ ] **定时任务与审计**：验证防重入、手动触发与关联 `operation_task_id` 的健康巡检、CA/客户端/节点证书检查、Vault Token 续租、Raft 快照与自更新版本检查任务均成功；验证审计日志完整且步骤日志、SSE 流与审计均无明文私钥/Token/Unseal Key 泄露。
 - [ ] **环境迁移还原**：二次验密导出加密 `.ndbundle`（含 `operation_task_steps` 与步骤日志文件）→ 在全新空实例启动 `nomad-deck`（不同主密钥）→ 上传迁移包完成绑定 `preview_token` 的预检并在维护屏障下执行 `replace` 还原 → 验证会话表已清空、历史会话全部失效、导入的运维任务日志可正常查看，且自动任务默认暂停防双活 → 点击「激活控制面」后正常连接全部主机、集群、触发解封与管理 Job；验证 `merge` 模式同步重写 SQL 外键与 `cron_jobs.payload_json` 内嵌引用。
 - [ ] **控制面自更新**：发布一个更高版本的 Release，在「版本与升级」页立即升级，验证签名或摘要被篡改时中止且现有安装不变；正常情况下验证升级屏障、升级前数据库备份、软链切换、以退出码 `75` 重启、新版本确认后页面自动刷新；发布一个启动即失败的版本并升级，验证 systemd 触发自动回退、恢复原版本与升级前数据库；验证同 Schema 版本下的手动回退；验证预约升级在等待期内发布新版本后自动完成、超时与取消；验证容器部署下自更新入口禁用。

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -227,5 +228,38 @@ func CleanupStep(ctx context.Context, c *Client, product, opID, step string) err
 	}
 	res, log, script := stepPaths(product, opID, step)
 	_, err := c.Run(ctx, "rm -f "+Quote(res)+" "+Quote(log)+" "+Quote(script), RunOptions{Sudo: true})
+	return err
+}
+
+var reOwner = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}(:[a-z_][a-z0-9_-]{0,31})?$`)
+
+// PutFile writes content to path as root through stdin (so secrets never
+// appear in command lines or logs), creating the parent directory with
+// dirMode and setting owner ("user" or "user:group") and mode atomically.
+func PutFile(ctx context.Context, c *Client, path string, content []byte, mode, owner, dirMode string) error {
+	if err := ValidPath(path); err != nil {
+		return err
+	}
+	if !validMode(mode) || !validMode(dirMode) {
+		return fmt.Errorf("invalid file mode")
+	}
+	if owner == "" {
+		owner = "root:root"
+	}
+	if !reOwner.MatchString(owner) {
+		return fmt.Errorf("invalid owner %q", owner)
+	}
+	dir := path[:strings.LastIndex(path, "/")]
+	script := fmt.Sprintf(`set -e
+install -d -m %[4]s %[1]s
+tmp=%[2]s.nd-tmp.$$
+trap 'rm -f "$tmp"' EXIT
+(umask 077; cat > "$tmp")
+chown %[5]s "$tmp"
+chmod %[3]s "$tmp"
+mv -f "$tmp" %[2]s
+trap - EXIT
+`, Quote(dir), Quote(path), mode, dirMode, owner)
+	_, err := c.Run(ctx, script, RunOptions{Sudo: true, Stdin: bytes.NewReader(content)})
 	return err
 }

@@ -381,9 +381,10 @@ func (c *Client) RekeyStatus(ctx context.Context) (*RekeyStatus, error) {
 	return &s, c.Request(ctx, http.MethodGet, "sys/rekey/init", nil, &s)
 }
 
-// RekeyCancel cancels a rekey in progress.
-func (c *Client) RekeyCancel(ctx context.Context) error {
-	return c.Request(ctx, http.MethodDelete, "sys/rekey/init", nil, nil)
+// RekeyCancel cancels the rekey (including a pending verification); Vault
+// requires the nonce of the rekey being cancelled.
+func (c *Client) RekeyCancel(ctx context.Context, nonce string) error {
+	return c.Request(ctx, http.MethodDelete, "sys/rekey/init", map[string]any{"nonce": nonce}, nil)
 }
 
 // RekeyUpdate submits one current key.
@@ -427,7 +428,7 @@ func (c *Client) GenerateRootInit(ctx context.Context) (*GenerateRootStatus, err
 
 // GenerateRootCancel cancels an attempt.
 func (c *Client) GenerateRootCancel(ctx context.Context) error {
-	return c.Request(ctx, http.MethodDelete, "sys/generate-root/attempt", nil, nil)
+	return c.Request(ctx, http.MethodDelete, "sys/generate-root/attempt", map[string]any{}, nil)
 }
 
 // GenerateRootUpdate submits one unseal key.

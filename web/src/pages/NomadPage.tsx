@@ -25,6 +25,9 @@ export function NomadPage() {
   const [pools, setPools] = useState<any[]>([]);
   const [policies, setPolicies] = useState<any[]>([]);
   const [tokens, setTokens] = useState<any[]>([]);
+  const [roles, setRoles] = useState<any[]>([]);
+  const [governanceEdit, setGovernanceEdit] = useState<{ kind: 'namespaces' | 'node-pools'; name: string; description: string; meta: Record<string, string>; creating: boolean } | null>(null);
+  const [roleEdit, setRoleEdit] = useState<{ id: string; name: string; description: string; policies: string[] } | null>(null);
   const [policyEdit, setPolicyEdit] = useState({ name: '', rules: '' });
   const [newToken, setNewToken] = useState('');
   const [err, setErr] = useState('');
@@ -80,16 +83,18 @@ export function NomadPage() {
   const loadGovernance = async () => {
     if (!selectedId) return;
     try {
-      const [nsRes, plRes, polRes, tokRes] = await Promise.all([
+      const [nsRes, plRes, polRes, tokRes, roleRes] = await Promise.all([
         apiGet(`/api/v1/nomad/${selectedId}/namespaces`),
         apiGet(`/api/v1/nomad/${selectedId}/node-pools`),
         apiGet(`/api/v1/nomad/${selectedId}/acl/policies`),
         apiGet(`/api/v1/nomad/${selectedId}/acl/tokens`),
+        apiGet(`/api/v1/nomad/${selectedId}/acl/roles`),
       ]);
       setNamespaces(nsRes.namespaces || []);
       setPools(plRes.node_pools || []);
       setPolicies(polRes.policies || []);
       setTokens(tokRes.tokens || []);
+      setRoles(roleRes.roles || []);
     } catch (ex: any) {
       setErr(ex?.message || '加载治理信息失败');
     }
@@ -333,11 +338,13 @@ export function NomadPage() {
                 <div className="space-y-3 text-xs">
                   <div className="font-semibold">Namespaces ({namespaces.length})</div>
                   <div className="flex flex-wrap gap-1.5">
-                    {namespaces.map((ns) => <Badge key={ns.name}>{ns.name}</Badge>)}
+                    {namespaces.map((ns) => isAdmin ? <Button key={ns.name} size="sm" onClick={() => setGovernanceEdit({ kind: 'namespaces', name: ns.name, description: ns.description || '', meta: ns.meta || {}, creating: false })}>{ns.name}</Button> : <Badge key={ns.name}>{ns.name}</Badge>)}
+                    {isAdmin && <Button size="sm" onClick={() => setGovernanceEdit({ kind: 'namespaces', name: '', description: '', meta: {}, creating: true })}>新建 Namespace</Button>}
                   </div>
                   <div className="font-semibold pt-2">Node Pools ({pools.length})</div>
                   <div className="flex flex-wrap gap-1.5">
-                    {pools.map((p) => <Badge key={p.name}>{p.name}</Badge>)}
+                    {pools.map((p) => isAdmin ? <Button key={p.name} size="sm" onClick={() => setGovernanceEdit({ kind: 'node-pools', name: p.name, description: p.description || '', meta: p.meta || {}, creating: false })}>{p.name}</Button> : <Badge key={p.name}>{p.name}</Badge>)}
+                    {isAdmin && <Button size="sm" onClick={() => setGovernanceEdit({ kind: 'node-pools', name: '', description: '', meta: {}, creating: true })}>新建 Node Pool</Button>}
                   </div>
                 </div>
               </Card>
@@ -356,6 +363,7 @@ export function NomadPage() {
                   {isAdmin && (
                     <div className="flex gap-2">
                       <Button variant="primary" onClick={() => policyEdit.name && void apiPut(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`, { rules: policyEdit.rules }).then(() => { setNotice('Policy 已保存'); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>保存 Policy</Button>
+                      <Button variant="danger" disabled={!policyEdit.name} onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`).then(() => { setPolicyEdit({ name: '', rules: '' }); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>删除 Policy</Button>
                       <Button onClick={() => void apiPost(`/api/v1/nomad/${selectedId}/acl/tokens`, { name: 'ops-token', policies: policyEdit.name ? [policyEdit.name] : [] }).then((r) => { setNewToken(r.token?.secret_id || ''); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>签发 Client Token</Button>
                     </div>
                   )}
@@ -370,12 +378,63 @@ export function NomadPage() {
                       </div>
                     ))}
                   </div>
+                  <div className="border-t border-slate-200 pt-2 dark:border-slate-800">
+                    <div className="mb-1 font-semibold">ACL Roles ({roles.length})</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {roles.map((role) => isAdmin ? <Button key={role.id} size="sm" onClick={() => setRoleEdit({ id: role.id, name: role.name, description: role.description || '', policies: role.policies || [] })}>{role.name}</Button> : <Badge key={role.id}>{role.name}</Badge>)}
+                      {isAdmin && <Button size="sm" onClick={() => setRoleEdit({ id: '', name: '', description: '', policies: [] })}>新建 ACL Role</Button>}
+                    </div>
+                  </div>
                 </div>
               </Card>
             </div>
           )}
         </div>
       )}
+
+      <Modal open={Boolean(governanceEdit)} title={governanceEdit?.kind === 'namespaces' ? '管理 Namespace' : '管理 Node Pool'} onClose={() => setGovernanceEdit(null)}>
+        {governanceEdit && (
+          <form className="space-y-3" onSubmit={(e) => {
+            e.preventDefault();
+            const base = `/api/v1/nomad/${selectedId}/${governanceEdit.kind}`;
+            const body = { name: governanceEdit.name, description: governanceEdit.description, meta: governanceEdit.meta };
+            const request = governanceEdit.creating ? apiPost(base, body) : apiPut(`${base}/${encodeURIComponent(governanceEdit.name)}`, body);
+            void request.then(() => { setGovernanceEdit(null); return loadGovernance(); }).catch((ex) => setErr(ex.message));
+          }}>
+            <ErrorAlert message={err} onClose={() => setErr('')} />
+            <Input label="名称" required disabled={!governanceEdit.creating} value={governanceEdit.name} onChange={(e) => setGovernanceEdit({ ...governanceEdit, name: e.target.value })} />
+            <Input label="描述" value={governanceEdit.description} onChange={(e) => setGovernanceEdit({ ...governanceEdit, description: e.target.value })} />
+            <div className="flex justify-end gap-2">
+              {!governanceEdit.creating && <Button type="button" variant="danger" disabled={governanceEdit.name === 'default' || (governanceEdit.kind === 'node-pools' && governanceEdit.name === 'all')} onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/${governanceEdit.kind}/${encodeURIComponent(governanceEdit.name)}`).then(() => { setGovernanceEdit(null); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>删除对象</Button>}
+              <Button type="submit" variant="primary">保存对象</Button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      <Modal open={Boolean(roleEdit)} title="管理 ACL Role" onClose={() => setRoleEdit(null)}>
+        {roleEdit && (
+          <form className="space-y-3" onSubmit={(e) => {
+            e.preventDefault();
+            const base = `/api/v1/nomad/${selectedId}/acl/roles`;
+            const body = { name: roleEdit.name, description: roleEdit.description, policies: roleEdit.policies };
+            const request = roleEdit.id ? apiPut(`${base}/${encodeURIComponent(roleEdit.id)}`, body) : apiPost(base, body);
+            void request.then(() => { setRoleEdit(null); return loadGovernance(); }).catch((ex) => setErr(ex.message));
+          }}>
+            <ErrorAlert message={err} onClose={() => setErr('')} />
+            <Input label="Role 名称" required value={roleEdit.name} onChange={(e) => setRoleEdit({ ...roleEdit, name: e.target.value })} />
+            <Input label="描述" value={roleEdit.description} onChange={(e) => setRoleEdit({ ...roleEdit, description: e.target.value })} />
+            <div className="space-y-1 text-xs">
+              <div>关联 Policies</div>
+              {policies.map((p) => <label key={p.name} className="flex items-center gap-2"><input type="checkbox" checked={roleEdit.policies.includes(p.name)} onChange={(e) => setRoleEdit({ ...roleEdit, policies: e.target.checked ? [...roleEdit.policies, p.name] : roleEdit.policies.filter((name) => name !== p.name) })} />{p.name}</label>)}
+            </div>
+            <div className="flex justify-end gap-2">
+              {roleEdit.id && <Button type="button" variant="danger" onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/acl/roles/${encodeURIComponent(roleEdit.id)}`).then(() => { setRoleEdit(null); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>删除 Role</Button>}
+              <Button type="submit" variant="primary">保存 Role</Button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
       <Modal open={showJoin} title="扩容 Nomad 节点" onClose={() => setShowJoin(false)}>
         <form

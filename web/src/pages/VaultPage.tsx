@@ -23,6 +23,8 @@ export function VaultPage() {
   const [snapshots, setSnapshots] = useState<any[]>([]);
   const [gens, setGens] = useState<any[]>([]);
   const [auths, setAuths] = useState<any[]>([]);
+  const [showAuth, setShowAuth] = useState(false);
+  const [authForm, setAuthForm] = useState({ path: '', type: 'userpass', description: '' });
   const [policies, setPolicies] = useState<any[]>([]);
   const [policyEdit, setPolicyEdit] = useState({ name: '', rules: '' });
   const [mounts, setMounts] = useState<any[]>([]);
@@ -528,7 +530,13 @@ export function VaultPage() {
                 <div className="space-y-3 text-xs">
                   <div className="font-semibold">已启用 Auth 方法</div>
                   <div className="flex flex-wrap gap-1.5">
-                    {auths.map((a, i) => <Badge key={i}>{a.path || a.type}</Badge>)}
+                    {auths.map((a, i) => (
+                      <div key={i} className="flex items-center gap-1">
+                        <Badge>{a.path || a.type}</Badge>
+                        {isAdmin && a.type !== 'token' && <Button size="sm" variant="danger" onClick={() => void apiDelete(`/api/v1/vault/${selectedId}/auth?path=${encodeURIComponent(a.path)}`).then(() => loadManage()).catch((ex) => setErr(ex.message))}>停用 {a.path}</Button>}
+                      </div>
+                    ))}
+                    {isAdmin && <Button size="sm" onClick={() => setShowAuth(true)}>启用 Auth 方法</Button>}
                   </div>
                   <div className="border-t border-slate-200 pt-2 font-semibold dark:border-slate-800">ACL Policies</div>
                   <div className="flex flex-wrap gap-1.5">
@@ -560,6 +568,7 @@ export function VaultPage() {
                       保存 Policy
                     </Button>
                   )}
+                  {isAdmin && policyEdit.name && !['root', 'default', 'nomad-deck-admin'].includes(policyEdit.name) && <Button variant="danger" onClick={() => void apiDelete(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(policyEdit.name)}`).then(() => { setPolicyEdit({ name: '', rules: '' }); return loadManage(); }).catch((ex) => setErr(ex.message))}>删除 Policy</Button>}
                 </div>
               </Card>
 
@@ -717,6 +726,19 @@ export function VaultPage() {
             <Button type="button" onClick={() => setShowKVMount(false)}>取消</Button>
             <Button type="submit" variant="primary">启用挂载</Button>
           </div>
+        </form>
+      </Modal>
+
+      <Modal open={showAuth} title="启用 Vault Auth 方法" onClose={() => setShowAuth(false)}>
+        <form className="space-y-3" onSubmit={(e) => {
+          e.preventDefault();
+          void apiPost(`/api/v1/vault/${selectedId}/auth`, authForm).then(() => { setShowAuth(false); return loadManage(); }).catch((ex) => setErr(ex.message));
+        }}>
+          <ErrorAlert message={err} onClose={() => setErr('')} />
+          <Input label="Auth 挂载路径" required value={authForm.path} onChange={(e) => setAuthForm({ ...authForm, path: e.target.value })} />
+          <Input label="Auth 类型" required value={authForm.type} onChange={(e) => setAuthForm({ ...authForm, type: e.target.value })} />
+          <Input label="描述" value={authForm.description} onChange={(e) => setAuthForm({ ...authForm, description: e.target.value })} />
+          <Button type="submit" variant="primary">启用 Auth</Button>
         </form>
       </Modal>
 

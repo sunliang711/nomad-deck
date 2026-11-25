@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"nomad-deck/internal/jobs"
+	"nomad-deck/internal/jobspec"
 )
 
 // jobRef reads the cluster, namespace and job ID of a job route. The job
@@ -283,12 +285,91 @@ func (a *API) jobOp(w http.ResponseWriter, r *http.Request) {
 		if err := a.Jobs.Export(ctx, a.actor(r), clusterID, in, w); err != nil {
 			a.Log.Error("job export", "err", err)
 		}
-	default:
-		if a.jobOpExtra != nil && a.jobOpExtra(w, r) {
+	case "render":
+		var in jobspec.JobSpec
+		if !decodeJSON(w, r, &in) {
 			return
 		}
+		res, err := jobs.RenderSpec(&in)
+		if err != nil {
+			a.writeErr(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	case "parse-to-visual":
+		var in struct {
+			HCL       string            `json:"hcl"`
+			Variables map[string]string `json:"variables"`
+		}
+		if !decodeJSON(w, r, &in) {
+			return
+		}
+		res, err := a.Jobs.ParseToVisual(ctx, clusterID, in.HCL, in.Variables)
+		if err != nil {
+			a.writeErr(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	case "json-to-visual":
+		var in struct {
+			JobJSON    json.RawMessage `json:"job_json"`
+			RevisionID string          `json:"revision_id"`
+		}
+		if !decodeJSON(w, r, &in) {
+			return
+		}
+		res, err := a.Jobs.JSONToVisual(ctx, clusterID, in.JobJSON, in.RevisionID)
+		if err != nil {
+			a.writeErr(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	case "compose-convert":
+		var in struct {
+			Compose string `json:"compose"`
+			jobspec.ComposeOptions
+		}
+		if !decodeJSON(w, r, &in) {
+			return
+		}
+		if len(in.Compose) > 1<<20 {
+			writeError(w, http.StatusBadRequest, "invalid_argument", "Compose 文件过大")
+			return
+		}
+		res, err := jobspec.ConvertCompose([]byte(in.Compose), in.ComposeOptions)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "compose_invalid", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	default:
 		writeError(w, http.StatusNotFound, "not_found", "不支持的操作")
 	}
+}
+
+func (a *API) builderOptions(w http.ResponseWriter, r *http.Request) {
+	clusterID := chi.URLParam(r, "id")
+	o, err := a.Jobs.Options(r.Context(), clusterID)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	// Vault roles of the integration fed by this cluster.
+	roles := []map[string]string{}
+	if a.Integrations != nil {
+		if is, err := a.Integrations.List(r.Context()); err == nil {
+			for _, i := range is {
+				if i.SourceClusterID != clusterID {
+					continue
+				}
+				for _, ro := range i.Roles {
+					roles = append(roles, map[string]string{"role": ro.RoleName, "namespace": ro.BoundClaims["nomad_namespace"],
+						"status": ro.Status, "integration": i.Name})
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"options": o, "vault_roles": roles})
 }
 
 func (a *API) listTemplates(w http.ResponseWriter, r *http.Request) {

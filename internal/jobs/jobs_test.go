@@ -279,7 +279,7 @@ func (e *env) waitDeployment(jobID string) {
 			Status string `json:"Status"`
 		}
 		if err := e.raw().Request(context.Background(), "GET", "job/"+jobID+"/deployment", nil, &dep); err == nil &&
-			dep.Status != "running" && dep.Status != "paused" {
+			(dep.Status == "successful" || dep.Status == "failed" || dep.Status == "cancelled") {
 			return
 		}
 		time.Sleep(time.Second)

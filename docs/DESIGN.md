@@ -631,6 +631,7 @@ nomad-deck/
          - **资源与日志**：`resources` 块（`cpu`、`memory`、`memory_max`）、`logs` 块（`max_files`、`max_file_size`）、`restart` 块（Task 级覆盖）；
          - **Task 级服务注册**：支持在 Task 级动态增删 `service` 块（`name`、`port`、`provider`、`address_mode` + 动态增删 `check` 的 `name`/`type`/`path`/`port`/`interval`/`timeout`）；
          - **机密与模板**：`vault` 块（`role`、`cluster`、`change_mode`、`env`）、动态增删多个 `identity` 块（`name`、`aud`、`file`、`ttl`）、动态增删多个 `template` 块（`destination`、`data`、`env`、`perms`、`change_mode`、`left_delimiter`/`right_delimiter`/`splay`）。
+     - **字段取值与插值规则**：表单中的标量字段可以填写字面量或 `var.<name>` 引用；字符串字段中的 `${var.<name>}` 渲染为 HCL 变量插值，其余 `${...}`（如 `${attr.kernel.name}`、`${NOMAD_PORT_http}`）以及模板中的 `%{...}` 一律转义原样保留，由 Nomad 在运行时解析。
      - **跨字段联动防呆**：`volume_mount` 下拉联动当前 Group 已声明的 `volume`（声明 Host Volume 时联动展示目标集群 Client 节点已配置的 Host Volume 列表）；Group/Task 级 `service.port`、`check.port` 与 Task `config.ports` 下拉联动当前 Group `network` 已定义的端口名；`vault` / `identity` 下拉联动该 Nomad 集群在「集群联动」中已打通的 Vault Role。
      - **受限 AST 校验的附加 HCL 槽位**：Job、Group、Task 卡片底部各提供折叠式「附加原生 HCL 片段」输入框；后端使用 `hashicorp/hcl/v2` 将该片段解析为严格限定在对应层级的 AST，拒绝语法错误、闭合括号越界以及与可视化表单已托管属性/唯一块（如 `network`/`vault`/`identity`/`lifecycle`）冲突的定义；最终 Plan 与 Apply 始终针对完整渲染结果执行。
    - **原生 HCL 源码模式**：基于 CodeMirror 6 提供完整 HCL 语法高亮、模板加载、一键调用 `/v1/jobs/parse` 与 `/v1/validate/job` 校验，满足任意复杂 HCL2 语法需求。

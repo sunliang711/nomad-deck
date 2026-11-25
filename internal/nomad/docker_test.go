@@ -55,11 +55,13 @@ func TestDockerEnsureRunning(t *testing.T) {
 	for _, tc := range []struct {
 		name, running string
 		failStart     bool
+		probeOnly     bool
 		restarts      int
 	}{
 		{name: "package already restarted daemon", running: "29.10.1"},
 		{name: "old daemon needs restart", running: "29.10.0", restarts: 1},
 		{name: "failed daemon is started"},
+		{name: "preflight preserves a newer active daemon", running: "29.10.0", probeOnly: true},
 		{name: "start failure is reported", failStart: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -90,7 +92,11 @@ if [ "$1" = version ]; then cat "$DOCKER_TEST_STATE"; fi
 					t.Fatal(err)
 				}
 			}
-			cmd := exec.Command("sh", "-c", dockerEnsureRunningScript("29.10.1"))
+			target, want := "29.10.1", "29.10.1"
+			if tc.probeOnly {
+				target, want = "", tc.running
+			}
+			cmd := exec.Command("sh", "-c", dockerEnsureRunningScript(target))
 			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "DOCKER_TEST_STATE="+state, "DOCKER_TEST_CALLS="+calls)
 			if tc.failStart {
 				cmd.Env = append(cmd.Env, "DOCKER_TEST_FAIL=1")
@@ -102,7 +108,7 @@ if [ "$1" = version ]; then cat "$DOCKER_TEST_STATE"; fi
 				}
 				return
 			}
-			if err != nil || strings.TrimSpace(string(out)) != "29.10.1" {
+			if err != nil || strings.TrimSpace(string(out)) != want {
 				t.Fatalf("daemon recovery: %s %v", out, err)
 			}
 			log, err := os.ReadFile(calls)

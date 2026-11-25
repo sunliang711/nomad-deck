@@ -319,7 +319,7 @@ systemctl reset-failed docker.service docker.socket
 systemctl start docker
 timeout 60 docker info >/dev/null
 current_version=$(docker version --format '{{.Server.Version}}')
-if [ "$current_version" != ` + sshx.Quote(version) + ` ]; then
+if [ -n ` + sshx.Quote(version) + ` ] && [ "$current_version" != ` + sshx.Quote(version) + ` ]; then
   systemctl restart docker
   timeout 60 docker info >/dev/null
 fi
@@ -999,7 +999,7 @@ func (s *Service) upgradeDockerHost(ctx context.Context, t *ops.Task, nodeID str
 	}
 	defer func() { nc.Done(ctx, err) }()
 	// A previous failed upgrade may have exhausted systemd's start limit.
-	if _, err = nc.Run(ctx, dockerEnsureRunningScript(cur)); err != nil {
+	if _, err = nc.Run(ctx, dockerEnsureRunningScript("")); err != nil {
 		return err
 	}
 	if err = s.waitDockerDriver(ctx, d, nc.Step.Logf); err != nil {

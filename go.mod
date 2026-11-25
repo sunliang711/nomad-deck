@@ -19,6 +19,7 @@ require (
 	github.com/apparentlymart/go-textseg/v17 v17.0.1 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
+	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/hcl/v2 v2.25.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect

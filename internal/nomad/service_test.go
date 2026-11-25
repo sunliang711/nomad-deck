@@ -255,7 +255,9 @@ func TestLocalClusterGateAndRemoval(t *testing.T) {
 	deadline = time.Now().Add(60 * time.Second)
 	for {
 		g, err := e.s.CheckGate(ctx, cl.ID, down.NodeID)
-		if err == nil && !g.TargetHealthy {
+		// Right after stopping a leader, autopilot reports nobody healthy
+		// until the re-election settles; wait for the two survivors.
+		if err == nil && !g.TargetHealthy && g.HealthyVoters >= 2 {
 			if !g.Allowed {
 				t.Fatalf("an unhealthy server with a healthy majority should pass: %+v", g)
 			}

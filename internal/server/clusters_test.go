@@ -257,3 +257,42 @@ func TestNomadGovernanceDockerIntegrationAPI(t *testing.T) {
 		t.Fatal("cluster can be deleted once the integration is gone")
 	}
 }
+
+func TestJobRoutes(t *testing.T) {
+	e := newEnv(t)
+	root := e.setup(t)
+	code, b := root.do("POST", "/api/v1/nodes", map[string]any{"name": "j1", "host": "10.4.0.1", "ssh_user": "ops", "use_sudo": true}, nil)
+	if code != 201 {
+		t.Fatalf("node: %d %v", code, b)
+	}
+	nid := b["node"].(map[string]any)["id"].(string)
+	_, b = root.do("POST", "/api/v1/clusters", map[string]any{"type": "nomad", "name": "jc", "mode": "single",
+		"nodes": []any{map[string]any{"node_id": nid}}}, nil)
+	cid := b["cluster"].(map[string]any)["id"].(string)
+	base := "/api/v1/nomad/" + cid + "/namespaces/default/jobs/"
+	// Child job IDs contain "/" and are URL-encoded as a whole: the route
+	// matches and reaches the service (which reports the undeployed cluster).
+	for _, p := range []string{base + "backup%2Fperiodic-1700000000", base + "backup%2Fperiodic-1700000000/versions"} {
+		if code, b := root.do("GET", p, nil, nil); code != 409 || errCode(b) != "not_initialized" {
+			t.Fatalf("%s: %d %v", p, code, b)
+		}
+	}
+	viewer := e.makeViewer(t, root)
+	for _, p := range []string{base + "web/definition", base + "web/edit-source"} {
+		if code, _ := viewer.do("GET", p, nil, nil); code != 403 {
+			t.Fatalf("viewer must not read %s", p)
+		}
+	}
+	if code, _ := viewer.do("POST", "/api/v1/nomad/"+cid+"/job-ops/plan", map[string]any{"input_type": "hcl", "hcl": "x"}, nil); code != 403 {
+		t.Fatal("viewer cannot plan")
+	}
+	if code, _ := viewer.do("GET", "/api/v1/job-templates", nil, nil); code != 403 {
+		t.Fatal("templates hold definitions: admin only")
+	}
+	if code, b := root.do("POST", "/api/v1/job-templates", map[string]any{"name": "t1", "edit_mode": "hcl", "hcl": "job \"x\" {}"}, nil); code != 200 {
+		t.Fatalf("template: %d %v", code, b)
+	}
+	if code, b := root.do("POST", "/api/v1/nomad/"+cid+"/job-ops/apply", map[string]any{"plan_id": "nope"}, nil); code != 409 || errCode(b) != "plan_not_found" {
+		t.Fatalf("unknown plan: %d %v", code, b)
+	}
+}

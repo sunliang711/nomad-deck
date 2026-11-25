@@ -13,6 +13,7 @@ import (
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/hosts"
 	"nomad-deck/internal/integration"
+	"nomad-deck/internal/jobs"
 	"nomad-deck/internal/netx"
 	"nomad-deck/internal/nomad"
 	"nomad-deck/internal/ops"
@@ -23,15 +24,18 @@ import (
 
 // API holds handler dependencies.
 type API struct {
-	DB             *db.DB
-	Auth           *auth.Service
-	Hosts          *hosts.Service
-	Proxy          *netx.Manager
-	Ops            *ops.Engine
-	Releases       *release.Provider
-	Vault          *vault.Service
-	Nomad          *nomad.Service
-	Integrations   *integration.Service
+	DB           *db.DB
+	Auth         *auth.Service
+	Hosts        *hosts.Service
+	Proxy        *netx.Manager
+	Ops          *ops.Engine
+	Releases     *release.Provider
+	Vault        *vault.Service
+	Nomad        *nomad.Service
+	Integrations *integration.Service
+	Jobs         *jobs.Service
+	// jobOpExtra serves job-ops added by other components (e.g. render).
+	jobOpExtra     func(w http.ResponseWriter, r *http.Request) bool
 	Log            *slog.Logger
 	AllowedOrigins map[string]bool
 	TrustedProxies []netip.Prefix
@@ -96,6 +100,10 @@ func (a *API) Handler() http.Handler {
 			r.Get("/vault/{id}/kv/metadata", a.vaultKVMetadata)
 			r.Get("/nodes/{id}/docker", a.getDocker)
 			r.Get("/integrations", a.listIntegrations)
+			r.Get("/nomad/{id}/jobs", a.listJobs)
+			r.Get("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}", a.getJob)
+			r.Get("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/versions", a.jobVersions)
+			r.Get("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/revisions", a.jobRevisions)
 			r.Get("/integrations/{id}", a.getIntegration)
 			r.Get("/integrations/{id}/roles", a.listIntegrationRoles)
 			r.Get("/nomad/{id}/namespaces", a.nomadListNamespaces)
@@ -203,6 +211,18 @@ func (a *API) Handler() http.Handler {
 				r.Post("/integrations/{id}/apply", a.applyIntegration)
 				r.Post("/integrations/{id}/doctor", a.doctorIntegration)
 				r.Post("/integrations/{id}/job-example", a.integrationJobExample)
+
+				r.Get("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/definition", a.jobDefinition)
+				r.Get("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/edit-source", a.jobEditSource)
+				r.Post("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/{action}", a.jobAction)
+				r.Get("/nomad/{id}/revisions/{revision_id}/variables", a.revisionVariables)
+				r.Post("/nomad/{id}/revisions/{revision_id}/review", a.reviewRevision)
+				r.Post("/nomad/{id}/job-ops/{op}", a.jobOp)
+				r.Get("/job-templates", a.listTemplates)
+				r.Post("/job-templates", a.putTemplate)
+				r.Get("/job-templates/{tid}", a.getTemplate)
+				r.Put("/job-templates/{tid}", a.putTemplate)
+				r.Delete("/job-templates/{tid}", a.deleteTemplate)
 
 				r.Put("/settings", a.putSettings)
 				r.Put("/settings/proxy", a.putProxy)

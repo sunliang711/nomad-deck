@@ -23,6 +23,7 @@ import (
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/hosts"
 	"nomad-deck/internal/integration"
+	"nomad-deck/internal/jobs"
 	"nomad-deck/internal/netx"
 	"nomad-deck/internal/nomad"
 	"nomad-deck/internal/ops"
@@ -109,6 +110,8 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 		DataDir: cfg.DataDir, Log: log}
 	integrations := &integration.Service{DB: d, Keys: keys, Audit: rec, Ops: engine, Nomad: nomadSvc, Vault: vaultSvc, Log: log}
 	integrations.Wire()
+	jobSvc := &jobs.Service{DB: d, Keys: keys, Audit: rec, Ops: engine, Nomad: nomadSvc, Log: log}
+	jobSvc.Init()
 	app := &App{Config: cfg, Log: log, Keys: keys, DB: d, Audit: rec, Auth: authSvc, Hosts: hostSvc, Ops: engine, Pool: pool, Vault: vaultSvc, Nomad: nomadSvc}
 	origins, err := AllowedOrigins(cfg)
 	if err != nil {
@@ -120,7 +123,7 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 		pr, _ := config.ParsePrefix(p)
 		trusted = append(trusted, pr)
 	}
-	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc, Nomad: nomadSvc, Integrations: integrations,
+	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc, Nomad: nomadSvc, Integrations: integrations, Jobs: jobSvc,
 		Log: log, AllowedOrigins: origins, TrustedProxies: trusted,
 		HTTPS: cfg.TLS.Mode != config.TLSModeProxy || isHTTPS(cfg), Ready: &app.ready}
 	return app, nil

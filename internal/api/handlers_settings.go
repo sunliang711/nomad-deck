@@ -52,6 +52,8 @@ var settingDefs = map[string]settingDef{
 	"auth.session_idle_minutes":   {Default: 60, Validate: intRange(5, 1440)},
 	"audit.retention_days":        {Default: 90, Validate: intRange(7, 3650)},
 	"ops.retention_days":          {Default: 60, Validate: intRange(7, 3650)},
+	"snapshot.retention_count":    {Default: 7, Validate: intRange(1, 365)},
+	"cert.alert_days":             {Default: 30, Validate: intRange(1, 365)},
 	netx.SettingUseForReleases:    {Default: false, Validate: boolVal},
 	netx.SettingUseForSelfUpdate:  {Default: false, Validate: boolVal},
 	"release.mirror_url": {Default: "", Validate: func(raw json.RawMessage) (any, error) {
@@ -169,6 +171,9 @@ func (a *API) putSettings(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
+	}
+	if _, ok := vals["cron.timezone"]; ok && a.Cron != nil {
+		a.Cron.Reschedule(r.Context())
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": a.settingValues(r.Context()), "restart_required": restart})
 }

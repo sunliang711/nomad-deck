@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"nomad-deck/internal/auth"
+	"nomad-deck/internal/cron"
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/hosts"
 	"nomad-deck/internal/integration"
@@ -36,6 +37,7 @@ type API struct {
 	Integrations *integration.Service
 	Jobs         *jobs.Service
 	Workbench    *workbench.Service
+	Cron         *cron.Scheduler
 	// jobOpExtra serves job-ops added by other components (e.g. render).
 	jobOpExtra     func(w http.ResponseWriter, r *http.Request) bool
 	Log            *slog.Logger
@@ -85,6 +87,8 @@ func (a *API) Handler() http.Handler {
 			r.Get("/settings/proxy", a.getProxy)
 			r.Get("/releases/{product}", a.listReleases)
 			r.Get("/operations", a.listOperations)
+			r.Get("/cron-jobs", a.listCronJobs)
+			r.Get("/cron-jobs/{id}/runs", a.listCronRuns)
 			r.Get("/operations/{id}", a.getOperation)
 			r.Get("/operations/{id}/stream", a.streamOperation)
 
@@ -261,6 +265,10 @@ func (a *API) Handler() http.Handler {
 				r.Delete("/job-templates/{tid}", a.deleteTemplate)
 
 				r.Put("/settings", a.putSettings)
+				r.Post("/cron-jobs", a.createCronJob)
+				r.Put("/cron-jobs/{id}", a.updateCronJob)
+				r.Delete("/cron-jobs/{id}", a.deleteCronJob)
+				r.Post("/cron-jobs/{id}/run", a.runCronJob)
 				r.Put("/settings/proxy", a.putProxy)
 				r.Post("/settings/proxy/test", a.testProxy)
 			})

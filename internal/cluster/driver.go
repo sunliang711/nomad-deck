@@ -159,6 +159,9 @@ type Driver interface {
 
 	// Raft snapshots.
 	CreateSnapshot(ctx context.Context, actor audit.Actor, clusterID string) (*db.OperationTask, error)
+	// TakeSnapshot exports and stores a snapshot synchronously; the caller
+	// holds the shared cluster lock.
+	TakeSnapshot(ctx context.Context, clusterID, trigger, by string) (*db.Snapshot, error)
 	ListSnapshots(ctx context.Context, clusterID string) (any, error)
 	DeleteSnapshot(ctx context.Context, actor audit.Actor, clusterID, snapID string) error
 	WriteArchive(ctx context.Context, actor audit.Actor, clusterID, snapID, passphrase string, w io.Writer) error

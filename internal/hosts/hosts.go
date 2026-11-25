@@ -575,3 +575,27 @@ func (s *Service) InstallArtifact(ctx context.Context, c *sshx.Client, opID stri
 	return sshx.Install(ctx, c, sshx.InstallSpec{OpID: opID, Name: name, Source: f, Gzipped: a.Gzipped,
 		SHA256: a.PayloadSHA256, Dest: dest, Mode: mode, RateLimit: rateLimit})
 }
+
+// Ping checks SSH reachability (connect and run a no-op) and records the
+// node's status as online or offline.
+func (s *Service) Ping(ctx context.Context, n *db.Node) error {
+	pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	c, err := s.Connect(pctx, n)
+	if err == nil {
+		var res *sshx.Result
+		res, err = c.Run(pctx, "true", sshx.RunOptions{})
+		if err == nil && res.ExitCode != 0 {
+			err = fmt.Errorf("exit code %d", res.ExitCode)
+		}
+		if err != nil {
+			s.Pool.DropPrefix(n.ID)
+		}
+	}
+	status := "online"
+	if err != nil {
+		status = "offline"
+	}
+	_ = db.UpdateNodeStatus(ctx, s.DB.Writer, n.ID, status, s.DB.Now())
+	return err
+}

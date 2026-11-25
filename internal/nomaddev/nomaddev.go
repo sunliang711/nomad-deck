@@ -60,14 +60,51 @@ func Start(t *testing.T) *Env {
 		t.Skip("nomad binary not found")
 	}
 	dir := t.TempDir()
+	// Nomad compares real paths when serving allocation files; macOS temp
+	// directories sit behind a symlink.
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real
+	}
 	http, rpc, serf := freePort(t), freePort(t), freePort(t)
-	cfg := fmt.Sprintf("name = \"dev\"\nports {\n  http = %d\n  rpc  = %d\n  serf = %d\n}\nacl {\n  enabled = true\n}\n"+
-		"plugin \"raw_exec\" {\n  config {\n    enabled = true\n  }\n}\nclient {\n  cpu_total_compute = 4000\n}\n", http, rpc, serf)
+	// A single-node server and client with an on-disk data directory (not
+	// -dev, whose in-memory Raft store cannot take snapshots).
+	cfg := fmt.Sprintf(`name = "dev"
+data_dir = %q
+bind_addr = "127.0.0.1"
+advertise {
+  http = "127.0.0.1"
+  rpc  = "127.0.0.1"
+  serf = "127.0.0.1"
+}
+ports {
+  http = %d
+  rpc  = %d
+  serf = %d
+}
+acl {
+  enabled = true
+}
+server {
+  enabled          = true
+  bootstrap_expect = 1
+}
+client {
+  enabled           = true
+  network_interface = "lo0"
+  cpu_total_compute = 4000
+  servers           = ["127.0.0.1:%d"]
+}
+plugin "raw_exec" {
+  config {
+    enabled = true
+  }
+}
+`, filepath.Join(dir, "data"), http, rpc, serf, rpc)
 	if err := os.WriteFile(filepath.Join(dir, "agent.hcl"), []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	logBuf := &bytes.Buffer{}
-	cmd := exec.Command(bin, "agent", "-dev", "-config", filepath.Join(dir, "agent.hcl"), "-bind", "127.0.0.1", "-network-interface", "lo0")
+	cmd := exec.Command(bin, "agent", "-config", filepath.Join(dir, "agent.hcl"))
 	cmd.Stdout, cmd.Stderr = logBuf, logBuf
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

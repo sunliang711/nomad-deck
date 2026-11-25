@@ -18,7 +18,9 @@ import (
 	"nomad-deck/internal/api"
 	"nomad-deck/internal/audit"
 	"nomad-deck/internal/auth"
+	"nomad-deck/internal/cluster"
 	"nomad-deck/internal/config"
+	"nomad-deck/internal/cron"
 	"nomad-deck/internal/crypto"
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/hosts"
@@ -50,6 +52,7 @@ type App struct {
 	Pool   *sshx.Pool
 	Vault  *vault.Service
 	Nomad  *nomad.Service
+	Cron   *cron.Scheduler
 	API    *api.API
 	ready  atomic.Bool
 }
@@ -115,7 +118,10 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 	jobSvc.Init()
 	wb := &workbench.Service{DB: d, Audit: rec, Nomad: nomadSvc, Log: log}
 	wb.Init()
-	app := &App{Config: cfg, Log: log, Keys: keys, DB: d, Audit: rec, Auth: authSvc, Hosts: hostSvc, Ops: engine, Pool: pool, Vault: vaultSvc, Nomad: nomadSvc}
+	sched := &cron.Scheduler{DB: d, Audit: rec, Ops: engine, Log: log}
+	sched.Install(&cron.Platform{Hosts: hostSvc, Drivers: map[string]cluster.Driver{"nomad": nomadSvc.Driver(), "vault": vaultSvc.Driver()},
+		Vault: vaultSvc, Integrations: integrations, Jobs: jobSvc, DataDir: cfg.DataDir})
+	app := &App{Config: cfg, Log: log, Keys: keys, DB: d, Audit: rec, Auth: authSvc, Hosts: hostSvc, Ops: engine, Pool: pool, Vault: vaultSvc, Nomad: nomadSvc, Cron: sched}
 	origins, err := AllowedOrigins(cfg)
 	if err != nil {
 		d.Close()
@@ -126,7 +132,7 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 		pr, _ := config.ParsePrefix(p)
 		trusted = append(trusted, pr)
 	}
-	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc, Nomad: nomadSvc, Integrations: integrations, Jobs: jobSvc, Workbench: wb,
+	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc, Nomad: nomadSvc, Integrations: integrations, Jobs: jobSvc, Workbench: wb, Cron: sched,
 		Log: log, AllowedOrigins: origins, TrustedProxies: trusted,
 		HTTPS: cfg.TLS.Mode != config.TLSModeProxy || isHTTPS(cfg), Ready: &app.ready}
 	return app, nil
@@ -182,6 +188,11 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	go a.sessionJanitor(ctx)
+	if err := a.Cron.Start(ctx); err != nil {
+		ln.Close()
+		return fmt.Errorf("start scheduler: %w", err)
+	}
+	defer a.Cron.Stop()
 
 	errCh := make(chan error, 1)
 	go func() {

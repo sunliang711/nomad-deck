@@ -96,6 +96,19 @@ func (s *Service) takeSnapshot(ctx context.Context, cl *nomadCluster, trigger, b
 	return snap, nil
 }
 
+// TakeSnapshot exports and stores a snapshot; the caller holds the shared
+// cluster lock.
+func (s *Service) TakeSnapshot(ctx context.Context, clusterID, trigger, by string) (*db.Snapshot, error) {
+	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if cl.InitState != db.InitInitialized {
+		return nil, conflict("not_initialized", "集群尚未完成部署与 ACL Bootstrap")
+	}
+	return s.takeSnapshot(ctx, cl, trigger, by)
+}
+
 // CreateSnapshot takes a manual snapshot (shared cluster lock).
 func (s *Service) CreateSnapshot(ctx context.Context, actor audit.Actor, clusterID string) (*db.OperationTask, error) {
 	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
@@ -172,6 +185,11 @@ func (s *Service) DeleteSnapshot(ctx context.Context, actor audit.Actor, cluster
 	if err != nil {
 		return err
 	}
+	release, err := s.lockSnapshots(ctx, clusterID, ops.Exclusive)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := db.DeleteSnapshot(ctx, s.DB.Writer, sn.ID); err != nil {
 		return err
 	}
@@ -190,6 +208,11 @@ func (s *Service) WriteArchive(ctx context.Context, actor audit.Actor, clusterID
 	if err != nil {
 		return err
 	}
+	release, err := s.lockSnapshots(ctx, clusterID, ops.Shared)
+	if err != nil {
+		return err
+	}
+	defer release()
 	r, err := snapstore.Open(s.Keys, sn.FilePath, sn.ID, sn.SHA256)
 	if err != nil {
 		return err
@@ -264,7 +287,7 @@ func (s *Service) Restore(ctx context.Context, actor audit.Actor, clusterID, sna
 		return nil, err
 	}
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.snapshot_restore", TargetType: "cluster", TargetID: clusterID,
-		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name, Params: map[string]any{"snapshot_id": sn.ID},
+		Locks: append(memberLocks(clusterID, members), ops.LockReq{Key: ops.SnapshotLock(clusterID), Mode: ops.Shared}), TriggeredBy: actor.Name, Params: map[string]any{"snapshot_id": sn.ID},
 		Run: func(ctx context.Context, t *ops.Task) error {
 			return s.runRestore(ctx, t, clusterID, sn)
 		}})
@@ -359,4 +382,16 @@ func (s *Service) runRestore(ctx context.Context, t *ops.Task, clusterID string,
 	}
 	_, _ = s.StatusDetail(ctx, clusterID)
 	return nil
+}
+
+// lockSnapshots takes the cluster's snapshot-store lock, waiting at most
+// 30 seconds.
+func (s *Service) lockSnapshots(ctx context.Context, clusterID string, mode ops.LockMode) (func(), error) {
+	wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	release, err := s.Ops.Locks.Acquire(wctx, []ops.LockReq{{Key: ops.SnapshotLock(clusterID), Mode: mode}})
+	if err != nil {
+		return nil, conflict("snapshots_busy", "该集群的快照正在被轮转、下载或恢复，请稍后再试")
+	}
+	return release, nil
 }

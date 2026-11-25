@@ -27,6 +27,10 @@ type LockReq struct {
 // ClusterLock is the lock key of a cluster.
 func ClusterLock(clusterID string) string { return "cluster:" + clusterID }
 
+// SnapshotLock guards a cluster's stored snapshot files: downloads and
+// restores hold it shared, rotation and deletion exclusively.
+func SnapshotLock(clusterID string) string { return "snapshots:" + clusterID }
+
 // HostLock is the lock key of one product on one host.
 func HostLock(nodeID, product string) string { return "host:" + nodeID + ":" + product }
 

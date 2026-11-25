@@ -44,9 +44,36 @@ type Engine struct {
 	Log     *slog.Logger
 	DataDir string
 
-	wg     sync.WaitGroup
-	mu     sync.Mutex
-	cancel map[string]context.CancelFunc
+	wg      sync.WaitGroup
+	mu      sync.Mutex
+	cancel  map[string]context.CancelFunc
+	barrier string
+}
+
+// ErrBarrier is returned while the control plane is under a global
+// maintenance barrier (for example during a migration import).
+var ErrBarrier = errors.New("控制面处于全局维护状态，暂不接受新的运维任务")
+
+// SetBarrier raises (non-empty reason) or lowers the global maintenance
+// barrier. While raised, new tasks are refused.
+func (e *Engine) SetBarrier(reason string) {
+	e.mu.Lock()
+	e.barrier = reason
+	e.mu.Unlock()
+}
+
+// Barrier returns the active barrier reason ("" when none).
+func (e *Engine) Barrier() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.barrier
+}
+
+// Active reports how many submitted tasks have not finished.
+func (e *Engine) Active() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.cancel)
 }
 
 // NewEngine creates an engine storing step logs under dataDir/ops.
@@ -94,6 +121,9 @@ func (e *Engine) Recover(ctx context.Context) ([]*db.OperationTask, error) {
 func (e *Engine) Submit(ctx context.Context, s Spec) (*db.OperationTask, error) {
 	if s.Run == nil || s.Action == "" {
 		return nil, errors.New("task spec requires Action and Run")
+	}
+	if e.Barrier() != "" {
+		return nil, ErrBarrier
 	}
 	mode := "none"
 	for _, l := range normalize(s.Locks) {
@@ -342,4 +372,41 @@ func (s *Step) Finish(err error, exitCode *int) {
 		}
 	}
 	s.task.mu.Unlock()
+}
+
+// WaitTask blocks until a task finishes (or ctx ends) and returns its
+// final record.
+func (e *Engine) WaitTask(ctx context.Context, taskID string) (*db.OperationTask, error) {
+	for {
+		ch, unsub := e.Hub.Subscribe(taskID)
+		t, err := db.GetTask(ctx, e.DB.Reader, taskID)
+		if err != nil {
+			unsub()
+			return nil, err
+		}
+		switch t.Status {
+		case db.TaskPending, db.TaskRunning:
+		default:
+			unsub()
+			return t, nil
+		}
+		select {
+		case <-ctx.Done():
+			unsub()
+			return nil, ctx.Err()
+		case <-drain(ch):
+		}
+		unsub()
+	}
+}
+
+// drain returns a channel closed once ch is closed (events are discarded).
+func drain(ch <-chan Event) <-chan struct{} {
+	out := make(chan struct{})
+	go func() {
+		for range ch {
+		}
+		close(out)
+	}()
+	return out
 }

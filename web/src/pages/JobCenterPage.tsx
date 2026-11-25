@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Download, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
-import { apiDelete, apiDownload, apiGet, apiPost, fmtTime } from '../lib/api';
+import { apiDelete, apiDownload, apiGet, apiPost, fmtTime, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Select, statusTone } from '../components/UI';
 import { CodeEditor } from '../components/CodeEditor';
@@ -90,6 +90,13 @@ export function JobCenterPage() {
   useEffect(() => {
     void loadJobs();
   }, [loadJobs]);
+
+  useEffect(() => {
+    if (!clusterId) return;
+    return openSSE(`/api/v1/nomad/${clusterId}/watch?topics=jobs`, {
+      onEvent: (ev) => { if (ev === 'change') void loadJobs(); },
+    });
+  }, [clusterId, loadJobs]);
 
   const syncVisualToHCL = async () => {
     if (!clusterId) return;
@@ -211,13 +218,15 @@ export function JobCenterPage() {
                     <div key={`${jobNs}:${j.id}`} className="flex items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
                       <div>
                         <div className="font-mono font-semibold">{j.id}</div>
-                        <Badge tone={statusTone(j.status)}>{j.status}</Badge>
+                        <Badge tone={statusTone(j.stop ? 'stopped' : j.status)}>{j.stop ? 'stopped' : j.status}</Badge>
                       </div>
                       {isAdmin && (
                         <div className="flex gap-1">
                           <Button size="sm" onClick={() => void loadJobForEdit(j)}>编辑</Button>
                           <Button
                             size="sm"
+                            aria-label="启动 Job"
+                            disabled={!j.stop}
                             onClick={() =>
                               void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/start`, {})
                                 .then(() => loadJobs())
@@ -228,6 +237,8 @@ export function JobCenterPage() {
                           </Button>
                           <Button
                             size="sm"
+                            aria-label="停止 Job"
+                            disabled={j.stop}
                             onClick={() =>
                               void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/stop`, {})
                                 .then(() => loadJobs())
@@ -238,6 +249,7 @@ export function JobCenterPage() {
                           </Button>
                           <Button
                             size="sm"
+                            aria-label="清理 Job"
                             variant="danger"
                             onClick={() => {
                               if (!window.confirm(`确认清理并彻底删除 Job "${j.id}"（Namespace: ${jobNs}）？`)) return;

@@ -288,7 +288,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                       <tr key={`${j.namespace}:${j.id}`}>
                         <td className="py-2 pr-3 font-mono font-medium">{j.id}</td>
                         <td className="py-2 pr-3">{j.namespace} · {j.type}</td>
-                        <td className="py-2 pr-3"><Badge tone={statusTone(j.status)}>{j.status}</Badge></td>
+                        <td className="py-2 pr-3"><Badge tone={statusTone(j.stop ? 'stopped' : j.status)}>{j.stop ? 'stopped' : j.status}</Badge></td>
                         <td className="py-2 text-right">
                           <Button size="sm" onClick={() => void inspectJob(j)}>运行态详情</Button>
                         </td>

@@ -99,6 +99,7 @@ type Settings struct {
 	AuditMaxMB        int    `json:"audit_log_max_mb"`
 	AuditKeep         int    `json:"audit_log_keep"`
 	Version           string `json:"version,omitempty"`
+	UseProxy          *bool  `json:"use_proxy,omitempty"`
 }
 
 func (s *Settings) defaults() {

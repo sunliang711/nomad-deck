@@ -333,4 +333,17 @@ func TestJobRoutes(t *testing.T) {
 	if code, b := viewer.do("GET", "/api/v1/nomad/"+cid+"/watch?topics=jobs", nil, nil); code != 409 || errCode(b) != "not_initialized" {
 		t.Fatalf("watch on an undeployed cluster: %d %v", code, b)
 	}
+	if code, _ := viewer.do("PUT", "/api/v1/clusters/"+cid+"/proxy", map[string]any{"use_proxy": true}, nil); code != 403 {
+		t.Fatalf("viewer cannot update cluster proxy: %d", code)
+	}
+	if code, b := root.do("PUT", "/api/v1/clusters/"+cid+"/proxy", map[string]any{"use_proxy": true}, nil); code != 200 {
+		t.Fatalf("put cluster proxy: %d %v", code, b)
+	}
+	if code, b := root.do("GET", "/api/v1/clusters/"+cid, nil, nil); code != 200 {
+		t.Fatalf("get cluster: %d %v", code, b)
+	} else if cl, _ := b["cluster"].(map[string]any); cl != nil {
+		if st, _ := cl["settings"].(map[string]any); st["use_proxy"] != true {
+			t.Fatalf("expected persisted settings.use_proxy=true, got %+v", cl["settings"])
+		}
+	}
 }

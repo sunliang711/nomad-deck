@@ -441,15 +441,24 @@ func (s *Service) Deploy(ctx context.Context, actor audit.Actor, clusterID strin
 	if cl.MaintenanceMode {
 		return nil, conflict("maintenance", "集群处于维护模式（%s）", cl.MaintenanceReason)
 	}
-	hc, err := s.httpClient(ctx, in.UseProxy)
+	reqProxy := in.UseProxy
+	if reqProxy == nil && cl.Settings.UseProxy != nil {
+		reqProxy = cl.Settings.UseProxy
+	}
+	hc, err := s.httpClient(ctx, reqProxy)
 	if err != nil {
 		return nil, err
 	}
-	version, err := s.resolveVersion(ctx, hc, in.Version)
-	if err != nil {
-		return nil, err
+	rawVer := strings.TrimSpace(in.Version)
+	isLatest := rawVer == "" || strings.EqualFold(rawVer, "latest")
+	if !isLatest {
+		if err := validVersion(rawVer); err != nil {
+			return nil, err
+		}
+		in.Version = rawVer
+	} else {
+		in.Version = "latest"
 	}
-	in.Version = version
 	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return nil, err
@@ -463,6 +472,14 @@ func (s *Service) Deploy(ctx context.Context, actor audit.Actor, clusterID strin
 	}
 	if err := blocking(issues); err != nil {
 		return nil, err
+	}
+	if in.UseProxy != nil {
+		v := hc.useProxy
+		cl.Settings.UseProxy = &v
+		if b, err := jsonMarshal(cl.Settings); err == nil {
+			cl.ConfigJSON = b
+			_ = db.UpdateClusterSettings(ctx, s.DB.Writer, cl.Cluster, s.DB.Now())
+		}
 	}
 	members = sortedMembers(members)
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.deploy", TargetType: "cluster", TargetID: cl.ID,
@@ -484,6 +501,20 @@ func (s *Service) runDeploy(ctx context.Context, t *ops.Task, clusterID, version
 	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(version), "latest") || strings.TrimSpace(version) == "" {
+		st, err := t.Step("解析目标版本", "")
+		if err != nil {
+			return err
+		}
+		resolved, rerr := s.resolveVersion(ctx, hc, "latest")
+		if rerr != nil {
+			st.Finish(rerr, nil)
+			return rerr
+		}
+		version = resolved
+		st.Logf("已解析 Vault 目标版本：%s", version)
+		st.Finish(nil, nil)
 	}
 	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
 	if err != nil {

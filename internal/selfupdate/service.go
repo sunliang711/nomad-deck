@@ -370,6 +370,7 @@ func (s *Service) rollbackInfo(ctx context.Context, avail bool, res *UpdateResul
 }
 
 // StartUpgrade initiates an immediate self-update to targetVersion ("latest" or explicit tag).
+// Release discovery runs asynchronously inside the submitted task so the UI receives task metadata immediately.
 func (s *Service) StartUpgrade(ctx context.Context, actor audit.Actor, targetVersion string, useProxy *bool) (*db.OperationTask, error) {
 	s.defaults()
 	if avail, reason := s.Availability(); !avail {
@@ -385,10 +386,20 @@ func (s *Service) StartUpgrade(ctx context.Context, actor audit.Actor, targetVer
 	if err != nil {
 		return nil, err
 	}
-	return s.startUpgradeWithProxy(ctx, actor, targetVersion, up, "")
+	target := strings.TrimSpace(targetVersion)
+	if target == "" {
+		target = "latest"
+	}
+	if target != "latest" {
+		if _, err := ParseSemver(target); err != nil {
+			return nil, &auth.Error{Status: 400, Code: "invalid_argument", Message: "目标版本号不合法：" + target}
+		}
+		target = NormalizeTag(target)
+	}
+	return s.startUpgradeAsync(ctx, actor, target, up, "")
 }
 
-func (s *Service) startUpgradeWithProxy(ctx context.Context, actor audit.Actor, targetVersion string, useProxy bool, scheduleID string) (*db.OperationTask, error) {
+func (s *Service) startUpgradeAsync(ctx context.Context, actor audit.Actor, targetVersion string, useProxy bool, scheduleID string) (*db.OperationTask, error) {
 	client, _, err := s.Proxy.Client(ctx, useProxy, 5*time.Minute)
 	if errors.Is(err, netx.ErrProxyNotConfigured) {
 		return nil, &auth.Error{Status: 400, Code: "proxy_not_configured", Message: "尚未配置系统代理"}
@@ -396,18 +407,30 @@ func (s *Service) startUpgradeWithProxy(ctx context.Context, actor audit.Actor, 
 	if err != nil {
 		return nil, err
 	}
-	rels, err := FetchReleases(ctx, client, s.APIBase, s.Repo)
+	if !s.updating.CompareAndSwap(false, true) {
+		return nil, &auth.Error{Status: 409, Code: "update_in_progress", Message: "控制面升级正在进行中"}
+	}
+
+	task, err := s.Ops.Submit(ctx, ops.Spec{
+		Action:      "system.self_update",
+		TargetType:  "control_plane",
+		TargetID:    "self",
+		TriggeredBy: actor.Name,
+		Params: map[string]any{
+			"from_version": s.CurrentVersion,
+			"to_version":   targetVersion,
+			"use_proxy":    useProxy,
+			"schedule_id":  scheduleID,
+		},
+		Run: func(rctx context.Context, t *ops.Task) error {
+			return s.runUpgradeTask(rctx, actor, t, nil, targetVersion, client, useProxy)
+		},
+	})
 	if err != nil {
-		return nil, &auth.Error{Status: 502, Code: "release_fetch_failed", Message: "查询 Release 失败：" + err.Error()}
+		s.updating.Store(false)
+		return nil, err
 	}
-	if targetVersion == "" {
-		targetVersion = "latest"
-	}
-	rel, err := ResolveRelease(rels, targetVersion, s.channel(ctx), s.GOOS, s.GOARCH)
-	if err != nil {
-		return nil, &auth.Error{Status: 400, Code: "invalid_argument", Message: err.Error()}
-	}
-	return s.startUpgradeWithRelease(ctx, actor, rel, useProxy, scheduleID)
+	return task, nil
 }
 
 func (s *Service) startUpgradeWithRelease(ctx context.Context, actor audit.Actor, rel *ReleaseInfo, useProxy bool, scheduleID string) (*db.OperationTask, error) {
@@ -444,7 +467,7 @@ func (s *Service) startUpgradeWithRelease(ctx context.Context, actor audit.Actor
 			"schedule_id":  scheduleID,
 		},
 		Run: func(rctx context.Context, t *ops.Task) error {
-			return s.runUpgradeTask(rctx, actor, t, rel, client, useProxy)
+			return s.runUpgradeTask(rctx, actor, t, rel, rel.Version, client, useProxy)
 		},
 	})
 	if err != nil {
@@ -454,7 +477,7 @@ func (s *Service) startUpgradeWithRelease(ctx context.Context, actor audit.Actor
 	return task, nil
 }
 
-func (s *Service) runUpgradeTask(ctx context.Context, actor audit.Actor, t *ops.Task, rel *ReleaseInfo, client *http.Client, useProxy bool) (retErr error) {
+func (s *Service) runUpgradeTask(ctx context.Context, actor audit.Actor, t *ops.Task, rel *ReleaseInfo, targetVersion string, client *http.Client, useProxy bool) (retErr error) {
 	keepUpdating := false
 	defer func() {
 		if !keepUpdating {
@@ -493,24 +516,62 @@ func (s *Service) runUpgradeTask(ctx context.Context, actor audit.Actor, t *ops.
 	st1.Logf("升级屏障已就绪，无并发运维或定时任务运行")
 	st1.Finish(nil, nil)
 
-	// Step 2: Download, verify Ed25519 signature + SHA-256, extract, dry-run version.
+	// Step 2: Resolve release if not pre-resolved.
+	if rel == nil {
+		stResolve, err := t.Step("查询目标版本", "")
+		if err != nil {
+			return err
+		}
+		t.EmitProgress("resolve", 0, 0)
+		rels, err := FetchReleases(ctx, client, s.APIBase, s.Repo)
+		if err != nil {
+			stResolve.Finish(err, nil)
+			return fmt.Errorf("查询 Release 失败：%w", err)
+		}
+		resolved, err := ResolveRelease(rels, targetVersion, s.channel(ctx), s.GOOS, s.GOARCH)
+		if err != nil {
+			stResolve.Finish(err, nil)
+			return err
+		}
+		if !resolved.AssetsComplete {
+			err := errors.New("目标版本缺少当前平台程序包或签名摘要文件")
+			stResolve.Finish(err, nil)
+			return err
+		}
+		cmp, err := CompareSemver(resolved.Version, s.CurrentVersion)
+		if err != nil {
+			stResolve.Finish(err, nil)
+			return err
+		}
+		if cmp <= 0 {
+			err := fmt.Errorf("目标版本 %s 必须高于当前版本 %s（回退请使用版本回退功能）", resolved.Version, s.CurrentVersion)
+			stResolve.Finish(err, nil)
+			return err
+		}
+		rel = resolved
+		stResolve.Logf("已确认目标版本 %s（%s）", rel.Version, rel.ArchiveName)
+		stResolve.Finish(nil, nil)
+	}
+
+	// Step 3: Download, verify Ed25519 signature + SHA-256, extract, dry-run version.
 	st2, err := t.Step("下载并校验新版本", "")
 	if err != nil {
 		return err
 	}
 	targetBin := filepath.Join(s.BinDir, "versions", "nomad-deck-"+strings.TrimPrefix(rel.Version, "v"))
-	if err := VerifyAndExtract(ctx, client, rel, s.PublicKey, targetBin, s.VerifyBinary); err != nil {
+	if err := VerifyAndExtractWithProgress(ctx, client, rel, s.PublicKey, targetBin, s.VerifyBinary, t.EmitProgress); err != nil {
 		st2.Finish(err, nil)
 		return err
 	}
 	st2.Logf("Ed25519 签名、SHA-256 摘要及试运行均已通过：%s", targetBin)
 	st2.Finish(nil, nil)
 
-	// Step 3: Online database backup before upgrade.
+	// Step 4: Online database backup before upgrade.
 	st3, err := t.Step("升级前备份控制面数据库", "")
 	if err != nil {
 		return err
 	}
+	t.EmitProgress("install", 0, 0)
 	fromSchema, err := s.DB.SchemaVersion(ctx)
 	if err != nil {
 		st3.Finish(err, nil)
@@ -524,11 +585,12 @@ func (s *Service) runUpgradeTask(ctx context.Context, actor audit.Actor, t *ops.
 	st3.Logf("已生成升级前数据库备份：%s（Schema v%d）", filepath.Base(backupFile), fromSchema)
 	st3.Finish(nil, nil)
 
-	// Step 4: Persist prepared -> atomic symlink swap -> persist pending -> restart exit 75.
+	// Step 5: Persist prepared -> atomic symlink swap -> persist pending -> restart exit 75.
 	st4, err := t.Step("切换版本并重启控制面", "")
 	if err != nil {
 		return err
 	}
+	t.EmitProgress("restart", 0, 0)
 	prevBin, err := s.ensurePrevBinary()
 	if err != nil {
 		st4.Finish(err, nil)

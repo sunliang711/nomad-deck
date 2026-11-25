@@ -1,39 +1,189 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { Check, Copy, Terminal as TerminalIcon } from 'lucide-react';
-import { apiGet, openSSE } from './api';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, Check, Copy, ExternalLink, RefreshCw, Terminal as TerminalIcon } from 'lucide-react';
+import { apiGet, fmtTime, openSSE } from './api';
+import { useAuth } from './auth';
 import { copyText } from './clipboard';
+import { formatActionLabel, formatTaskDuration, isTaskActiveStatus, isTaskFailureStatus } from './actionLabels';
 import { Drawer } from '../components/Drawer';
-import { StatusBadge } from '../components/UI';
+import { Button, EmptyState, StatusBadge } from '../components/UI';
 import { useToast } from '../components/Toast';
 
+export interface OperationSummary {
+  id: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  lock_mode: string;
+  status: string;
+  triggered_by: string;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error_message?: string;
+}
+
 type DrawerTarget =
+  | { kind: 'list' }
   | { kind: 'task'; taskId: string; title?: string }
   | { kind: 'node-logs'; clusterId: string; nodeId: string; title?: string };
 
 interface OpsDrawerCtx {
+  tasks: OperationSummary[];
+  runningCount: number;
+  unreadCount: number;
+  loadingTasks: boolean;
   openTask: (taskId: string, title?: string) => void;
+  openTaskList: () => void;
   openNodeLogs: (clusterId: string, nodeId: string, title?: string) => void;
+  refreshTasks: () => Promise<void>;
+  markAllRead: () => void;
   close: () => void;
 }
 
 const Ctx = createContext<OpsDrawerCtx>({
+  tasks: [],
+  runningCount: 0,
+  unreadCount: 0,
+  loadingTasks: false,
   openTask: () => {},
+  openTaskList: () => {},
   openNodeLogs: () => {},
+  refreshTasks: async () => {},
+  markAllRead: () => {},
   close: () => {},
 });
 
 export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
+  const { user, authenticated } = useAuth();
+  const navigate = useNavigate();
   const toast = useToast();
+
   const [target, setTarget] = useState<DrawerTarget | null>(null);
+  const [tasks, setTasks] = useState<OperationSummary[]>([]);
+  const [loadingTasks, setLoadingTasks] = useState(false);
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
+
+  const [detailTask, setDetailTask] = useState<OperationSummary | null>(null);
   const [steps, setSteps] = useState<Array<{ id?: string; name: string; status: string; error?: string }>>([]);
   const [taskStatus, setTaskStatus] = useState('');
   const [logs, setLogs] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const logRef = useRef<HTMLPreElement>(null);
 
+  const knownStatusRef = useRef<Map<string, string>>(new Map());
+  const trackedRef = useRef<Set<string>>(new Set());
+  const deliveredRef = useRef<Set<string>>(new Set());
+
+  const storageKey = `nd_ops_read:${user?.username || 'anon'}`;
+
   useEffect(() => {
-    if (!target) return;
+    try {
+      const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      setReadIds(new Set(Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []));
+    } catch {
+      setReadIds(new Set());
+    }
+  }, [storageKey]);
+
+  const persistRead = useCallback(
+    (next: Set<string>) => {
+      setReadIds(next);
+      try {
+        localStorage.setItem(storageKey, JSON.stringify([...next].slice(-500)));
+      } catch {
+        // Ignore storage errors in private browsing mode.
+      }
+    },
+    [storageKey],
+  );
+
+  const markRead = useCallback(
+    (ids: string[]) => {
+      if (!ids.length) return;
+      const next = new Set(readIds);
+      let changed = false;
+      for (const id of ids) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      if (changed) persistRead(next);
+    },
+    [persistRead, readIds],
+  );
+
+  const refreshTasks = useCallback(async () => {
+    if (!authenticated) return;
+    setLoadingTasks(true);
+    try {
+      const res = await apiGet<{ operations: OperationSummary[] }>('/api/v1/operations?limit=50');
+      const list = res.operations || [];
+      setTasks(list);
+
+      const known = knownStatusRef.current;
+      for (const item of list) {
+        const prev = known.get(item.id);
+        known.set(item.id, item.status);
+        const activeBefore = prev === 'pending' || prev === 'running';
+        const doneNow = !isTaskActiveStatus(item.status);
+        if (doneNow && !deliveredRef.current.has(item.id) && (trackedRef.current.has(item.id) || activeBefore)) {
+          deliveredRef.current.add(item.id);
+          trackedRef.current.delete(item.id);
+          const label = formatActionLabel(item.action);
+          const viewAction = {
+            label: '查看详情',
+            onClick: () => setTarget({ kind: 'task', taskId: item.id, title: label }),
+          };
+          if (isTaskFailureStatus(item.status)) {
+            toast.error(`${label}失败${item.error_message ? `：${item.error_message}` : ''}`, viewAction);
+          } else {
+            toast.success(`${label}已完成`, viewAction);
+          }
+        }
+      }
+    } catch {
+      // Background polling swallows transient errors silently.
+    } finally {
+      setLoadingTasks(false);
+    }
+  }, [authenticated, toast]);
+
+  const runningCount = useMemo(
+    () => tasks.filter((t) => isTaskActiveStatus(t.status)).length,
+    [tasks],
+  );
+
+  const unreadIds = useMemo(
+    () => tasks.filter((t) => isTaskFailureStatus(t.status) && !readIds.has(t.id)).map((t) => t.id),
+    [readIds, tasks],
+  );
+
+  useEffect(() => {
+    if (!authenticated) {
+      setTasks([]);
+      knownStatusRef.current.clear();
+      trackedRef.current.clear();
+      deliveredRef.current.clear();
+      return;
+    }
+    void refreshTasks();
+    const timer = window.setInterval(() => void refreshTasks(), runningCount > 0 || target ? 3000 : 8000);
+    return () => window.clearInterval(timer);
+  }, [authenticated, refreshTasks, runningCount, target]);
+
+  useEffect(() => {
+    if (!target && runningCount === 0) return;
+    const t = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [runningCount, target]);
+
+  useEffect(() => {
+    if (!target || target.kind === 'list') return;
+    setDetailTask(null);
     setSteps([]);
     setTaskStatus('');
     setLogs('');
@@ -41,8 +191,10 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
     let stop: (() => void) | undefined;
 
     if (target.kind === 'task') {
-      void apiGet<{ operation: { status: string; action: string }; steps: any[] }>(`/api/v1/operations/${target.taskId}`)
+      markRead([target.taskId]);
+      void apiGet<{ operation: OperationSummary; steps: any[] }>(`/api/v1/operations/${target.taskId}`)
         .then((res) => {
+          setDetailTask(res.operation || null);
           setTaskStatus(res.operation?.status || '');
           setSteps(
             (res.steps || []).map((s) => ({
@@ -72,9 +224,13 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
             setLogs((prev) => prev + data.data);
           } else if (ev === 'done' && data) {
             setTaskStatus(data.status || 'done');
+            setDetailTask((prev) =>
+              prev ? { ...prev, status: data.status || prev.status, error_message: data.error || prev.error_message, finished_at: new Date().toISOString() } : prev,
+            );
             if (data.error) {
               setLogs((prev) => prev + `\n[完成: ${data.status}] ${data.error}\n`);
             }
+            void refreshTasks();
             stop?.();
           }
         },
@@ -101,7 +257,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
     }
 
     return () => stop?.();
-  }, [target]);
+  }, [markRead, refreshTasks, target]);
 
   useEffect(() => {
     if (autoScroll && logRef.current) {
@@ -109,10 +265,27 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
     }
   }, [logs, autoScroll]);
 
-  const openTask = (taskId: string, title?: string) => setTarget({ kind: 'task', taskId, title });
-  const openNodeLogs = (clusterId: string, nodeId: string, title?: string) =>
+  const openTask = useCallback(
+    (taskId: string, title?: string) => {
+      trackedRef.current.add(taskId);
+      setTarget({ kind: 'task', taskId, title });
+      void refreshTasks();
+    },
+    [refreshTasks],
+  );
+
+  const openTaskList = useCallback(() => {
+    setTarget({ kind: 'list' });
+    void refreshTasks();
+  }, [refreshTasks]);
+
+  const openNodeLogs = useCallback((clusterId: string, nodeId: string, title?: string) => {
     setTarget({ kind: 'node-logs', clusterId, nodeId, title });
-  const close = () => setTarget(null);
+  }, []);
+
+  const close = useCallback(() => setTarget(null), []);
+
+  const markAllRead = useCallback(() => markRead(unreadIds), [markRead, unreadIds]);
 
   const handleCopyLogs = async () => {
     if (!logs) return;
@@ -126,66 +299,187 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const drawerTitle =
+    target?.kind === 'list' ? (
+      <>
+        <TerminalIcon className="h-4 w-4 text-indigo-500 shrink-0" />
+        <span>后台运维任务</span>
+      </>
+    ) : target?.kind === 'task' ? (
+      <>
+        <TerminalIcon className="h-4 w-4 text-indigo-500 shrink-0" />
+        <span className="truncate">{target.title || formatActionLabel(detailTask?.action || '')}</span>
+        {taskStatus && <StatusBadge value={taskStatus} />}
+      </>
+    ) : (
+      <>
+        <TerminalIcon className="h-4 w-4 text-indigo-500 shrink-0" />
+        <span className="truncate">{target?.title || '节点实时服务日志'}</span>
+      </>
+    );
+
+  const drawerSubtitle =
+    target?.kind === 'list'
+      ? runningCount > 0
+        ? `${runningCount} 个任务正在后台执行，切走页面不会中断`
+        : '当前没有运行中的后台任务，展示最近任务记录'
+      : target?.kind === 'task'
+      ? `任务 ID: ${target.taskId}${detailTask ? ` · 耗时 ${formatTaskDuration(detailTask.started_at, detailTask.finished_at, detailTask.created_at, nowMs)}` : ''}`
+      : '实时流式输出（SSH journalctl）';
+
   return (
-    <Ctx.Provider value={{ openTask, openNodeLogs, close }}>
+    <Ctx.Provider
+      value={{
+        tasks,
+        runningCount,
+        unreadCount: unreadIds.length,
+        loadingTasks,
+        openTask,
+        openTaskList,
+        openNodeLogs,
+        refreshTasks,
+        markAllRead,
+        close,
+      }}
+    >
       {children}
       {target && (
         <Drawer
-          title={
-            <>
-              <TerminalIcon className="h-4 w-4 text-indigo-500 shrink-0" />
-              <span className="truncate">
-                {target.kind === 'task'
-                  ? target.title || `运维任务 ${target.taskId}`
-                  : target.title || '节点实时服务日志'}
-              </span>
-              {taskStatus && <StatusBadge value={taskStatus} />}
-            </>
-          }
-          subtitle={target.kind === 'task' ? `任务 ID: ${target.taskId}` : '实时流式输出（SSH journalctl）'}
-          width="2xl"
+          title={drawerTitle}
+          subtitle={drawerSubtitle}
+          width={target.kind === 'list' ? 'xl' : '2xl'}
           onClose={close}
           headerExtra={
-            <div className="flex items-center gap-1.5">
-              <label className="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 mr-1">
-                <input
-                  type="checkbox"
-                  checked={autoScroll}
-                  onChange={(e) => setAutoScroll(e.target.checked)}
-                />
-                <span>自动滚动</span>
-              </label>
+            target.kind === 'list' ? (
+              <Button size="sm" onClick={() => void refreshTasks()} loading={loadingTasks}>
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>刷新</span>
+              </Button>
+            ) : target.kind === 'task' ? (
+              <div className="flex items-center gap-1.5">
+                <Button size="sm" onClick={openTaskList}>
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">任务列表</span>
+                </Button>
+                <label className="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 mx-1">
+                  <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} />
+                  <span>自动滚动</span>
+                </label>
+                <button
+                  type="button"
+                  disabled={!logs}
+                  onClick={() => void handleCopyLogs()}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copied ? '已复制' : '复制日志'}</span>
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <label className="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 mr-1">
+                  <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} />
+                  <span>自动滚动</span>
+                </label>
+                <button
+                  type="button"
+                  disabled={!logs}
+                  onClick={() => void handleCopyLogs()}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copied ? '已复制' : '复制日志'}</span>
+                </button>
+              </div>
+            )
+          }
+          bodyClassName={target.kind === 'list' ? 'px-5 py-4 space-y-3 bg-white dark:bg-slate-900' : 'flex flex-col p-0 overflow-hidden bg-slate-950'}
+          footer={
+            <div className="flex items-center justify-between gap-2 w-full text-xs">
               <button
                 type="button"
-                disabled={!logs}
-                onClick={() => void handleCopyLogs()}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40"
+                onClick={() => {
+                  close();
+                  navigate('/operations');
+                }}
+                className="inline-flex items-center gap-1 text-indigo-600 hover:underline dark:text-indigo-400 font-medium"
               >
-                {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copied ? '已复制' : '复制日志'}</span>
+                <span>查看全部运维任务</span>
+                <ExternalLink className="w-3.5 h-3.5" />
               </button>
+              {target.kind === 'list' && unreadIds.length > 0 && (
+                <Button size="sm" onClick={markAllRead}>
+                  异常提醒全部已读
+                </Button>
+              )}
             </div>
           }
-          bodyClassName="flex flex-col p-0 overflow-hidden bg-slate-950"
         >
-          {steps.length > 0 && (
-            <div className="max-h-48 overflow-y-auto border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-6 py-3 shrink-0">
-              <div className="space-y-2 text-xs">
-                {steps.map((s, idx) => (
-                  <div key={s.id || idx} className="flex items-center justify-between gap-2">
-                    <span className="truncate font-medium text-slate-700 dark:text-slate-200">{s.name}</span>
-                    <StatusBadge value={s.status} />
+          {target.kind === 'list' ? (
+            tasks.length === 0 ? (
+              <EmptyState title="暂无运维任务记录" description="发起集群部署、升级或节点维护操作后，这里会实时展示任务进度。" />
+            ) : (
+              tasks.slice(0, 20).map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => openTask(t.id, formatActionLabel(t.action))}
+                  className="w-full text-left rounded-xl border border-slate-200/80 dark:border-slate-800 p-3.5 hover:border-indigo-400 hover:bg-indigo-50/30 dark:hover:bg-indigo-500/5 transition space-y-1.5"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">
+                        {formatActionLabel(t.action)}
+                      </div>
+                      <div className="font-mono text-[11px] text-slate-400 truncate">
+                        {t.action} · {t.target_type}:{t.target_id}
+                      </div>
+                    </div>
+                    <StatusBadge value={t.status} />
                   </div>
-                ))}
-              </div>
-            </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap gap-x-3 gap-y-0.5">
+                    <span>触发人：{t.triggered_by || '-'}</span>
+                    <span>开始：{fmtTime(t.started_at || t.created_at)}</span>
+                    <span>耗时：{formatTaskDuration(t.started_at, t.finished_at, t.created_at, nowMs)}</span>
+                  </div>
+                  {t.error_message && (
+                    <div className="text-xs text-rose-600 dark:text-rose-400 line-clamp-2 break-words">
+                      {t.error_message}
+                    </div>
+                  )}
+                </button>
+              ))
+            )
+          ) : (
+            <>
+              {target.kind === 'task' && detailTask?.error_message && (
+                <div className="px-6 py-2.5 bg-rose-50 dark:bg-rose-950/60 border-b border-rose-200/80 dark:border-rose-900 text-xs text-rose-800 dark:text-rose-200 shrink-0 break-words">
+                  {detailTask.error_message}
+                </div>
+              )}
+              {steps.length > 0 && (
+                <div className="max-h-52 overflow-y-auto border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-6 py-3 shrink-0">
+                  <div className="space-y-2 text-xs">
+                    {steps.map((s, idx) => (
+                      <div key={s.id || idx} className="space-y-0.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-medium text-slate-700 dark:text-slate-200">{s.name}</span>
+                          <StatusBadge value={s.status} />
+                        </div>
+                        {s.error && <div className="text-[11px] text-rose-600 dark:text-rose-400 break-words">{s.error}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <pre
+                ref={logRef}
+                className="flex-1 overflow-auto bg-slate-950 p-5 font-mono text-xs leading-relaxed text-slate-100 whitespace-pre-wrap break-all"
+              >
+                {logs || '任务正在后台执行，等待实时日志输出...'}
+              </pre>
+            </>
           )}
-          <pre
-            ref={logRef}
-            className="flex-1 overflow-auto bg-slate-950 p-5 font-mono text-xs leading-relaxed text-slate-100 whitespace-pre-wrap break-all"
-          >
-            {logs || '等待日志输出...'}
-          </pre>
         </Drawer>
       )}
     </Ctx.Provider>

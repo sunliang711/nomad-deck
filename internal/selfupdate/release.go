@@ -261,12 +261,24 @@ func parseSums(sums []byte, wantName string) (string, error) {
 // archive, verifies Ed25519 signature and SHA-256 digest, atomically extracts
 // the nomad-deck binary to destPath, and dry-runs --version.
 func VerifyAndExtract(ctx context.Context, client *http.Client, rel *ReleaseInfo, pubKey ed25519.PublicKey, destPath string, verifyFn func(context.Context, string, string) error) error {
+	return VerifyAndExtractWithProgress(ctx, client, rel, pubKey, destPath, verifyFn, nil)
+}
+
+// VerifyAndExtractWithProgress behaves like VerifyAndExtract and optionally
+// reports stage and byte-download progress.
+func VerifyAndExtractWithProgress(ctx context.Context, client *http.Client, rel *ReleaseInfo, pubKey ed25519.PublicKey, destPath string, verifyFn func(context.Context, string, string) error, onProgress func(stage string, done, total int64)) error {
+	emit := func(stage string, done, total int64) {
+		if onProgress != nil {
+			onProgress(stage, done, total)
+		}
+	}
 	if !rel.AssetsComplete {
 		return errors.New("目标版本缺少当前平台程序包或签名摘要文件")
 	}
 	if len(pubKey) != ed25519.PublicKeySize {
 		return errors.New("发布验签公钥无效")
 	}
+	emit("download", 0, 0)
 	sums, err := downloadBytes(ctx, client, rel.SumsURL, maxSumsBytes)
 	if err != nil {
 		return fmt.Errorf("下载 SHA256SUMS 失败：%w", err)
@@ -275,18 +287,6 @@ func VerifyAndExtract(ctx context.Context, client *http.Client, rel *ReleaseInfo
 	if err != nil {
 		return fmt.Errorf("下载 SHA256SUMS.sig 失败：%w", err)
 	}
-	sig, err := DecodeSignature(sigRaw)
-	if err != nil {
-		return err
-	}
-	if !ed25519.Verify(pubKey, sums, sig) {
-		return errors.New("SHA256SUMS Ed25519 签名校验失败，已中止更新")
-	}
-	wantSHA, err := parseSums(sums, rel.ArchiveName)
-	if err != nil {
-		return err
-	}
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rel.ArchiveURL, nil)
 	if err != nil {
 		return err
@@ -312,11 +312,37 @@ func VerifyAndExtract(ctx context.Context, client *http.Client, rel *ReleaseInfo
 	defer os.Remove(tmpTarPath)
 
 	h := sha256.New()
-	if _, err := io.Copy(tmpTar, io.TeeReader(resp.Body, h)); err != nil {
+	total := resp.ContentLength
+	if total < 0 {
+		total = 0
+	}
+	var done int64
+	lastEmit := time.Now()
+	pr := &progressWriter{onWrite: func(n int) {
+		done += int64(n)
+		if time.Since(lastEmit) >= 150*time.Millisecond {
+			lastEmit = time.Now()
+			emit("download", done, total)
+		}
+	}}
+	if _, err := io.Copy(io.MultiWriter(tmpTar, h, pr), resp.Body); err != nil {
 		tmpTar.Close()
 		return fmt.Errorf("接收程序包失败：%w", err)
 	}
+	emit("download", done, total)
 	if err := tmpTar.Close(); err != nil {
+		return err
+	}
+	emit("verify", done, total)
+	sig, err := DecodeSignature(sigRaw)
+	if err != nil {
+		return err
+	}
+	if !ed25519.Verify(pubKey, sums, sig) {
+		return errors.New("SHA256SUMS Ed25519 签名校验失败，已中止更新")
+	}
+	wantSHA, err := parseSums(sums, rel.ArchiveName)
+	if err != nil {
 		return err
 	}
 	if gotSHA := hex.EncodeToString(h.Sum(nil)); gotSHA != wantSHA {
@@ -334,6 +360,17 @@ func VerifyAndExtract(ctx context.Context, client *http.Client, rel *ReleaseInfo
 		return fmt.Errorf("新版本试运行校验失败：%w", err)
 	}
 	return nil
+}
+
+type progressWriter struct {
+	onWrite func(int)
+}
+
+func (w *progressWriter) Write(p []byte) (int, error) {
+	if w.onWrite != nil && len(p) > 0 {
+		w.onWrite(len(p))
+	}
+	return len(p), nil
 }
 
 func extractBinary(tarGzPath, destPath string) error {

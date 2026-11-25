@@ -17,6 +17,7 @@ import {
   SectionTabs,
   Select,
   StatusBadge,
+  Switch,
   TermLabel,
 } from '../components/UI';
 
@@ -48,8 +49,6 @@ const settingMeta: SettingItemMeta[] = [
   { key: 'upgrade.max_minor_skip', group: 'releases', label: '滚动升级允许跨小版本上限', tip: '例如设为 2 时，不允许从 1.7 直接跨 3 个次版本升到 1.10，防止 Raft 状态机不兼容。', type: 'number' },
   { key: 'self_update.channel', group: 'releases', label: '自更新发布通道', type: 'select', options: ['stable', 'prerelease'] },
   { key: 'self_update.backup_retention', group: 'releases', label: '升级前数据库备份保留份数', type: 'number' },
-  { key: 'proxy.use_for_releases', group: 'releases', label: '部署/升级默认勾选系统代理', type: 'bool' },
-  { key: 'proxy.use_for_self_update', group: 'releases', label: '自更新默认勾选系统代理', type: 'bool' },
 
   { key: 'snapshot.retention_count', group: 'clusters', label: '定时快照默认保留份数', type: 'number' },
   { key: 'snapshot.dir', group: 'clusters', label: '快照存储目录（留空为默认）', type: 'text' },
@@ -71,12 +70,14 @@ export function SettingsPage() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingProxy, setSavingProxy] = useState(false);
   const [testingProxy, setTestingProxy] = useState(false);
+  const [clearingProxy, setClearingProxy] = useState(false);
 
   const [settings, setSettings] = useState<Record<string, any>>({});
   const [savedSettingsSnap, setSavedSettingsSnap] = useState('');
 
   const [proxy, setProxy] = useState<any>({
     configured: false,
+    mode: 'direct' as 'direct' | 'custom',
     type: 'http',
     host: '',
     port: 3128,
@@ -84,6 +85,8 @@ export function SettingsPage() {
     password: '',
     password_set: false,
     no_proxy: '',
+    use_for_releases: false,
+    use_for_self_update: false,
   });
   const [savedProxySnap, setSavedProxySnap] = useState('');
   const [proxyTest, setProxyTest] = useState<any>(null);
@@ -101,12 +104,15 @@ export function SettingsPage() {
 
   const buildProxySnap = (p: any) =>
     JSON.stringify({
+      mode: p.mode,
       type: p.type,
       host: (p.host || '').trim(),
       port: Number(p.port),
       username: (p.username || '').trim(),
       password: p.password || '',
       no_proxy: (p.no_proxy || '').trim(),
+      use_for_releases: Boolean(p.use_for_releases),
+      use_for_self_update: Boolean(p.use_for_self_update),
     });
 
   const load = useCallback(async () => {
@@ -121,6 +127,7 @@ export function SettingsPage() {
       const pv = pRes.proxy || {};
       const nextProxy = {
         configured: Boolean(pv.configured),
+        mode: (pv.configured ? 'custom' : 'direct') as 'direct' | 'custom',
         type: pv.type || 'http',
         host: pv.host || '',
         port: pv.port || 3128,
@@ -128,6 +135,8 @@ export function SettingsPage() {
         password: '',
         password_set: Boolean(pv.password_set),
         no_proxy: (pv.no_proxy || []).join(','),
+        use_for_releases: Boolean(nextSettings['proxy.use_for_releases']),
+        use_for_self_update: Boolean(nextSettings['proxy.use_for_self_update']),
       };
       setProxy(nextProxy);
       setSavedProxySnap(buildProxySnap(nextProxy));
@@ -194,6 +203,29 @@ export function SettingsPage() {
     }
   };
 
+  /** 粘贴 http://user:pass@host:port 或 socks5://… 时自动拆分填入协议/主机/端口/认证字段。 */
+  const pasteProxyURL = (text: string): boolean => {
+    try {
+      const url = new URL(text.trim());
+      if (!['http:', 'https:', 'socks5:', 'socks5h:'].includes(url.protocol)) return false;
+      const proto = url.protocol === 'https:' ? 'https' : url.protocol === 'http:' ? 'http' : 'socks5';
+      const defaultPort = proto === 'socks5' ? 1080 : proto === 'https' ? 443 : 8080;
+      setProxy((prev: any) => ({
+        ...prev,
+        mode: 'custom',
+        type: proto,
+        host: url.hostname.replace(/^\[|\]$/g, ''),
+        port: Number(url.port) || defaultPort,
+        username: decodeURIComponent(url.username),
+        password: url.password ? decodeURIComponent(url.password) : prev.password,
+      }));
+      toast.success('已按代理 URL 自动拆分填入各字段');
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const proxyPayload = (enabled = true) => ({
     enabled,
     type: proxy.type,
@@ -207,13 +239,40 @@ export function SettingsPage() {
       .filter(Boolean),
   });
 
+  const switchProxyMode = (nextMode: 'direct' | 'custom') => {
+    setProxy((prev: any) => {
+      if (nextMode === 'custom' && !prev.configured && !prev.use_for_releases && !prev.use_for_self_update) {
+        return { ...prev, mode: nextMode, use_for_releases: true, use_for_self_update: true };
+      }
+      return { ...prev, mode: nextMode };
+    });
+  };
+
   const saveProxy = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr('');
     setSavingProxy(true);
     try {
-      await apiPut('/api/v1/settings/proxy', proxyPayload(true));
-      toast.success('系统代理设置已保存');
+      if (proxy.mode === 'direct') {
+        await Promise.all([
+          apiPut('/api/v1/settings/proxy', { enabled: false }),
+          apiPut('/api/v1/settings', {
+            'proxy.use_for_releases': false,
+            'proxy.use_for_self_update': false,
+          }),
+        ]);
+        setProxyTest(null);
+        toast.success('已切换为直连模式（已关闭下载代理）');
+      } else {
+        await Promise.all([
+          apiPut('/api/v1/settings/proxy', proxyPayload(true)),
+          apiPut('/api/v1/settings', {
+            'proxy.use_for_releases': Boolean(proxy.use_for_releases),
+            'proxy.use_for_self_update': Boolean(proxy.use_for_self_update),
+          }),
+        ]);
+        toast.success('下载代理与默认使用策略已保存');
+      }
       await load();
     } catch (ex: any) {
       toast.error(ex?.message || '保存代理失败');
@@ -224,8 +283,8 @@ export function SettingsPage() {
 
   const clearProxy = async () => {
     if (
-      !(await askConfirm('确认清空当前系统代理配置吗？', {
-        title: '清空系统代理',
+      !(await askConfirm('确认清空当前下载代理地址与凭据吗？', {
+        title: '清空下载代理',
         confirmText: '确认清空',
         danger: true,
       }))
@@ -233,13 +292,22 @@ export function SettingsPage() {
       return;
     }
     setErr('');
+    setClearingProxy(true);
     try {
-      await apiPut('/api/v1/settings/proxy', { enabled: false });
+      await Promise.all([
+        apiPut('/api/v1/settings/proxy', { enabled: false }),
+        apiPut('/api/v1/settings', {
+          'proxy.use_for_releases': false,
+          'proxy.use_for_self_update': false,
+        }),
+      ]);
       setProxyTest(null);
-      toast.success('已清空系统代理配置');
+      toast.success('已清空下载代理配置');
       await load();
     } catch (ex: any) {
       toast.error(ex?.message || '清空代理失败');
+    } finally {
+      setClearingProxy(false);
     }
   };
 
@@ -264,10 +332,10 @@ export function SettingsPage() {
     <div className="space-y-5">
       <PageHeader
         title="系统设置"
-        subtitle="全局调度参数、官方发行版下载源、网络代理与数据库主密钥轮换"
+        subtitle="全局调度参数、官方发行版下载源、下载代理与数据库主密钥轮换"
         actions={
-          <Button onClick={() => void load()} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          <Button onClick={() => void load()} loading={loading}>
+            <RefreshCw className="h-4 w-4" />
             <span>刷新</span>
           </Button>
         }
@@ -280,9 +348,9 @@ export function SettingsPage() {
           { id: 'clusters', label: '集群与快照', tip: '管理 Raft 快照目录与保留数、证书告警阈值及终端超时。' },
           {
             id: 'proxy',
-            label: '网络代理',
-            tip: '控制面下载官方安装包、自更新及节点 Docker 拉取镜像时可选走的代理。',
-            badge: proxy.configured ? '已配置' : '未配置',
+            label: '下载代理',
+            tip: '配置控制面访问 HashiCorp / GitHub / Release 下载时使用的代理与默认生效范围。',
+            badge: proxy.configured ? '已启用' : '直连',
           },
           ...(isAdmin
             ? [
@@ -360,7 +428,7 @@ export function SettingsPage() {
                     <span role="status" className={`text-xs ${settingsDirty ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'}`}>
                       {settingsDirty ? '当前表单有未保存的更改' : '已与服务器配置同步'}
                     </span>
-                    <Button type="submit" variant="primary" disabled={savingSettings || !settingsDirty}>
+                    <Button type="submit" variant="primary" loading={savingSettings} disabled={!settingsDirty}>
                       {savingSettings ? '保存中...' : settingsDirty ? '保存系统设置' : '已保存'}
                     </Button>
                   </div>
@@ -371,80 +439,145 @@ export function SettingsPage() {
 
           {tab === 'proxy' && (
             <Card
-              title="系统代理（HTTP / HTTPS / SOCKS5）"
-              actions={<StatusBadge value={proxy.configured ? 'enabled' : 'disabled'} label={proxy.configured ? '已配置' : '未配置'} />}
+              title="下载代理（HTTP / HTTPS / SOCKS5）"
+              actions={<StatusBadge value={proxy.configured ? 'enabled' : 'disabled'} label={proxy.configured ? '已启用自定义代理' : '直连'} />}
             >
-              <form onSubmit={saveProxy} className="space-y-4 text-xs">
+              <form onSubmit={saveProxy} className="space-y-5 text-xs">
                 <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
-                  此处仅保存系统代理地址与凭据；具体操作是否走代理，由部署、升级、自更新页面的“使用系统代理”勾选项及“版本与分发源”的默认勾选决定。
+                  作用于控制面拉取 Nomad / Vault 官方安装包、控制面 GitHub Release 自更新以及版本检查请求，保存后立即生效。
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">代理协议</label>
-                    <div className="inline-flex rounded-lg border border-slate-300 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800 w-full">
-                      {(['http', 'https', 'socks5'] as const).map((proto) => (
-                        <button
-                          key={proto}
-                          type="button"
-                          disabled={!isAdmin}
-                          onClick={() => setProxy({ ...proxy, type: proto })}
-                          className={`flex-1 px-2.5 py-2 text-xs font-medium uppercase transition border-r last:border-r-0 border-slate-300 dark:border-slate-700 ${
-                            proxy.type === proto
-                              ? 'bg-indigo-600 text-white'
-                              : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
-                          }`}
-                        >
-                          {proto}
-                        </button>
-                      ))}
-                    </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">出站模式</label>
+                  <div className="inline-flex rounded-lg border border-slate-300 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800">
+                    <button
+                      type="button"
+                      disabled={!isAdmin}
+                      onClick={() => switchProxyMode('direct')}
+                      className={`px-4 py-2 text-xs font-medium transition border-r border-slate-300 dark:border-slate-700 ${
+                        proxy.mode === 'direct'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      直连
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!isAdmin}
+                      onClick={() => switchProxyMode('custom')}
+                      className={`px-4 py-2 text-xs font-medium transition ${
+                        proxy.mode === 'custom'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      自定义下载代理
+                    </button>
                   </div>
-                  <Input
-                    label="主机"
-                    required
-                    disabled={!isAdmin}
-                    value={proxy.host}
-                    onChange={(e) => setProxy({ ...proxy, host: e.target.value })}
-                  />
-                  <Input
-                    label="端口"
-                    type="number"
-                    required
-                    disabled={!isAdmin}
-                    value={proxy.port}
-                    onChange={(e) => setProxy({ ...proxy, port: Number(e.target.value) })}
-                  />
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <Input
-                    label="用户名"
-                    disabled={!isAdmin}
-                    value={proxy.username}
-                    onChange={(e) => setProxy({ ...proxy, username: e.target.value })}
-                  />
-                  <SecretInput
-                    label="密码"
-                    disabled={!isAdmin}
-                    value={proxy.password}
-                    hasStoredValue={Boolean(proxy.password_set)}
-                    resetKey={proxy.password_set}
-                    onChangeValue={(v) => setProxy({ ...proxy, password: v })}
-                    onRevealStored={
-                      isAdmin
-                        ? async () => {
-                            const r = await apiPost('/api/v1/settings/proxy/reveal', {});
-                            return r.password || '';
-                          }
-                        : undefined
-                    }
-                  />
-                </div>
-                <Input
-                  label={<TermLabel term="no_proxy（逗号分隔）" tip="不经过代理直连的主机名、IP 或 CIDR，多个值用英文逗号分隔。" />}
-                  disabled={!isAdmin}
-                  value={proxy.no_proxy}
-                  onChange={(e) => setProxy({ ...proxy, no_proxy: e.target.value })}
-                />
+
+                {proxy.mode === 'custom' && (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">代理协议</label>
+                        <div className="inline-flex rounded-lg border border-slate-300 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800 w-full">
+                          {(['http', 'https', 'socks5'] as const).map((proto) => (
+                            <button
+                              key={proto}
+                              type="button"
+                              disabled={!isAdmin}
+                              onClick={() => setProxy({ ...proxy, type: proto })}
+                              className={`flex-1 px-2.5 py-2 text-xs font-medium uppercase transition border-r last:border-r-0 border-slate-300 dark:border-slate-700 ${
+                                proxy.type === proto
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                              }`}
+                            >
+                              {proto}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <Input
+                        label="主机（支持直接粘贴 http://user:pass@host:port）"
+                        required
+                        disabled={!isAdmin}
+                        placeholder="proxy.example.com"
+                        value={proxy.host}
+                        onPaste={(e) => {
+                          const text = e.clipboardData?.getData('text') || '';
+                          if (pasteProxyURL(text)) e.preventDefault();
+                        }}
+                        onChange={(e) => setProxy({ ...proxy, host: e.target.value })}
+                      />
+                      <Input
+                        label="端口"
+                        type="number"
+                        required
+                        disabled={!isAdmin}
+                        value={proxy.port}
+                        onChange={(e) => setProxy({ ...proxy, port: Number(e.target.value) })}
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <Input
+                        label="用户名（可选）"
+                        disabled={!isAdmin}
+                        value={proxy.username}
+                        onChange={(e) => setProxy({ ...proxy, username: e.target.value })}
+                      />
+                      <SecretInput
+                        label="密码（可选）"
+                        disabled={!isAdmin}
+                        value={proxy.password}
+                        hasStoredValue={Boolean(proxy.password_set)}
+                        resetKey={proxy.password_set}
+                        onChangeValue={(v) => setProxy({ ...proxy, password: v })}
+                        onRevealStored={
+                          isAdmin
+                            ? async () => {
+                                const r = await apiPost('/api/v1/settings/proxy/reveal', {});
+                                return r.password || '';
+                              }
+                            : undefined
+                        }
+                      />
+                    </div>
+                    <Input
+                      label={<TermLabel term="no_proxy（逗号分隔）" tip="不经过代理直连的主机名、IP 或 CIDR，多个值用英文逗号分隔。" />}
+                      disabled={!isAdmin}
+                      value={proxy.no_proxy}
+                      onChange={(e) => setProxy({ ...proxy, no_proxy: e.target.value })}
+                    />
+
+                    <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 p-3.5 space-y-2.5">
+                      <div className="font-medium text-slate-700 dark:text-slate-200">默认适用范围</div>
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                        <div className="flex items-center gap-2.5">
+                          <Switch
+                            checked={Boolean(proxy.use_for_releases)}
+                            disabled={!isAdmin}
+                            onChange={(v) => setProxy({ ...proxy, use_for_releases: v })}
+                            label="默认用于集群部署 / 升级 / 版本列表"
+                          />
+                          <span className="text-slate-600 dark:text-slate-300">默认用于集群部署 / 升级与版本列表</span>
+                        </div>
+                        <div className="flex items-center gap-2.5">
+                          <Switch
+                            checked={Boolean(proxy.use_for_self_update)}
+                            disabled={!isAdmin}
+                            onChange={(v) => setProxy({ ...proxy, use_for_self_update: v })}
+                            label="默认用于控制面自更新"
+                          />
+                          <span className="text-slate-600 dark:text-slate-300">默认用于控制面自更新与检查</span>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+
                 {isAdmin && (
                   <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
                     <span role="status" className={`text-xs ${proxyDirty ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'}`}>
@@ -452,19 +585,22 @@ export function SettingsPage() {
                     </span>
                     <div className="flex flex-wrap gap-2">
                       {proxy.configured && (
-                        <Button variant="danger" onClick={() => void clearProxy()}>
+                        <Button variant="danger" loading={clearingProxy} onClick={() => void clearProxy()}>
                           清空代理
                         </Button>
                       )}
-                      <Button onClick={() => void testProxy()} disabled={testingProxy}>
-                        {testingProxy ? '测试中...' : '测试连通性'}
-                      </Button>
-                      <Button type="submit" variant="primary" disabled={savingProxy}>
+                      {proxy.mode === 'custom' && (
+                        <Button onClick={() => void testProxy()} loading={testingProxy}>
+                          {testingProxy ? '测试中...' : '用当前表单测试'}
+                        </Button>
+                      )}
+                      <Button type="submit" variant="primary" loading={savingProxy} disabled={!proxyDirty && proxy.mode !== 'direct'}>
                         {savingProxy ? '保存中...' : '保存代理'}
                       </Button>
                     </div>
                   </div>
                 )}
+
                 {proxyTest && (
                   <div className="space-y-1.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200/70 dark:border-slate-800 p-3.5">
                     <div>
@@ -493,7 +629,7 @@ export function SettingsPage() {
                 />
               }
               actions={
-                <Button size="sm" onClick={() => void load()}>
+                <Button size="sm" onClick={() => void load()} loading={loading}>
                   <RefreshCw className="h-3.5 w-3.5" />
                   <span>刷新</span>
                 </Button>

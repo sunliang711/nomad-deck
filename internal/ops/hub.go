@@ -2,15 +2,23 @@ package ops
 
 import "sync"
 
+// Progress carries structured stage/download progress for long tasks.
+type Progress struct {
+	Stage string `json:"stage"`
+	Done  int64  `json:"done,omitempty"`
+	Total int64  `json:"total,omitempty"`
+}
+
 // Event is pushed to live subscribers of a task.
 type Event struct {
-	Type   string `json:"type"` // log | step | done
-	StepID string `json:"step_id,omitempty"`
-	Offset int64  `json:"offset,omitempty"` // byte offset of Data within the step log
-	Data   string `json:"data,omitempty"`
-	Status string `json:"status,omitempty"`
-	Name   string `json:"name,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Type     string    `json:"type"` // log | step | progress | done
+	StepID   string    `json:"step_id,omitempty"`
+	Offset   int64     `json:"offset,omitempty"` // byte offset of Data within the step log
+	Data     string    `json:"data,omitempty"`
+	Status   string    `json:"status,omitempty"`
+	Name     string    `json:"name,omitempty"`
+	Error    string    `json:"error,omitempty"`
+	Progress *Progress `json:"progress,omitempty"`
 }
 
 // Hub fans out task events to subscribers. Slow subscribers are dropped

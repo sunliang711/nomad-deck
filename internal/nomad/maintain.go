@@ -390,24 +390,33 @@ func (s *Service) Upgrade(ctx context.Context, actor audit.Actor, clusterID stri
 	if err := s.requireOperable(cl); err != nil {
 		return nil, err
 	}
-	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
+	reqProxy := in.UseProxy
+	if reqProxy == nil && cl.Settings.UseProxy != nil {
+		reqProxy = cl.Settings.UseProxy
+	}
+	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, reqProxy)
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := s.resolveVersion(ctx, hc, in.Version)
-	if err != nil {
-		return nil, err
-	}
-	in.Version = resolved
-	plan, err := s.PlanUpgrade(ctx, clusterID, in.Version)
-	if err != nil {
-		return nil, err
-	}
-	if !plan.Check.Allowed {
-		return nil, conflict("upgrade_not_allowed", "版本跨度校验未通过：%s", plan.Check.Reason)
-	}
-	if plan.Check.NeedsConfirmation && !in.Confirm {
-		return nil, conflict("confirmation_required", "本次升级跨越 %d 个小版本或经过须人工确认的版本，请查看升级计划后确认", plan.Check.MinorSkip)
+	rawVer := strings.TrimSpace(in.Version)
+	isLatest := rawVer == "" || strings.EqualFold(rawVer, "latest")
+	if !isLatest {
+		if err := validVersion(rawVer); err != nil {
+			return nil, err
+		}
+		in.Version = rawVer
+		plan, err := s.PlanUpgrade(ctx, clusterID, in.Version)
+		if err != nil {
+			return nil, err
+		}
+		if !plan.Check.Allowed {
+			return nil, conflict("upgrade_not_allowed", "版本跨度校验未通过：%s", plan.Check.Reason)
+		}
+		if plan.Check.NeedsConfirmation && !in.Confirm {
+			return nil, conflict("confirmation_required", "本次升级跨越 %d 个小版本或经过须人工确认的版本，请查看升级计划后确认", plan.Check.MinorSkip)
+		}
+	} else {
+		in.Version = "latest"
 	}
 	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
 	if err != nil {
@@ -418,6 +427,11 @@ func (s *Service) Upgrade(ctx context.Context, actor audit.Actor, clusterID stri
 	}
 	if in.ClientBatch <= 0 {
 		in.ClientBatch = 1
+	}
+	if in.UseProxy != nil {
+		v := hc.UseProxy
+		cl.Settings.UseProxy = &v
+		_ = s.saveSettings(ctx, cl)
 	}
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.upgrade", TargetType: "cluster", TargetID: clusterID,
 		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name,
@@ -439,6 +453,35 @@ func (s *Service) runUpgrade(ctx context.Context, t *ops.Task, clusterID string,
 	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(in.Version), "latest") || strings.TrimSpace(in.Version) == "" {
+		st, err := t.Step("解析与校验目标版本", "")
+		if err != nil {
+			return err
+		}
+		resolved, rerr := s.resolveVersion(ctx, hc, "latest")
+		if rerr != nil {
+			st.Finish(rerr, nil)
+			return rerr
+		}
+		in.Version = resolved
+		plan, perr := s.PlanUpgrade(ctx, clusterID, in.Version)
+		if perr != nil {
+			st.Finish(perr, nil)
+			return perr
+		}
+		if !plan.Check.Allowed {
+			err := conflict("upgrade_not_allowed", "版本跨度校验未通过：%s", plan.Check.Reason)
+			st.Finish(err, nil)
+			return err
+		}
+		if plan.Check.NeedsConfirmation && !in.Confirm {
+			err := conflict("confirmation_required", "本次升级跨越 %d 个小版本或经过须人工确认的版本，请查看升级计划后确认", plan.Check.MinorSkip)
+			st.Finish(err, nil)
+			return err
+		}
+		st.Logf("已确认升级目标版本：%s", in.Version)
+		st.Finish(nil, nil)
 	}
 	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
 	if err != nil {

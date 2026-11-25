@@ -63,6 +63,8 @@ export function VaultPage() {
   const [cForm, setCForm] = useState({ name: '', mode: 'cluster', public_api_url: '', node_ids: [] as string[] });
   const [deployVer, setDeployVer] = useState('latest');
   const [useProxy, setUseProxy] = useState(false);
+  const [defaultUseProxy, setDefaultUseProxy] = useState(false);
+  const [joinBusy, setJoinBusy] = useState(false);
   const [deployConfirmSwap, setDeployConfirmSwap] = useState(false);
   const [upVer, setUpVer] = useState('');
   const [showJoin, setShowJoin] = useState(false);
@@ -143,9 +145,34 @@ export function VaultPage() {
   useEffect(() => {
     void apiGet('/api/v1/settings').then((r) => {
       setDeployVer(r.settings?.['defaults.vault_version'] || 'latest');
-      setUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
+      setDefaultUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
     }).catch((ex) => setErr(ex.message));
   }, []);
+
+  const cluster = clusters.find((c) => c.id === selectedId);
+  const clusterProxyPref = cluster?.settings?.use_proxy;
+
+  useEffect(() => {
+    setUseProxy(clusterProxyPref !== undefined ? Boolean(clusterProxyPref) : defaultUseProxy);
+  }, [selectedId, clusterProxyPref, defaultUseProxy]);
+
+  const handleToggleProxy = async (next: boolean) => {
+    setUseProxy(next);
+    if (!isAdmin) return;
+    try {
+      if (selectedId) {
+        const res = await apiPut(`/api/v1/clusters/${selectedId}/proxy`, { use_proxy: next });
+        if (res.cluster) {
+          setClusters((prev) => prev.map((c) => (c.id === selectedId ? { ...c, ...res.cluster } : c)));
+        }
+      }
+      await apiPut('/api/v1/settings', { 'proxy.use_for_releases': next });
+      setDefaultUseProxy(next);
+      toast.success(next ? '已开启并保存代理设置' : '已关闭并保存代理设置');
+    } catch (ex: any) {
+      toast.error(ex?.message || '保存代理勾选状态失败');
+    }
+  };
 
   useEffect(() => {
     setRootToken('');
@@ -172,7 +199,6 @@ export function VaultPage() {
     if (selectedId && tab === 'manage') void loadManage();
   }, [selectedId, tab, loadManage]);
 
-  const cluster = clusters.find((c) => c.id === selectedId);
   const clusterNodes = status?.nodes || [];
   const custody = custodyData || {};
 
@@ -265,58 +291,58 @@ export function VaultPage() {
                 upVer={upVer}
                 setUpVer={setUpVer}
                 useProxy={useProxy}
-                setUseProxy={setUseProxy}
+                setUseProxy={(v) => void handleToggleProxy(v)}
                 confirmSwap={deployConfirmSwap}
                 setConfirmSwap={setDeployConfirmSwap}
                 onDeploy={() =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', use_proxy: useProxy, confirm_swap: deployConfirmSwap })
-                    .then((r) => r.task?.id && openTask(r.task.id, '部署 Vault'))
+                  apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', use_proxy: useProxy, confirm_swap: deployConfirmSwap })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, '部署 Vault'); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onUpgrade={() =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', use_proxy: useProxy, confirm: true })
-                    .then((r) => r.task?.id && openTask(r.task.id, '滚动升级 Vault'))
+                  apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', use_proxy: useProxy, confirm: true })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, '滚动升级 Vault'); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onRenewCerts={() =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
-                    .then((r) => r.task?.id && openTask(r.task.id))
+                  apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, '续期 Vault 证书'); })
                     .catch((ex) => setErr(ex.message))
                 }
-                onRotateCA={() =>
+                onRotateCA={() => {
                   setPwAction({
                     title: '确认轮换 Vault 集群 CA',
                     run: async (pw) => {
                       const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
                       if (r.task?.id) openTask(r.task.id, '轮换 Vault CA');
                     },
-                  })
-                }
+                  });
+                }}
                 onDoctor={() =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
+                  apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
                     .then((r) => toast.info(r.report?.summary || 'Doctor 完成'))
                     .catch((ex) => setErr(ex.message))
                 }
                 onReconcile={() =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
-                    .then((r) => toast.success(r.report?.message || '已核对'))
+                  apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
+                    .then((r) => { toast.success(r.report?.message || '已核对'); return loadDetail(); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onOpenJoin={() => { setJoinNodeId(''); setConfirmSwap(false); setShowJoin(true); }}
                 onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Vault 日志: ${n.name}`)}
                 onCheckGate={(n) =>
-                  void apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
+                  apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
                     .then((r) => setGateView(r.gate))
                     .catch((ex) => setErr(ex.message))
                 }
                 onRestartNode={(n) =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
-                    .then((r) => r.task?.id && openTask(r.task.id))
+                  apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, `重启节点: ${n.name}`); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onRemoveNode={(n) =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {})
-                    .then((r) => r.task?.id && openTask(r.task.id))
+                  apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {})
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, `缩容节点: ${n.name}`); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onError={setErr}
@@ -820,11 +846,18 @@ export function VaultPage() {
       <Modal open={showJoin} title="扩容 Vault 节点" onClose={() => setShowJoin(false)}>
         <form
           className="space-y-3 text-xs"
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
-            void apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { use_proxy: useProxy, confirm_swap: confirmSwap })
-              .then((r) => { setShowJoin(false); if (r.task?.id) openTask(r.task.id, '扩容 Vault 节点'); })
-              .catch((ex) => setErr(ex.message));
+            setJoinBusy(true);
+            try {
+              const r = await apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { use_proxy: useProxy, confirm_swap: confirmSwap });
+              setShowJoin(false);
+              if (r.task?.id) openTask(r.task.id, '扩容 Vault 节点');
+            } catch (ex: any) {
+              setErr(ex?.message || '扩容失败');
+            } finally {
+              setJoinBusy(false);
+            }
           }}
         >
           <ErrorAlert message={err} onClose={() => setErr('')} />
@@ -832,12 +865,12 @@ export function VaultPage() {
             <option value="">选择主机</option>
             {nodes.filter((n) => !clusterNodes.some((m: any) => m.node_id === n.id)).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.host})</option>)}
           </Select>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} />使用系统代理</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={useProxy} onChange={(e) => void handleToggleProxy(e.target.checked)} />使用系统代理</label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={confirmSwap} onChange={(e) => setConfirmSwap(e.target.checked)} />确认未加密 Swap 风险</label>
           <p className="text-slate-500">加入主机使用集群当前版本，完成 Raft 加入与解封后核对投票成员状态。</p>
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setShowJoin(false)}>取消</Button>
-            <Button type="submit" variant="primary">确认扩容</Button>
+            <Button type="submit" variant="primary" loading={joinBusy}>确认扩容</Button>
           </div>
         </form>
       </Modal>

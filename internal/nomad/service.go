@@ -71,6 +71,7 @@ type Settings struct {
 	ExecEnabled *bool  `json:"exec_enabled,omitempty"`
 	CNIVersion  string `json:"cni_version,omitempty"`
 	Version     string `json:"version,omitempty"`
+	UseProxy    *bool  `json:"use_proxy,omitempty"`
 	// DockerDefaults are the cluster default Docker Engine settings.
 	DockerDefaults json.RawMessage `json:"docker_defaults,omitempty"`
 	// Consul is reserved for a future Consul integration (65-consul.hcl).

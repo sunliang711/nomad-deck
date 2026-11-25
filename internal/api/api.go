@@ -252,6 +252,7 @@ func (a *API) Handler() http.Handler {
 				r.Put("/clusters/{id}/credentials", a.supplyCredentials)
 				r.Post("/clusters/{id}/reconcile", a.reconcileCluster)
 				r.Put("/clusters/{id}/maintenance", a.setMaintenance)
+				r.Put("/clusters/{id}/proxy", a.setClusterProxy)
 				r.Post("/clusters/{id}/uninstall/plan", a.uninstallPlan)
 				r.Post("/clusters/{id}/uninstall", a.uninstallCluster)
 				r.Post("/clusters/{id}/doctor", a.doctorCluster)

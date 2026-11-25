@@ -540,6 +540,44 @@ func (a *API) setMaintenance(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (a *API) setClusterProxy(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		UseProxy bool `json:"use_proxy"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	c, err := db.GetCluster(r.Context(), a.DB.Reader, chi.URLParam(r, "id"))
+	if errors.Is(err, db.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "集群不存在")
+		return
+	}
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	cfg := map[string]any{}
+	if strings.TrimSpace(c.ConfigJSON) != "" {
+		_ = json.Unmarshal([]byte(c.ConfigJSON), &cfg)
+	}
+	cfg["use_proxy"] = in.UseProxy
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	c.ConfigJSON = string(b)
+	if err := db.UpdateClusterSettings(r.Context(), a.DB.Writer, c, a.DB.Now()); err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	_ = a.Auth.Audit.Record(r.Context(), nil, audit.Event{
+		Actor: a.actor(r), Action: "cluster.proxy_update", ResourceType: "cluster",
+		ResourceID: c.ID, ResourceName: c.Name, Summary: map[string]any{"use_proxy": in.UseProxy},
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"cluster": clusterOf(c)})
+}
+
 func (a *API) uninstallPlan(w http.ResponseWriter, r *http.Request) {
 	d, _, ok := a.driver(w, r)
 	if !ok {

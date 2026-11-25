@@ -59,6 +59,8 @@ export function NomadPage() {
   const [joinNodeId, setJoinNodeId] = useState('');
   const [joinRole, setJoinRole] = useState('server_client');
   const [useProxy, setUseProxy] = useState(false);
+  const [defaultUseProxy, setDefaultUseProxy] = useState(false);
+  const [joinBusy, setJoinBusy] = useState(false);
   const [drainClients, setDrainClients] = useState(true);
   const [gateView, setGateView] = useState<any>(null);
   const [snapPass, setSnapPass] = useState('');
@@ -127,9 +129,34 @@ export function NomadPage() {
   useEffect(() => {
     void apiGet('/api/v1/settings').then((r) => {
       setDeployVer(r.settings?.['defaults.nomad_version'] || 'latest');
-      setUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
+      setDefaultUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
     }).catch((ex) => setErr(ex.message));
   }, []);
+
+  const cluster = clusters.find((c) => c.id === selectedId);
+  const clusterProxyPref = cluster?.settings?.use_proxy;
+
+  useEffect(() => {
+    setUseProxy(clusterProxyPref !== undefined ? Boolean(clusterProxyPref) : defaultUseProxy);
+  }, [selectedId, clusterProxyPref, defaultUseProxy]);
+
+  const handleToggleProxy = async (next: boolean) => {
+    setUseProxy(next);
+    if (!isAdmin) return;
+    try {
+      if (selectedId) {
+        const res = await apiPut(`/api/v1/clusters/${selectedId}/proxy`, { use_proxy: next });
+        if (res.cluster) {
+          setClusters((prev) => prev.map((c) => (c.id === selectedId ? { ...c, ...res.cluster } : c)));
+        }
+      }
+      await apiPut('/api/v1/settings', { 'proxy.use_for_releases': next });
+      setDefaultUseProxy(next);
+      toast.success(next ? '已开启并保存代理设置' : '已关闭并保存代理设置');
+    } catch (ex: any) {
+      toast.error(ex?.message || '保存代理勾选状态失败');
+    }
+  };
 
   useEffect(() => {
     setGateView(null);
@@ -140,7 +167,6 @@ export function NomadPage() {
     return () => clearInterval(t);
   }, [selectedId, tab, loadOpsTab]);
 
-  const cluster = clusters.find((c) => c.id === selectedId);
   const clusterNodes = status?.nodes || [];
 
   const toggleMember = (n: any, checked: boolean) => {
@@ -217,67 +243,67 @@ export function NomadPage() {
                 upVer={upVer}
                 setUpVer={setUpVer}
                 useProxy={useProxy}
-                setUseProxy={setUseProxy}
+                setUseProxy={(v) => void handleToggleProxy(v)}
                 drainClients={drainClients}
                 setDrainClients={setDrainClients}
                 onDeploy={() =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', use_proxy: useProxy })
-                    .then((r) => r.task?.id && openTask(r.task.id, '部署 Nomad'))
+                  apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', use_proxy: useProxy })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, '部署 Nomad'); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onUpgrade={() =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', use_proxy: useProxy, drain_clients: drainClients, confirm: true })
-                    .then((r) => r.task?.id && openTask(r.task.id, '滚动升级 Nomad'))
+                  apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', use_proxy: useProxy, drain_clients: drainClients, confirm: true })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, '滚动升级 Nomad'); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onRenewCerts={() =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
-                    .then((r) => r.task?.id && openTask(r.task.id))
+                  apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, '续期 Nomad 证书'); })
                     .catch((ex) => setErr(ex.message))
                 }
-                onRotateCA={() =>
+                onRotateCA={() => {
                   setPwAction({
                     title: '确认轮换 Nomad 集群 CA',
                     run: async (pw) => {
                       const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
                       if (r.task?.id) openTask(r.task.id, '轮换 Nomad CA');
                     },
-                  })
-                }
-                onRotateGossip={() =>
+                  });
+                }}
+                onRotateGossip={() => {
                   setPwAction({
                     title: '确认轮换 Nomad Gossip 密钥',
                     run: async (pw) => {
                       const r = await apiPost(`/api/v1/clusters/${selectedId}/gossip/rotate`, { current_password: pw });
                       if (r.task?.id) openTask(r.task.id, '轮换 Gossip 密钥');
                     },
-                  })
-                }
+                  });
+                }}
                 onDoctor={() =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
+                  apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
                     .then((r) => toast.info(r.report?.summary || 'Doctor 完成'))
                     .catch((ex) => setErr(ex.message))
                 }
                 onReconcile={() =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
-                    .then((r) => toast.success(r.report?.message || '已核对'))
+                  apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
+                    .then((r) => { toast.success(r.report?.message || '已核对'); return loadOpsTab(); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onOpenJoin={() => { setJoinNodeId(''); setShowJoin(true); }}
                 onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Nomad 日志: ${n.name}`)}
                 onCheckGate={(n) =>
-                  void apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
+                  apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
                     .then((r) => setGateView(r.gate))
                     .catch((ex) => setErr(ex.message))
                 }
                 onRestartNode={(n) =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
-                    .then((r) => r.task?.id && openTask(r.task.id))
+                  apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, `重启节点: ${n.name}`); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onRemoveNode={(n) =>
-                  void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {})
-                    .then((r) => r.task?.id && openTask(r.task.id))
+                  apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {})
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, `缩容节点: ${n.name}`); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onError={setErr}
@@ -520,11 +546,18 @@ export function NomadPage() {
       <Modal open={showJoin} title="扩容 Nomad 节点" onClose={() => setShowJoin(false)}>
         <form
           className="space-y-3 text-xs"
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
-            void apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { role: joinRole, use_proxy: useProxy })
-              .then((r) => { setShowJoin(false); if (r.task?.id) openTask(r.task.id, '扩容 Nomad 节点'); })
-              .catch((ex) => setErr(ex.message));
+            setJoinBusy(true);
+            try {
+              const r = await apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { role: joinRole, use_proxy: useProxy });
+              setShowJoin(false);
+              if (r.task?.id) openTask(r.task.id, '扩容 Nomad 节点');
+            } catch (ex: any) {
+              setErr(ex?.message || '扩容失败');
+            } finally {
+              setJoinBusy(false);
+            }
           }}
         >
           <ErrorAlert message={err} onClose={() => setErr('')} />
@@ -537,10 +570,10 @@ export function NomadPage() {
             <option value="server">server</option>
             <option value="client">client</option>
           </Select>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} />使用系统代理</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={useProxy} onChange={(e) => void handleToggleProxy(e.target.checked)} />使用系统代理</label>
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setShowJoin(false)}>取消</Button>
-            <Button type="submit" variant="primary">确认扩容</Button>
+            <Button type="submit" variant="primary" loading={joinBusy}>确认扩容</Button>
           </div>
         </form>
       </Modal>

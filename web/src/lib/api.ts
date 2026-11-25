@@ -198,7 +198,7 @@ export function openSSE(
       }
     });
   };
-  for (const ev of ['step', 'log', 'done', 'watch', 'update', 'change', 'end', 'snapshot']) {
+  for (const ev of ['step', 'log', 'progress', 'done', 'watch', 'update', 'change', 'end', 'snapshot']) {
     bind(ev);
   }
   es.onmessage = (ev) => {

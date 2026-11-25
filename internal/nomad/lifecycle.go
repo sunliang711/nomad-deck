@@ -274,9 +274,18 @@ func (s *Service) NodeJoin(ctx context.Context, actor audit.Actor, clusterID, no
 	if err := cluster.Blocking(issues); err != nil {
 		return nil, err
 	}
-	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
+	reqProxy := in.UseProxy
+	if reqProxy == nil && cl.Settings.UseProxy != nil {
+		reqProxy = cl.Settings.UseProxy
+	}
+	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, reqProxy)
 	if err != nil {
 		return nil, err
+	}
+	if in.UseProxy != nil {
+		v := hc.UseProxy
+		cl.Settings.UseProxy = &v
+		_ = s.saveSettings(ctx, cl)
 	}
 	defaults := ClientSettings{}
 	for _, m := range clients(mustMembers(ctx, s, clusterID)) {

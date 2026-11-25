@@ -300,6 +300,14 @@ type Task struct {
 	open  []*Step
 }
 
+// EmitProgress publishes structured stage/byte progress over SSE for live UIs.
+func (t *Task) EmitProgress(stage string, done, total int64) {
+	t.engine.Hub.Publish(t.ID, Event{
+		Type:     "progress",
+		Progress: &Progress{Stage: stage, Done: done, Total: total},
+	})
+}
+
 // Checkpoint persists structured intent/progress for crash reconciliation.
 func (t *Task) Checkpoint(v any) error {
 	b, err := json.Marshal(audit.RedactValue(toMap(v)))

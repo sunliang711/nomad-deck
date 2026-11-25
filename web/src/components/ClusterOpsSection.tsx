@@ -20,18 +20,18 @@ interface ClusterOpsSectionProps {
   setConfirmSwap?: (v: boolean) => void;
   drainClients?: boolean;
   setDrainClients?: (v: boolean) => void;
-  onDeploy: () => void;
-  onUpgrade: () => void;
-  onRenewCerts: () => void;
-  onRotateCA: () => void;
-  onRotateGossip?: () => void;
-  onDoctor: () => void;
-  onReconcile: () => void;
+  onDeploy: () => Promise<unknown> | void;
+  onUpgrade: () => Promise<unknown> | void;
+  onRenewCerts: () => Promise<unknown> | void;
+  onRotateCA: () => Promise<unknown> | void;
+  onRotateGossip?: () => Promise<unknown> | void;
+  onDoctor: () => Promise<unknown> | void;
+  onReconcile: () => Promise<unknown> | void;
   onOpenJoin: () => void;
   onOpenLogs: (node: any) => void;
-  onCheckGate?: (node: any) => void;
-  onRestartNode: (node: any) => void;
-  onRemoveNode: (node: any) => void;
+  onCheckGate?: (node: any) => Promise<unknown> | void;
+  onRestartNode: (node: any) => Promise<unknown> | void;
+  onRemoveNode: (node: any) => Promise<unknown> | void;
   onError: (msg: string) => void;
 }
 
@@ -68,6 +68,17 @@ export function ClusterOpsSection({
   const askConfirm = useConfirm();
   const [availableVersions, setAvailableVersions] = useState<string[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
+  const [busyKey, setBusyKey] = useState('');
+
+  const runBusy = async (key: string, fn: () => Promise<unknown> | void) => {
+    if (busyKey) return;
+    setBusyKey(key);
+    try {
+      await fn();
+    } finally {
+      setBusyKey('');
+    }
+  };
 
   const fetchVersions = async () => {
     setLoadingVersions(true);
@@ -200,8 +211,8 @@ export function ClusterOpsSection({
                 <Button size="sm" onClick={() => setDeployVer('latest')} title="设为 latest">
                   latest
                 </Button>
-                <Button variant="primary" onClick={onDeploy}>
-                  部署
+                <Button variant="primary" loading={busyKey === 'deploy'} disabled={Boolean(busyKey)} onClick={() => void runBusy('deploy', onDeploy)}>
+                  {busyKey === 'deploy' ? '提交中...' : '部署'}
                 </Button>
               </div>
 
@@ -216,7 +227,9 @@ export function ClusterOpsSection({
                 <Button size="sm" onClick={() => setUpVer('latest')} title="设为 latest">
                   latest
                 </Button>
-                <Button onClick={onUpgrade}>升级</Button>
+                <Button loading={busyKey === 'upgrade'} disabled={Boolean(busyKey)} onClick={() => void runBusy('upgrade', onUpgrade)}>
+                  {busyKey === 'upgrade' ? '提交中...' : '升级'}
+                </Button>
               </div>
 
               <label className="flex items-center gap-1.5">
@@ -253,25 +266,25 @@ export function ClusterOpsSection({
               )}
 
               <div className="flex flex-wrap gap-1.5 pt-0.5">
-                <Button size="sm" onClick={onRenewCerts}>
-                  续期证书
+                <Button size="sm" loading={busyKey === 'renew'} disabled={Boolean(busyKey)} onClick={() => void runBusy('renew', onRenewCerts)}>
+                  {busyKey === 'renew' ? '执行中...' : '续期证书'}
                 </Button>
-                <Button size="sm" onClick={onRotateCA}>
+                <Button size="sm" loading={busyKey === 'ca'} disabled={Boolean(busyKey)} onClick={() => void runBusy('ca', onRotateCA)}>
                   轮换 CA
                 </Button>
                 {!isVault && onRotateGossip && (
-                  <Button size="sm" onClick={onRotateGossip}>
+                  <Button size="sm" loading={busyKey === 'gossip'} disabled={Boolean(busyKey)} onClick={() => void runBusy('gossip', onRotateGossip)}>
                     <TermLabel
                       term="轮换 Gossip"
                       tip="轮换 Nomad Server 之间 Serf Gossip 集群发现通信使用的对称加密密钥。"
                     />
                   </Button>
                 )}
-                <Button size="sm" onClick={onDoctor}>
-                  Doctor 体检
+                <Button size="sm" loading={busyKey === 'doctor'} disabled={Boolean(busyKey)} onClick={() => void runBusy('doctor', onDoctor)}>
+                  {busyKey === 'doctor' ? '体检中...' : 'Doctor 体检'}
                 </Button>
-                <Button size="sm" onClick={onReconcile}>
-                  核对解锁
+                <Button size="sm" loading={busyKey === 'reconcile'} disabled={Boolean(busyKey)} onClick={() => void runBusy('reconcile', onReconcile)}>
+                  {busyKey === 'reconcile' ? '核对中...' : '核对解锁'}
                 </Button>
               </div>
             </div>
@@ -345,7 +358,7 @@ export function ClusterOpsSection({
                         <Terminal className="h-3 w-3" /> 日志
                       </Button>
                       {onCheckGate && (
-                        <Button size="sm" onClick={() => onCheckGate(n)}>
+                        <Button size="sm" loading={busyKey === `gate:${n.node_id}`} disabled={Boolean(busyKey)} onClick={() => void runBusy(`gate:${n.node_id}`, () => onCheckGate(n))}>
                           <TermLabel
                             term="门禁"
                             tip="检查当前下线或重启该节点是否会导致 Raft 仲裁多数派受损。"
@@ -356,6 +369,8 @@ export function ClusterOpsSection({
                         <>
                           <Button
                             size="sm"
+                            loading={busyKey === `restart:${n.node_id}`}
+                            disabled={Boolean(busyKey)}
                             onClick={async () => {
                               if (
                                 !(await askConfirm(`确认重启节点「${n.name}」的 ${product} 服务吗？`, {
@@ -365,7 +380,7 @@ export function ClusterOpsSection({
                               ) {
                                 return;
                               }
-                              onRestartNode(n);
+                              await runBusy(`restart:${n.node_id}`, () => onRestartNode(n));
                             }}
                           >
                             重启
@@ -373,6 +388,8 @@ export function ClusterOpsSection({
                           <Button
                             size="sm"
                             variant="danger"
+                            loading={busyKey === `remove:${n.node_id}`}
+                            disabled={Boolean(busyKey)}
                             onClick={async () => {
                               if (
                                 !(await askConfirm(`确定要从集群中缩容移除节点「${n.name}」吗？`, {
@@ -383,7 +400,7 @@ export function ClusterOpsSection({
                               ) {
                                 return;
                               }
-                              onRemoveNode(n);
+                              await runBusy(`remove:${n.node_id}`, () => onRemoveNode(n));
                             }}
                           >
                             缩容

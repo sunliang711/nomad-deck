@@ -130,12 +130,15 @@ export function statusTone(status?: string): Tone {
 export function Button({
   variant = 'secondary',
   size = 'md',
+  loading = false,
+  disabled,
   className = '',
   children,
   ...rest
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
   size?: 'sm' | 'md';
+  loading?: boolean;
 }) {
   const variants = {
     primary:
@@ -153,8 +156,11 @@ export function Button({
     <button
       type={rest.type || 'button'}
       {...rest}
+      disabled={Boolean(disabled || loading)}
+      aria-busy={loading || undefined}
       className={`inline-flex items-center justify-center gap-1.5 font-medium transition disabled:cursor-not-allowed disabled:opacity-55 ${variants[variant]} ${sizes[size]} ${className}`}
     >
+      {loading && <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />}
       {children}
     </button>
   );

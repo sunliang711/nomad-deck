@@ -3,16 +3,22 @@ import { CheckCircle2, Info, X, XCircle } from 'lucide-react';
 
 type ToastKind = 'success' | 'error' | 'info';
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 interface ToastItem {
   id: number;
   kind: ToastKind;
   text: string;
+  action?: ToastAction;
 }
 
 interface ToastContextValue {
-  success: (text: string) => void;
-  error: (text: string) => void;
-  info: (text: string) => void;
+  success: (text: string, action?: ToastAction) => void;
+  error: (text: string, action?: ToastAction) => void;
+  info: (text: string, action?: ToastAction) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -27,11 +33,11 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   const push = useCallback(
-    (kind: ToastKind, text: string) => {
+    (kind: ToastKind, text: string, action?: ToastAction) => {
       if (!text) return;
       const id = nextToastId++;
-      setItems((prev) => [...prev.slice(-4), { id, kind, text }]);
-      const duration = kind === 'error' ? 6000 : 3500;
+      setItems((prev) => [...prev.slice(-4), { id, kind, text, action }]);
+      const duration = kind === 'error' ? 6000 : 4000;
       window.setTimeout(() => {
         dismiss(id);
       }, duration);
@@ -40,9 +46,9 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
 
   const value: ToastContextValue = {
-    success: useCallback((text: string) => push('success', text), [push]),
-    error: useCallback((text: string) => push('error', text), [push]),
-    info: useCallback((text: string) => push('info', text), [push]),
+    success: useCallback((text: string, action?: ToastAction) => push('success', text, action), [push]),
+    error: useCallback((text: string, action?: ToastAction) => push('error', text, action), [push]),
+    info: useCallback((text: string, action?: ToastAction) => push('info', text, action), [push]),
   };
 
   return (
@@ -75,7 +81,21 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               className={`pointer-events-auto flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border shadow-lg text-sm ${style}`}
             >
               {icon}
-              <div className="flex-1 min-w-0 break-words">{item.text}</div>
+              <div className="flex-1 min-w-0 break-words">
+                <span>{item.text}</span>
+                {item.action && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      item.action?.onClick();
+                      dismiss(item.id);
+                    }}
+                    className="ml-2.5 inline-flex items-center font-semibold underline underline-offset-2 hover:opacity-80"
+                  >
+                    {item.action.label}
+                  </button>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={() => dismiss(item.id)}

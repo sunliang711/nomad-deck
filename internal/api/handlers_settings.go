@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/netx"
 	"nomad-deck/internal/release"
+	"nomad-deck/internal/sshx"
 )
 
 // settingDef describes one editable, non-secret system setting.
@@ -44,6 +46,37 @@ func boolVal(raw json.RawMessage) (any, error) {
 	return v, nil
 }
 
+var reDockerVer = regexp.MustCompile(`^[0-9]+(\.[0-9]+){1,2}(-[A-Za-z0-9._-]+)?$`)
+
+func optHTTPURL(raw json.RawMessage) (any, error) {
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, errors.New("需为字符串")
+	}
+	if v == "" {
+		return v, nil
+	}
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return nil, errors.New("需为 http(s) 地址")
+	}
+	return strings.TrimRight(v, "/"), nil
+}
+
+func optProductVersion(raw json.RawMessage) (any, error) {
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, errors.New("需为字符串")
+	}
+	if v == "" {
+		return v, nil
+	}
+	if err := sshx.ValidVersion(v); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
 var settingDefs = map[string]settingDef{
 	"ssh.timeout_sec":             {Default: 15, Validate: intRange(3, 120)},
 	"ssh.max_concurrency":         {Default: 10, Validate: intRange(1, 100), RestartToApply: true},
@@ -54,9 +87,23 @@ var settingDefs = map[string]settingDef{
 	"ops.retention_days":          {Default: 60, Validate: intRange(7, 3650)},
 	"snapshot.retention_count":    {Default: 7, Validate: intRange(1, 365)},
 	"cert.alert_days":             {Default: 30, Validate: intRange(1, 365)},
-	netx.SettingUseForReleases:    {Default: false, Validate: boolVal},
-	netx.SettingUseForSelfUpdate:  {Default: false, Validate: boolVal},
-	"release.mirror_url": {Default: "", Validate: func(raw json.RawMessage) (any, error) {
+	"upgrade.max_minor_skip":      {Default: 2, Validate: intRange(0, 10)},
+	"defaults.nomad_version":      {Default: "", Validate: optProductVersion},
+	"defaults.vault_version":      {Default: "", Validate: optProductVersion},
+	"defaults.docker_version": {Default: "", Validate: func(raw json.RawMessage) (any, error) {
+		var v string
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, errors.New("需为字符串")
+		}
+		if v != "" && !reDockerVer.MatchString(v) {
+			return nil, errors.New("Docker 版本号格式不合法")
+		}
+		return v, nil
+	}},
+	"nomad.stats_interval_seconds": {Default: 2, Validate: intRange(1, 60)},
+	"nomad.exec_idle_minutes":      {Default: 15, Validate: intRange(1, 240)},
+	"nomad.exec_max_minutes":       {Default: 240, Validate: intRange(5, 1440)},
+	"observability.grafana_url_template": {Default: "", Validate: func(raw json.RawMessage) (any, error) {
 		var v string
 		if err := json.Unmarshal(raw, &v); err != nil {
 			return nil, errors.New("需为字符串")
@@ -66,10 +113,47 @@ var settingDefs = map[string]settingDef{
 		}
 		u, err := url.Parse(v)
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-			return nil, errors.New("需为 http(s) 地址")
+			return nil, errors.New("需为 http(s) 地址模板")
 		}
-		return strings.TrimRight(v, "/"), nil
+		return v, nil
 	}},
+	"snapshot.dir": {Default: "", Validate: func(raw json.RawMessage) (any, error) {
+		var v string
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, errors.New("需为字符串")
+		}
+		if v == "" {
+			return v, nil
+		}
+		if err := sshx.ValidPath(v); err != nil {
+			return nil, errors.New("快照目录需为不含 .. 的绝对路径")
+		}
+		return v, nil
+	}},
+	"docker.test_image": {Default: "", Validate: func(raw json.RawMessage) (any, error) {
+		var v string
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, errors.New("需为字符串")
+		}
+		if len(v) > 200 || strings.ContainsAny(v, " \t\r\n\x00") {
+			return nil, errors.New("测试镜像格式不合法")
+		}
+		return v, nil
+	}},
+	"self_update.channel": {Default: "stable", Validate: func(raw json.RawMessage) (any, error) {
+		var v string
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, errors.New("需为字符串")
+		}
+		if v != "stable" && v != "prerelease" {
+			return nil, errors.New("channel 需为 stable 或 prerelease")
+		}
+		return v, nil
+	}},
+	"self_update.backup_retention": {Default: 3, Validate: intRange(1, 20)},
+	netx.SettingUseForReleases:     {Default: false, Validate: boolVal},
+	netx.SettingUseForSelfUpdate:   {Default: false, Validate: boolVal},
+	"release.mirror_url":           {Default: "", Validate: optHTTPURL},
 	"release.pgp_public_key": {Default: "", Validate: func(raw json.RawMessage) (any, error) {
 		var v string
 		if err := json.Unmarshal(raw, &v); err != nil {
@@ -365,4 +449,55 @@ func (a *API) listDockerReleases(w http.ResponseWriter, r *http.Request, client 
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"product": "docker", "target": target, "versions": ix.EngineVersions(),
 		"used_proxy": useProxy})
+}
+
+// ---- Master key & rotation ----
+
+func (a *API) getMasterKeyStatus(w http.ResponseWriter, r *http.Request) {
+	if a.Rotation == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "主密钥轮换服务未启用")
+		return
+	}
+	st, err := a.Rotation.Status(r.Context())
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"master_key": st})
+}
+
+func (a *API) rotateMasterKey(w http.ResponseWriter, r *http.Request) {
+	if a.Rotation == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "主密钥轮换服务未启用")
+		return
+	}
+	var in struct {
+		CurrentPassword string `json:"current_password"`
+	}
+	if !decodeJSON(w, r, &in) || !a.verifyPassword(w, r, in.CurrentPassword) {
+		return
+	}
+	jv, err := a.Rotation.Start(r.Context(), a.actor(r))
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"rotation": jv})
+}
+
+func (a *API) getMasterKeyRotation(w http.ResponseWriter, r *http.Request) {
+	if a.Rotation == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "主密钥轮换服务未启用")
+		return
+	}
+	st, err := a.Rotation.Status(r.Context())
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"running":    st.Running,
+		"journal":    st.Journal,
+		"next_steps": st.NextSteps,
+	})
 }

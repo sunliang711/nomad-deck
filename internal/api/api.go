@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"nomad-deck/internal/auth"
+	"nomad-deck/internal/backup"
 	"nomad-deck/internal/cron"
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/hosts"
@@ -20,6 +21,7 @@ import (
 	"nomad-deck/internal/nomad"
 	"nomad-deck/internal/ops"
 	"nomad-deck/internal/release"
+	"nomad-deck/internal/rotation"
 	"nomad-deck/internal/vault"
 	"nomad-deck/internal/version"
 	"nomad-deck/internal/workbench"
@@ -40,6 +42,8 @@ type API struct {
 	Workbench    *workbench.Service
 	Cron         *cron.Scheduler
 	Migration    *migration.Service
+	Backup       *backup.Service
+	Rotation     *rotation.Service
 	// jobOpExtra serves job-ops added by other components (e.g. render).
 	jobOpExtra     func(w http.ResponseWriter, r *http.Request) bool
 	Log            *slog.Logger
@@ -82,6 +86,7 @@ func (a *API) Handler() http.Handler {
 			r.Get("/audit-logs", a.listAuditLogs)
 			r.Get("/audit-logs/{id}", a.getAuditLog)
 
+			r.Get("/dashboard/summary", a.dashboardSummary)
 			r.Get("/ssh-keys", a.listSSHKeys)
 			r.Get("/nodes", a.listNodes)
 			r.Get("/nodes/{id}", a.getNode)
@@ -98,6 +103,7 @@ func (a *API) Handler() http.Handler {
 			r.Get("/clusters/{id}", a.getCluster)
 			r.Get("/clusters/{id}/status", a.clusterStatus)
 			r.Get("/clusters/{id}/gate", a.clusterGate)
+			r.Get("/clusters/{id}/nodes/{node_id}/logs/stream", a.streamNodeLogs)
 			r.Get("/clusters/{id}/snapshots", a.listSnapshots)
 			r.Get("/vault/{id}/key-generations", a.vaultKeyGenerations)
 			r.Get("/vault/{id}/auth", a.vaultListAuth)
@@ -267,11 +273,21 @@ func (a *API) Handler() http.Handler {
 				r.Delete("/job-templates/{tid}", a.deleteTemplate)
 
 				r.Put("/settings", a.putSettings)
+				r.Get("/settings/master-key", a.getMasterKeyStatus)
+				r.Post("/settings/master-key/rotate", a.rotateMasterKey)
+				r.Get("/settings/master-key/rotation", a.getMasterKeyRotation)
 				r.Post("/cron-jobs", a.createCronJob)
 				r.Post("/migration/export", a.migrationExport)
 				r.Post("/migration/import/preview", a.migrationPreview)
 				r.Post("/migration/import/apply", a.migrationApply)
 				r.Post("/migration/activate", a.migrationActivate)
+				r.Get("/backup/config", a.getBackupConfig)
+				r.Put("/backup/config", a.putBackupConfig)
+				r.Post("/backup/targets/test", a.testBackupTarget)
+				r.Post("/backup/run", a.runBackup)
+				r.Get("/backup/history", a.listBackupHistory)
+				r.Get("/backup/targets/{id}/snapshots", a.listTargetSnapshots)
+				r.Post("/backup/snapshots/import", a.importTargetSnapshot)
 				r.Put("/cron-jobs/{id}", a.updateCronJob)
 				r.Delete("/cron-jobs/{id}", a.deleteCronJob)
 				r.Post("/cron-jobs/{id}/run", a.runCronJob)

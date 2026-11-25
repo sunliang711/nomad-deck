@@ -266,3 +266,39 @@ func DeleteSnapshot(ctx context.Context, q Querier, id string) error {
 	_, err := q.ExecContext(ctx, `DELETE FROM cluster_snapshots WHERE id = ?`, id)
 	return err
 }
+
+// ListAllSnapshots returns all recorded snapshots across clusters, newest first.
+func ListAllSnapshots(ctx context.Context, q Querier) ([]*Snapshot, error) {
+	rows, err := q.QueryContext(ctx, `SELECT `+snapCols+` FROM cluster_snapshots ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Snapshot
+	for rows.Next() {
+		s, err := scanSnapshot(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// ListAllCustody returns all Vault custody records.
+func ListAllCustody(ctx context.Context, q Querier) ([]*VaultCustody, error) {
+	rows, err := q.QueryContext(ctx, `SELECT `+custodyCols+` FROM vault_secrets_custody`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*VaultCustody
+	for rows.Next() {
+		c, err := scanCustody(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}

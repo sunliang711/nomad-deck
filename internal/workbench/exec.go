@@ -18,6 +18,7 @@ import (
 
 	"nomad-deck/internal/audit"
 	"nomad-deck/internal/auth"
+	"nomad-deck/internal/db"
 )
 
 // Terminal limits.
@@ -249,8 +250,10 @@ func (s *Service) Relay(ctx context.Context, actor audit.Actor, t *Ticket, brows
 	}
 	go pump(browser, upstream, "browser")
 	go pump(upstream, browser, "nomad")
-	idle := time.NewTimer(TerminalIdle)
-	max := time.NewTimer(TerminalMaxRuntime)
+	idleDur := time.Duration(db.IntSetting(ctx, s.DB.Reader, "nomad.exec_idle_minutes", int(TerminalIdle/time.Minute))) * time.Minute
+	maxDur := time.Duration(db.IntSetting(ctx, s.DB.Reader, "nomad.exec_max_minutes", int(TerminalMaxRuntime/time.Minute))) * time.Minute
+	idle := time.NewTimer(idleDur)
+	max := time.NewTimer(maxDur)
 	defer idle.Stop()
 	defer max.Stop()
 	reason := ""
@@ -263,7 +266,7 @@ loop:
 			if !idle.Stop() {
 				<-idle.C
 			}
-			idle.Reset(TerminalIdle)
+			idle.Reset(idleDur)
 		case <-idle.C:
 			reason = "idle timeout"
 			break loop

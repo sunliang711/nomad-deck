@@ -452,3 +452,121 @@ func OpenStream(src io.ReadCloser, magic, passphrase string) ([]byte, io.ReadClo
 
 // Size returns the number of plaintext bytes written.
 func (s *Writer) Size() int64 { return s.size }
+
+func readSnapHeader(f *os.File) (snapHeader, int64, error) {
+	magic := make([]byte, 5)
+	if _, err := io.ReadFull(f, magic); err != nil || string(magic[:4]) != snapMagic || magic[4] != 1 {
+		return snapHeader{}, 0, errors.New("not a NomadDeck snapshot file")
+	}
+	var hl uint32
+	if err := binary.Read(f, binary.BigEndian, &hl); err != nil || hl > 1<<20 {
+		return snapHeader{}, 0, errors.New("snapshot header is malformed")
+	}
+	hb := make([]byte, hl)
+	if _, err := io.ReadFull(f, hb); err != nil {
+		return snapHeader{}, 0, err
+	}
+	var h snapHeader
+	if err := json.Unmarshal(hb, &h); err != nil || h.SnapshotID == "" {
+		return snapHeader{}, 0, errors.New("snapshot header is malformed")
+	}
+	return h, int64(5 + 4 + hl), nil
+}
+
+// HeaderKeyID returns the master-key ID recorded in the snapshot header.
+func HeaderKeyID(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h, _, err := readSnapHeader(f)
+	if err != nil {
+		return "", err
+	}
+	return crypto.KeyIDOf(h.WrappedKey)
+}
+
+// Rewrap re-encrypts the snapshot header's wrapped data key with keys.Active()
+// without altering the body ciphertext (preserving cluster_snapshots.sha256).
+func Rewrap(keys *crypto.Keyring, path, wantID string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	h, bodyStart, err := readSnapHeader(f)
+	if err != nil {
+		f.Close()
+		return false, err
+	}
+	if h.SnapshotID != wantID {
+		f.Close()
+		return false, errors.New("snapshot header does not match the record")
+	}
+	curID, err := crypto.KeyIDOf(h.WrappedKey)
+	if err != nil {
+		f.Close()
+		return false, err
+	}
+	if curID == keys.Active().ID {
+		f.Close()
+		return false, nil
+	}
+	dataKey, err := keys.Decrypt(h.WrappedKey, SnapshotAAD(wantID))
+	if err != nil {
+		f.Close()
+		return false, err
+	}
+	wrapped, err := keys.Encrypt(dataKey, SnapshotAAD(wantID))
+	if err != nil {
+		f.Close()
+		return false, err
+	}
+	h.WrappedKey = wrapped
+	hdr, _ := json.Marshal(h)
+	if _, err := f.Seek(bodyStart, io.SeekStart); err != nil {
+		f.Close()
+		return false, err
+	}
+
+	tmpPath := path + ".rewrap.tmp"
+	out, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		f.Close()
+		return false, err
+	}
+	bw := bufio.NewWriterSize(out, 256<<10)
+	_, _ = bw.WriteString(snapMagic)
+	_ = bw.WriteByte(1)
+	_ = binary.Write(bw, binary.BigEndian, uint32(len(hdr)))
+	_, _ = bw.Write(hdr)
+	if _, err := io.Copy(bw, f); err != nil {
+		out.Close()
+		f.Close()
+		_ = os.Remove(tmpPath)
+		return false, err
+	}
+	if err := bw.Flush(); err != nil {
+		out.Close()
+		f.Close()
+		_ = os.Remove(tmpPath)
+		return false, err
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		f.Close()
+		_ = os.Remove(tmpPath)
+		return false, err
+	}
+	if err := out.Close(); err != nil {
+		f.Close()
+		_ = os.Remove(tmpPath)
+		return false, err
+	}
+	f.Close()
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return false, err
+	}
+	return true, nil
+}

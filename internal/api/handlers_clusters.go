@@ -2,20 +2,26 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"nomad-deck/internal/audit"
 	"nomad-deck/internal/cluster"
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/nomad"
+	"nomad-deck/internal/sshx"
 	"nomad-deck/internal/vault"
 )
 
@@ -574,9 +580,20 @@ func (a *API) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	taskResponse(w, t)
 }
 
+func (a *API) guardSnapshotRotation(w http.ResponseWriter) bool {
+	if a.Rotation != nil && a.Rotation.IsRunning() {
+		writeError(w, http.StatusConflict, "key_rotation_in_progress", "主密钥轮换进行中，暂不允许下载、恢复或删除快照")
+		return false
+	}
+	return true
+}
+
 // downloadSnapshot streams a passphrase-encrypted portable archive. The
 // passphrase and password travel in the request body, never in the URL.
 func (a *API) downloadSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !a.guardSnapshotRotation(w) {
+		return
+	}
 	var in struct {
 		CurrentPassword string `json:"current_password"`
 		Passphrase      string `json:"passphrase"`
@@ -650,6 +667,9 @@ func (r readCloser) Read(b []byte) (int, error) { return r.p.Read(b) }
 func (r readCloser) Close() error               { return r.p.Close() }
 
 func (a *API) restoreSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !a.guardSnapshotRotation(w) {
+		return
+	}
 	var in struct {
 		cluster.RestoreInput
 		CurrentPassword string `json:"current_password"`
@@ -670,6 +690,9 @@ func (a *API) restoreSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !a.guardSnapshotRotation(w) {
+		return
+	}
 	d, _, ok := a.driver(w, r)
 	if !ok {
 		return
@@ -1046,4 +1069,171 @@ func (a *API) vaultInitReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	taskResponse(w, t)
+}
+
+var reLogSince = regexp.MustCompile(`^[0-9A-Za-z :._+-]{1,40}$`)
+
+type sseLineWriter struct {
+	mu      *sync.Mutex
+	w       http.ResponseWriter
+	flusher http.Flusher
+}
+
+func (s *sseLineWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	b, _ := json.Marshal(map[string]string{"data": string(p)})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := fmt.Fprintf(s.w, "event: log\ndata: %s\n\n", b); err != nil {
+		return 0, err
+	}
+	s.flusher.Flush()
+	return len(p), nil
+}
+
+// streamNodeLogs streams redacted systemd journalctl logs for one cluster node
+// over SSE without acquiring any cluster or host operation locks.
+func (a *API) streamNodeLogs(w http.ResponseWriter, r *http.Request) {
+	clusterID := chi.URLParam(r, "id")
+	nodeID := chi.URLParam(r, "node_id")
+	cl, err := db.GetCluster(r.Context(), a.DB.Reader, clusterID)
+	if errors.Is(err, db.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "集群不存在")
+		return
+	}
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	unit := map[string]string{"nomad": "nomad.service", "vault": "vault.service"}[cl.Type]
+	if unit == "" {
+		writeError(w, http.StatusBadRequest, "invalid_argument", "不支持的集群类型："+cl.Type)
+		return
+	}
+	members, err := db.ListClusterNodes(r.Context(), a.DB.Reader, clusterID)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	isMember := false
+	for _, m := range members {
+		if m.NodeID == nodeID {
+			isMember = true
+			break
+		}
+	}
+	if !isMember {
+		writeError(w, http.StatusNotFound, "not_found", "节点不属于该集群")
+		return
+	}
+	node, err := db.GetNode(r.Context(), a.DB.Reader, nodeID)
+	if errors.Is(err, db.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "主机不存在")
+		return
+	}
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+
+	q := r.URL.Query()
+	lines := 200
+	if raw := q.Get("lines"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 2000 {
+			writeError(w, http.StatusBadRequest, "invalid_argument", "lines 需为 1～2000")
+			return
+		}
+		lines = n
+	}
+	follow := q.Get("follow") != "false"
+	since := q.Get("since")
+	if since != "" && !reLogSince.MatchString(since) {
+		writeError(w, http.StatusBadRequest, "invalid_argument", "since 参数格式不合法")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "no_stream", "当前连接不支持流式输出")
+		return
+	}
+	client, err := a.Hosts.Connect(r.Context(), node)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+
+	revoked, cancelRevoke := a.Auth.Revocations.Subscribe(principalFrom(r.Context()).Session.ID)
+	defer cancelRevoke()
+
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	var args []string
+	args = append(args, "journalctl", "-u", sshx.Quote(unit), "-n", strconv.Itoa(lines), "--no-pager", "--output=short-iso")
+	if follow {
+		args = append(args, "--follow")
+	}
+	if since != "" {
+		args = append(args, "--since", sshx.Quote(since))
+	}
+	script := strings.Join(args, " ")
+
+	var mu sync.Mutex
+	rw := audit.NewWriter(&sseLineWriter{mu: &mu, w: w, flusher: flusher})
+	runCtx, cancelRun := context.WithCancel(r.Context())
+	defer cancelRun()
+
+	doneCh := make(chan error, 1)
+	go func() {
+		_, err := client.Run(runCtx, script, sshx.RunOptions{Sudo: true, Stdout: rw, Stderr: rw})
+		doneCh <- err
+	}()
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			cancelRun()
+			<-doneCh
+			return
+		case <-revoked:
+			cancelRun()
+			<-doneCh
+			return
+		case <-heartbeat.C:
+			mu.Lock()
+			_, err := io.WriteString(w, ": ping\n\n")
+			if err == nil {
+				flusher.Flush()
+			}
+			mu.Unlock()
+			if err != nil {
+				cancelRun()
+				<-doneCh
+				return
+			}
+		case err := <-doneCh:
+			_ = rw.Flush()
+			payload := map[string]any{"status": "done"}
+			if err != nil && runCtx.Err() == nil {
+				payload["status"] = "failed"
+				payload["error"] = audit.RedactString(err.Error())
+			}
+			b, _ := json.Marshal(payload)
+			mu.Lock()
+			_, _ = fmt.Fprintf(w, "event: done\ndata: %s\n\n", b)
+			flusher.Flush()
+			mu.Unlock()
+			return
+		}
+	}
 }

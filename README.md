@@ -10,6 +10,37 @@ NomadDeck 是一个独立部署的 HashiCorp 基础设施管理平台，采用 G
 - **安全与高可用治理**：支持控制面出口代理配置（含脱敏与连通性测试）、Cron 定时巡检与证书/备份调度、全量加密导出与迁移导入、Local / SFTP / S3 自动灾备快照、审计日志，以及基于 GitHub Release + Ed25519 签名的控制面自更新与双保险回滚。
 - **单二进制部署**：前端 React 18 + Vite 构建产物通过 `go:embed` 直接打包进单个静态 Go 可执行文件，零外部运行时依赖。
 
+## 快速安装（Linux systemd，推荐）
+
+控制面以低权限系统用户 `nomad-deck` 运行在 `/opt/nomad-deck-control`，从 GitHub Release 下载对应架构二进制并自动校验 SHA-256、安装配置 `nomad-deck.service` 与自动回滚服务 `nomad-deck-rollback.service`：
+
+```bash
+# 安装最新版本
+curl -fsSL https://raw.githubusercontent.com/sunliang711/nomad-deck/main/scripts/install.sh | sudo bash
+
+# 安装指定版本
+curl -fsSL https://raw.githubusercontent.com/sunliang711/nomad-deck/main/scripts/install.sh | sudo bash -s -- --version v0.1.0
+
+# 卸载服务（保留 /opt/nomad-deck-control/etc 与 data 数据目录）
+curl -fsSL https://raw.githubusercontent.com/sunliang711/nomad-deck/main/scripts/install.sh | sudo bash -s -- --uninstall
+```
+
+安装完成后常用管理命令：
+
+```bash
+# 查看首次启动生成的管理员初始化 setup_token
+sudo journalctl -u nomad-deck -n 50 --no-pager
+
+# 查看服务状态与重启
+sudo systemctl status nomad-deck
+sudo systemctl restart nomad-deck
+```
+
+默认目录结构：
+- 二进制与版本软链：`/opt/nomad-deck-control/bin/nomad-deck`（指向 `bin/versions/nomad-deck-<version>`）
+- 配置文件：`/opt/nomad-deck-control/etc/nomad-deck.toml`（覆盖升级时自动保留）
+- 数据目录：`/opt/nomad-deck-control/data`
+
 ## 快速构建
 
 环境要求：Go 1.26+、Node.js 22+。
@@ -22,6 +53,19 @@ make build
 make web
 make build-go
 ```
+
+## GitHub Release 发布签名配置
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) 在推送 `v*` 标签构建 Release 时会使用 Ed25519 对 `SHA256SUMS` 签名，并将公钥内嵌进二进制用于控制面在线自更新验签。
+
+首次发布前需在本地生成密钥对并配置到 GitHub 仓库的 **Settings → Secrets and variables → Actions**：
+
+```bash
+go run ./scripts/sign-release -keygen
+```
+
+- 在 **Variables** 添加 `RELEASE_PUBLIC_KEY`
+- 在 **Secrets** 添加 `RELEASE_SIGNING_PRIVATE_KEY`
 
 ## 运行与配置
 

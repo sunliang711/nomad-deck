@@ -13,8 +13,12 @@ User=nomad-deck
 Group=nomad-deck
 WorkingDirectory=/opt/nomad-deck-control
 ExecStart=/opt/nomad-deck-control/bin/nomad-deck serve --config /opt/nomad-deck-control/etc/nomad-deck.toml
+# Type=notify runs this only after readiness; healthy restarts must not exhaust the failure budget.
+ExecStartPost=+/usr/bin/systemctl reset-failed nomad-deck.service
 Restart=on-failure
 RestartSec=5s
+# Exit 75 requests a version handover, not OnFailure rollback.
+SuccessExitStatus=75
 RestartForceExitStatus=75
 TimeoutStartSec=180
 TimeoutStopSec=30

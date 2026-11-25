@@ -5,6 +5,7 @@ REPO="${NOMAD_DECK_REPO:-sunliang711/nomad-deck}"
 VERSION="${NOMAD_DECK_VERSION:-latest}"
 LISTEN_ADDR="${NOMAD_DECK_LISTEN:-}"
 UNINSTALL=0
+REPAIR_SERVICE=0
 
 INSTALL_ROOT="/opt/nomad-deck-control"
 BIN_DIR="${INSTALL_ROOT}/bin"
@@ -31,6 +32,7 @@ NomadDeck Linux systemd 一键安装/升级/卸载脚本
   --repo <repo>     指定 GitHub 仓库（默认 sunliang711/nomad-deck）
   --listen <addr>   首次生成配置时写入监听地址（默认 0.0.0.0:8555）
   --uninstall       卸载 NomadDeck systemd 服务与程序文件（保留配置与数据）
+  --repair-service  修复已有 systemd 单元并重启（保留程序、配置与数据）
   -h, --help        显示帮助
 EOF
 }
@@ -54,6 +56,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --uninstall)
       UNINSTALL=1
+      shift
+      ;;
+    --repair-service)
+      REPAIR_SERVICE=1
       shift
       ;;
     -h|--help)
@@ -175,8 +181,12 @@ User=nomad-deck
 Group=nomad-deck
 WorkingDirectory=/opt/nomad-deck-control
 ExecStart=/opt/nomad-deck-control/bin/nomad-deck serve --config /opt/nomad-deck-control/etc/nomad-deck.toml
+# Type=notify runs this only after readiness; healthy restarts must not exhaust the failure budget.
+ExecStartPost=+/usr/bin/systemctl reset-failed nomad-deck.service
 Restart=on-failure
 RestartSec=5s
+# Exit 75 requests a version handover, not OnFailure rollback.
+SuccessExitStatus=75
 RestartForceExitStatus=75
 TimeoutStartSec=180
 TimeoutStopSec=30
@@ -309,6 +319,7 @@ do_install() {
 
   systemctl daemon-reload
   systemctl enable nomad-deck.service >/dev/null
+  systemctl reset-failed nomad-deck.service
   systemctl start nomad-deck.service
 
   if [ "${was_active}" -eq 1 ]; then
@@ -326,7 +337,30 @@ do_install() {
   log "服务状态查看：systemctl status nomad-deck --no-pager"
 }
 
-if [ "${UNINSTALL}" -eq 1 ]; then
+# repair_service applies the bundled policy without downloading or replacing application state.
+repair_service() {
+  check_linux_systemd
+  [ -x "${BIN_DIR}/nomad-deck" ] || die "Existing NomadDeck binary not found"
+  [ -f "${CONFIG_FILE}" ] || die "Existing NomadDeck configuration not found"
+  [ -f "${SYSTEMD_DIR}/nomad-deck.service" ] || die "Existing NomadDeck systemd unit not found"
+  id "${SERVICE_USER}" >/dev/null 2>&1 || die "Existing NomadDeck service user not found"
+  [ -x /usr/bin/systemctl ] || die "Required /usr/bin/systemctl not found"
+  [ -w "${SYSTEMD_DIR}" ] || die "Systemd unit directory is not writable"
+
+  write_default_service_unit
+  write_default_rollback_unit
+  systemctl daemon-reload
+  systemctl reset-failed nomad-deck.service
+  systemctl restart nomad-deck.service
+  systemctl is-active --quiet nomad-deck.service
+  log "Systemd service policy repaired; existing binary, configuration and data preserved"
+}
+
+[ "${UNINSTALL}" -eq 0 ] || [ "${REPAIR_SERVICE}" -eq 0 ] || die "--uninstall and --repair-service cannot be combined"
+
+if [ "${REPAIR_SERVICE}" -eq 1 ]; then
+  repair_service
+elif [ "${UNINSTALL}" -eq 1 ]; then
   do_uninstall
 else
   do_install

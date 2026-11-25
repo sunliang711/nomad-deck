@@ -36,6 +36,14 @@ sudo systemctl status nomad-deck
 sudo systemctl restart nomad-deck
 ```
 
+旧安装若因连续正常重启出现 `start-limit-hit`，可使用更新后的项目脚本修复标准 systemd 单元并重启，保留现有程序、配置与数据：
+
+```bash
+sudo bash scripts/install.sh --repair-service
+```
+
+服务就绪后会清除启动限流计数；退出码 `75` 作为正常版本交接重启，不触发失败回退。真正就绪前失败仍保留限流与自动回退保护。
+
 默认目录结构：
 - 二进制与版本软链：`/opt/nomad-deck-control/bin/nomad-deck`（指向 `bin/versions/nomad-deck-<version>`）
 - 配置文件：`/opt/nomad-deck-control/etc/nomad-deck.toml`（覆盖升级时自动保留）

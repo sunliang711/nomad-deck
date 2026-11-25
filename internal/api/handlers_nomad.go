@@ -272,3 +272,23 @@ func (a *API) nomadRevokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (a *API) nomadRevealManagementToken(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		CurrentPassword string `json:"current_password"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	c, ok := a.nomadCluster(w, r)
+	if !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
+		return
+	}
+	tok, err := a.Nomad.RevealManagementToken(r.Context(), a.actor(r), c.ID)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"management_token": tok})
+}

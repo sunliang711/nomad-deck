@@ -26,6 +26,7 @@ import {
 } from '../components/UI';
 import { ClusterOpsSection } from '../components/ClusterOpsSection';
 import { CodeEditor } from '../components/CodeEditor';
+import { UninstallClusterModal, type UninstallPlan } from '../components/UninstallClusterModal';
 
 export function VaultPage() {
   const { isAdmin } = useAuth();
@@ -57,6 +58,7 @@ export function VaultPage() {
   const [gateView, setGateView] = useState<any>(null);
   const [err, setErr] = useState('');
   const [rootToken, setRootToken] = useState('');
+  const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(null);
 
   // Create wizard
   const [showCreate, setShowCreate] = useState(false);
@@ -176,6 +178,7 @@ export function VaultPage() {
 
   useEffect(() => {
     setRootToken('');
+    setUninstallPlan(null);
     setPolicyEdit({ name: '', rules: '' });
     setKvItem(null);
     setKvKeys([]);
@@ -221,6 +224,40 @@ export function VaultPage() {
       if (res.cluster?.id) setSelectedId(res.cluster.id);
     } catch (ex: any) {
       setErr(ex?.message || '创建 Vault 集群失败');
+    }
+  };
+
+  const handleUninstall = async () => {
+    if (!cluster) return;
+    const canDeleteUndeployed =
+      cluster.init_state === 'uninitialized' && clusterNodes.every((n: any) => n.install_state === 'pending');
+    if (canDeleteUndeployed) {
+      if (
+        !(await askConfirm(`确认删除未部署集群「${cluster.name}」吗？仅清除控制面记录，不会改动主机。`, {
+          title: '删除未部署集群',
+          confirmText: '确认删除',
+          danger: true,
+        }))
+      ) {
+        return;
+      }
+      try {
+        await apiDelete(`/api/v1/clusters/${selectedId}`);
+        toast.success('集群记录已删除');
+        await loadList();
+        return;
+      } catch (ex: any) {
+        if (!String(ex?.message || '').includes('已部署')) {
+          setErr(ex?.message || '删除集群失败');
+          return;
+        }
+      }
+    }
+    try {
+      const r = await apiPost(`/api/v1/clusters/${selectedId}/uninstall/plan`, {});
+      setUninstallPlan(r.plan || { warnings: [] });
+    } catch (ex: any) {
+      setErr(ex?.message || '获取卸载计划失败');
     }
   };
 
@@ -328,6 +365,7 @@ export function VaultPage() {
                     .then((r) => { toast.success(r.report?.message || '已核对'); return loadDetail(); })
                     .catch((ex) => setErr(ex.message))
                 }
+                onUninstall={handleUninstall}
                 onOpenJoin={() => { setJoinNodeId(''); setConfirmSwap(false); setShowJoin(true); }}
                 onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Vault 日志: ${n.name}`)}
                 onCheckGate={(n) =>
@@ -911,6 +949,17 @@ export function VaultPage() {
           </div>
         </form>
       </Modal>
+
+      <UninstallClusterModal
+        open={Boolean(uninstallPlan)}
+        cluster={cluster || null}
+        plan={uninstallPlan}
+        onClose={() => setUninstallPlan(null)}
+        onSubmitted={(taskId) => {
+          if (taskId) openTask(taskId, `卸载 Vault: ${cluster?.name || ''}`);
+          void loadList();
+        }}
+      />
     </div>
   );
 }

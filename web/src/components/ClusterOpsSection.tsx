@@ -27,6 +27,8 @@ interface ClusterOpsSectionProps {
   onRotateGossip?: () => Promise<unknown> | void;
   onDoctor: () => Promise<unknown> | void;
   onReconcile: () => Promise<unknown> | void;
+  onRevealRootToken?: () => Promise<unknown> | void;
+  onUninstall?: () => Promise<unknown> | void;
   onOpenJoin: () => void;
   onOpenLogs: (node: any) => void;
   onCheckGate?: (node: any) => Promise<unknown> | void;
@@ -58,6 +60,8 @@ export function ClusterOpsSection({
   onRotateGossip,
   onDoctor,
   onReconcile,
+  onRevealRootToken,
+  onUninstall,
   onOpenJoin,
   onOpenLogs,
   onCheckGate,
@@ -286,6 +290,24 @@ export function ClusterOpsSection({
                 <Button size="sm" loading={busyKey === 'reconcile'} disabled={Boolean(busyKey)} onClick={() => void runBusy('reconcile', onReconcile)}>
                   {busyKey === 'reconcile' ? '核对中...' : '核对解锁'}
                 </Button>
+                {!isVault && onRevealRootToken && cluster.init_state !== 'uninitialized' && (
+                  <Button size="sm" loading={busyKey === 'root-token'} disabled={Boolean(busyKey)} onClick={() => void runBusy('root-token', onRevealRootToken)}>
+                    查看 Root Token
+                  </Button>
+                )}
+                {onUninstall && (
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    loading={busyKey === 'uninstall'}
+                    disabled={Boolean(busyKey)}
+                    onClick={() => void runBusy('uninstall', onUninstall)}
+                  >
+                    {cluster.init_state === 'uninitialized' && clusterNodes.every((n: any) => n.install_state === 'pending')
+                      ? '删除未部署集群'
+                      : '卸载集群'}
+                  </Button>
+                )}
               </div>
             </div>
           </Card>

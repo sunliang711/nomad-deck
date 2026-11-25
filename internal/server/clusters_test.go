@@ -346,4 +346,13 @@ func TestJobRoutes(t *testing.T) {
 			t.Fatalf("expected persisted settings.use_proxy=true, got %+v", cl["settings"])
 		}
 	}
+	if code, _ := viewer.do("POST", "/api/v1/nomad/"+cid+"/management-token/reveal", map[string]any{"current_password": adminPass}, nil); code != 403 {
+		t.Fatalf("viewer cannot reveal management token: %d", code)
+	}
+	if code, _ := root.do("POST", "/api/v1/nomad/"+cid+"/management-token/reveal", map[string]any{"current_password": "wrong-password"}, nil); code != 403 {
+		t.Fatalf("wrong password must be rejected: %d", code)
+	}
+	if code, b := root.do("POST", "/api/v1/nomad/"+cid+"/management-token/reveal", map[string]any{"current_password": adminPass}, nil); code != 409 || errCode(b) != "no_admin_token" {
+		t.Fatalf("expected 409 no_admin_token on undeployed cluster, got %d %v", code, b)
+	}
 }

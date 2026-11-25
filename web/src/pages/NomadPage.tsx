@@ -26,6 +26,7 @@ import {
 import { NomadWorkbench } from '../components/NomadWorkbench';
 import { CodeEditor } from '../components/CodeEditor';
 import { ClusterOpsSection } from '../components/ClusterOpsSection';
+import { UninstallClusterModal, type UninstallPlan } from '../components/UninstallClusterModal';
 
 export function NomadPage() {
   const { isAdmin } = useAuth();
@@ -49,6 +50,8 @@ export function NomadPage() {
   const [roleEdit, setRoleEdit] = useState<{ id: string; name: string; description: string; policies: string[] } | null>(null);
   const [policyEdit, setPolicyEdit] = useState({ name: '', rules: '' });
   const [newToken, setNewToken] = useState('');
+  const [mgmtToken, setMgmtToken] = useState('');
+  const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(null);
   const [err, setErr] = useState('');
 
   const [showCreate, setShowCreate] = useState(false);
@@ -160,12 +163,59 @@ export function NomadPage() {
 
   useEffect(() => {
     setGateView(null);
+    setMgmtToken('');
+    setUninstallPlan(null);
     if (selectedId && (tab === 'status' || tab === 'snapshots')) void loadOpsTab();
     if (selectedId && tab === 'governance') void loadGovernance();
     if (!selectedId || tab !== 'status') return;
     const t = setInterval(() => void loadOpsTab(), 30000);
     return () => clearInterval(t);
   }, [selectedId, tab, loadOpsTab]);
+
+  const handleRevealMgmtToken = () => {
+    setPwAction({
+      title: '查看 Nomad Management (Root) Token',
+      run: async (pw) => {
+        const res = await apiPost(`/api/v1/nomad/${selectedId}/management-token/reveal`, { current_password: pw });
+        setMgmtToken(res.management_token || '');
+        toast.info('已解密 Nomad Management (Root) Token，请妥善保管');
+      },
+    });
+  };
+
+  const handleUninstall = async () => {
+    if (!cluster) return;
+    const canDeleteUndeployed =
+      cluster.init_state === 'uninitialized' && clusterNodes.every((n: any) => n.install_state === 'pending');
+    if (canDeleteUndeployed) {
+      if (
+        !(await askConfirm(`确认删除未部署集群「${cluster.name}」吗？仅清除控制面记录，不会改动主机。`, {
+          title: '删除未部署集群',
+          confirmText: '确认删除',
+          danger: true,
+        }))
+      ) {
+        return;
+      }
+      try {
+        await apiDelete(`/api/v1/clusters/${selectedId}`);
+        toast.success('集群记录已删除');
+        await loadList();
+        return;
+      } catch (ex: any) {
+        if (!String(ex?.message || '').includes('已部署')) {
+          setErr(ex?.message || '删除集群失败');
+          return;
+        }
+      }
+    }
+    try {
+      const r = await apiPost(`/api/v1/clusters/${selectedId}/uninstall/plan`, {});
+      setUninstallPlan(r.plan || { warnings: [] });
+    } catch (ex: any) {
+      setErr(ex?.message || '获取卸载计划失败');
+    }
+  };
 
   const clusterNodes = status?.nodes || [];
 
@@ -212,6 +262,14 @@ export function NomadPage() {
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
       {newToken && <MaskedSecret value={newToken} label="新签发 ACL Token Secret（仅展示一次）：" />}
+      {mgmtToken && (
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex-1 min-w-0">
+            <MaskedSecret value={mgmtToken} label="Nomad Management (Root) Token（最高权限密钥）：" />
+          </div>
+          <Button size="sm" onClick={() => setMgmtToken('')}>隐藏 Token</Button>
+        </div>
+      )}
 
       {!cluster ? (
         <Card>
@@ -289,6 +347,8 @@ export function NomadPage() {
                     .then((r) => { toast.success(r.report?.message || '已核对'); return loadOpsTab(); })
                     .catch((ex) => setErr(ex.message))
                 }
+                onRevealRootToken={handleRevealMgmtToken}
+                onUninstall={handleUninstall}
                 onOpenJoin={() => { setJoinNodeId(''); setShowJoin(true); }}
                 onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Nomad 日志: ${n.name}`)}
                 onCheckGate={(n) =>
@@ -458,6 +518,7 @@ export function NomadPage() {
                         删除 Policy
                       </Button>
                       <Button onClick={() => void apiPost(`/api/v1/nomad/${selectedId}/acl/tokens`, { name: 'ops-token', policies: policyEdit.name ? [policyEdit.name] : [] }).then((r) => { setNewToken(r.token?.secret_id || ''); toast.success('已签发 Client Token'); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>签发 Client Token</Button>
+                      <Button onClick={handleRevealMgmtToken}>查看 Management (Root) Token</Button>
                     </div>
                   )}
                   <div className="border-t border-slate-200 pt-2 dark:border-slate-800">
@@ -672,6 +733,17 @@ export function NomadPage() {
           </div>
         </form>
       </Modal>
+
+      <UninstallClusterModal
+        open={Boolean(uninstallPlan)}
+        cluster={cluster || null}
+        plan={uninstallPlan}
+        onClose={() => setUninstallPlan(null)}
+        onSubmitted={(taskId) => {
+          if (taskId) openTask(taskId, `卸载 Nomad: ${cluster?.name || ''}`);
+          void loadList();
+        }}
+      />
     </div>
   );
 }

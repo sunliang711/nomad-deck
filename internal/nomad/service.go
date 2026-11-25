@@ -529,6 +529,23 @@ func (s *Service) managementToken(cl *nomadCluster) (string, error) {
 	return s.Keys.DecryptString(cl.AdminTokenEncrypted, db.ClusterAdminTokenAAD(cl.ID))
 }
 
+// RevealManagementToken decrypts and returns the cluster's Nomad ACL management token for audited admin access.
+func (s *Service) RevealManagementToken(ctx context.Context, actor audit.Actor, clusterID string) (string, error) {
+	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return "", err
+	}
+	tok, err := s.managementToken(cl)
+	if err != nil {
+		return "", err
+	}
+	_ = s.Audit.Record(ctx, nil, audit.Event{
+		Actor: actor, Action: "nomad.management_token_reveal", ResourceType: "cluster",
+		ResourceID: clusterID, ResourceName: cl.Name,
+	})
+	return tok, nil
+}
+
 // servers returns the server members, in creation order.
 func servers(ms []*db.ClusterNode) []*db.ClusterNode {
 	var out []*db.ClusterNode

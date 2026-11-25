@@ -295,4 +295,17 @@ func TestJobRoutes(t *testing.T) {
 	if code, b := root.do("POST", "/api/v1/nomad/"+cid+"/job-ops/apply", map[string]any{"plan_id": "nope"}, nil); code != 409 || errCode(b) != "plan_not_found" {
 		t.Fatalf("unknown plan: %d %v", code, b)
 	}
+	// Runtime workbench permissions.
+	for _, p := range []string{"/variables/item/reveal?path=a&namespace=default", "/allocs/00000000-0000-0000-0000-000000000000/restart",
+		"/clients/00000000-0000-0000-0000-000000000000/drain", "/deployments/00000000-0000-0000-0000-000000000000/promote"} {
+		if code, _ := viewer.do("POST", "/api/v1/nomad/"+cid+p, map[string]any{}, nil); code != 403 {
+			t.Fatalf("viewer must not call %s", p)
+		}
+	}
+	if code, b := root.do("GET", "/api/v1/nomad/"+cid+"/watch?topics=bogus", nil, nil); code != 400 {
+		t.Fatalf("unknown topic: %d %v", code, b)
+	}
+	if code, b := viewer.do("GET", "/api/v1/nomad/"+cid+"/watch?topics=jobs", nil, nil); code != 409 || errCode(b) != "not_initialized" {
+		t.Fatalf("watch on an undeployed cluster: %d %v", code, b)
+	}
 }

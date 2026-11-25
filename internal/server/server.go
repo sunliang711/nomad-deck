@@ -31,6 +31,7 @@ import (
 	"nomad-deck/internal/sshx"
 	"nomad-deck/internal/vault"
 	"nomad-deck/internal/version"
+	"nomad-deck/internal/workbench"
 )
 
 // DatabaseFile is the SQLite file name inside the data directory.
@@ -112,6 +113,8 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 	integrations.Wire()
 	jobSvc := &jobs.Service{DB: d, Keys: keys, Audit: rec, Ops: engine, Nomad: nomadSvc, Log: log}
 	jobSvc.Init()
+	wb := &workbench.Service{DB: d, Audit: rec, Nomad: nomadSvc, Log: log}
+	wb.Init()
 	app := &App{Config: cfg, Log: log, Keys: keys, DB: d, Audit: rec, Auth: authSvc, Hosts: hostSvc, Ops: engine, Pool: pool, Vault: vaultSvc, Nomad: nomadSvc}
 	origins, err := AllowedOrigins(cfg)
 	if err != nil {
@@ -123,7 +126,7 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 		pr, _ := config.ParsePrefix(p)
 		trusted = append(trusted, pr)
 	}
-	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc, Nomad: nomadSvc, Integrations: integrations, Jobs: jobSvc,
+	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc, Nomad: nomadSvc, Integrations: integrations, Jobs: jobSvc, Workbench: wb,
 		Log: log, AllowedOrigins: origins, TrustedProxies: trusted,
 		HTTPS: cfg.TLS.Mode != config.TLSModeProxy || isHTTPS(cfg), Ready: &app.ready}
 	return app, nil

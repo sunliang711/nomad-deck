@@ -20,6 +20,7 @@ import (
 	"nomad-deck/internal/release"
 	"nomad-deck/internal/vault"
 	"nomad-deck/internal/version"
+	"nomad-deck/internal/workbench"
 )
 
 // API holds handler dependencies.
@@ -34,6 +35,7 @@ type API struct {
 	Nomad        *nomad.Service
 	Integrations *integration.Service
 	Jobs         *jobs.Service
+	Workbench    *workbench.Service
 	// jobOpExtra serves job-ops added by other components (e.g. render).
 	jobOpExtra     func(w http.ResponseWriter, r *http.Request) bool
 	Log            *slog.Logger
@@ -104,6 +106,24 @@ func (a *API) Handler() http.Handler {
 			r.Get("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}", a.getJob)
 			r.Get("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/versions", a.jobVersions)
 			r.Get("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/revisions", a.jobRevisions)
+			r.Get("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/{view}", a.jobView)
+			r.Get("/nomad/{id}/watch", a.watch)
+			r.Get("/nomad/{id}/search", a.search)
+			r.Get("/nomad/{id}/allocs/{alloc_id}", a.allocDetail)
+			r.Get("/nomad/{id}/allocs/{alloc_id}/stats", a.allocStats)
+			r.Get("/nomad/{id}/allocs/{alloc_id}/checks", a.allocChecks)
+			r.Get("/nomad/{id}/clients", a.listClients)
+			r.Get("/nomad/{id}/clients/{node_id}", a.clientDetail)
+			r.Get("/nomad/{id}/clients/{node_id}/stats", a.clientStats)
+			r.Get("/nomad/{id}/servers", a.nomadServers)
+			r.Get("/nomad/{id}/topology", a.topology)
+			r.Get("/nomad/{id}/evaluations", a.evaluations)
+			r.Get("/nomad/{id}/evaluations/{eval_id}", a.evaluation)
+			r.Get("/nomad/{id}/volumes", a.volumes)
+			r.Get("/nomad/{id}/volumes/{volume_id}", a.volume)
+			r.Get("/nomad/{id}/plugins", a.plugins)
+			r.Get("/nomad/{id}/variables", a.listVariables)
+			r.Get("/nomad/{id}/variables/item", a.getVariable)
 			r.Get("/integrations/{id}", a.getIntegration)
 			r.Get("/integrations/{id}/roles", a.listIntegrationRoles)
 			r.Get("/nomad/{id}/namespaces", a.nomadListNamespaces)
@@ -215,6 +235,15 @@ func (a *API) Handler() http.Handler {
 				r.Get("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/definition", a.jobDefinition)
 				r.Get("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/edit-source", a.jobEditSource)
 				r.Post("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/{action}", a.jobAction)
+				r.Post("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/periodic/force", a.forcePeriodic)
+				r.Post("/nomad/{id}/namespaces/{namespace}/jobs/{job_id}/dispatch", a.dispatchJob)
+				r.Post("/nomad/{id}/deployments/{dep_id}/{action}", a.deploymentAction)
+				r.Post("/nomad/{id}/allocs/{alloc_id}/{action}", a.allocAction)
+				r.Post("/nomad/{id}/clients/{node_id}/{action}", a.clientAction)
+				r.Delete("/nomad/{id}/volumes/{volume_id}", a.deleteVolume)
+				r.Put("/nomad/{id}/variables/item", a.putVariable)
+				r.Delete("/nomad/{id}/variables/item", a.deleteVariable)
+				r.Post("/nomad/{id}/variables/item/reveal", a.revealVariable)
 				r.Get("/nomad/{id}/revisions/{revision_id}/variables", a.revisionVariables)
 				r.Post("/nomad/{id}/revisions/{revision_id}/review", a.reviewRevision)
 				r.Post("/nomad/{id}/job-ops/{op}", a.jobOp)

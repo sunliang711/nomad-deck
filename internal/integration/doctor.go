@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -266,13 +267,21 @@ func (s *Service) loginProbe(ctx context.Context, l *loaded, in DoctorInput, add
 		return
 	}
 	run := func(ns string) (bool, string) {
-		jobID := fmt.Sprintf("nomad-deck-vault-probe-%d", time.Now().UnixNano())
-		if j := sp.BoundClaims["nomad_job_id"]; j != "" && ns == sp.BoundClaims["nomad_namespace"] {
-			jobID = j
-		}
 		driver := in.Driver
 		if driver == "" {
 			driver = "raw_exec"
+		}
+		if driver != "raw_exec" && driver != "docker" {
+			return false, "不支持的探测 Driver：" + driver
+		}
+		jobID := fmt.Sprintf("nomad-deck-vault-probe-%d", time.Now().UnixNano())
+		q := "?namespace=" + url.QueryEscape(ns)
+		if j := sp.BoundClaims["nomad_job_id"]; j != "" && ns == sp.BoundClaims["nomad_namespace"] {
+			var existing json.RawMessage
+			if err := api.Request(ctx, http.MethodGet, "job/"+url.PathEscape(j)+q, nil, &existing); err == nil {
+				return false, fmt.Sprintf("Role 绑定了已存在的生产 Job (%s)，禁止覆盖探测", j)
+			}
+			jobID = j
 		}
 		task := map[string]any{"Name": "probe", "Driver": driver, "Vault": map[string]any{"Role": sp.Name},
 			"Config":    map[string]any{"command": "/bin/sh", "args": []string{"-c", `test -s "$NOMAD_SECRETS_DIR/vault_token"`}},
@@ -282,15 +291,22 @@ func (s *Service) loginProbe(ctx context.Context, l *loaded, in DoctorInput, add
 				"args": []string{"-c", `test -s "$NOMAD_SECRETS_DIR/vault_token"`}}
 		}
 		if in.SecretPath != "" {
-			mnt, rest, _ := strings.Cut(strings.Trim(in.SecretPath, "/"), "/")
+			trimmed := strings.Trim(in.SecretPath, "/")
+			if !reKVPath.MatchString(trimmed) || strings.Contains(in.SecretPath, "..") {
+				return false, "secret_path 格式不合法"
+			}
+			mnt, rest, _ := strings.Cut(trimmed, "/")
 			task["Templates"] = []any{map[string]any{"DestPath": "secrets/probe.env",
-				"EmbeddedTmpl": fmt.Sprintf(`{{ with secret "%s/data/%s" }}ok{{ end }}`, mnt, rest)}}
+				"EmbeddedTmpl": fmt.Sprintf(`{{ with secret %s }}ok{{ end }}`, strconv.Quote(mnt+"/data/"+rest))}}
 		}
-		job := map[string]any{"Job": map[string]any{"ID": jobID, "Name": jobID, "Namespace": ns, "Type": "batch", "Datacenters": []string{"*"},
-			"TaskGroups": []any{map[string]any{"Name": "probe", "Count": 1, "Tasks": []any{task},
-				"RestartPolicy":    map[string]any{"Attempts": 0, "Mode": "fail"},
-				"ReschedulePolicy": map[string]any{"Attempts": 0, "Unlimited": false}}}}}
-		q := "?namespace=" + url.QueryEscape(ns)
+		job := map[string]any{
+			"EnforceIndex":   true,
+			"JobModifyIndex": 0,
+			"Job": map[string]any{"ID": jobID, "Name": jobID, "Namespace": ns, "Type": "batch", "Datacenters": []string{"*"},
+				"TaskGroups": []any{map[string]any{"Name": "probe", "Count": 1, "Tasks": []any{task},
+					"RestartPolicy":    map[string]any{"Attempts": 0, "Mode": "fail"},
+					"ReschedulePolicy": map[string]any{"Attempts": 0, "Unlimited": false}}}},
+		}
 		if err := api.Request(ctx, http.MethodPut, "jobs"+q, job, nil); err != nil {
 			return false, "提交探测 Job 失败：" + err.Error()
 		}

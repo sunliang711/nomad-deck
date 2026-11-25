@@ -83,12 +83,17 @@ func writeRootFile(ctx context.Context, c *Client, path string, content []byte, 
 		return err
 	}
 	dir := path[:strings.LastIndex(path, "/")]
+	if dir == "" {
+		dir = "/"
+	}
 	script := fmt.Sprintf(`set -e
 install -d -m 0700 %[1]s
 tmp=%[2]s.tmp.$$
-cat > "$tmp"
+trap 'rm -f "$tmp"' EXIT
+(umask 077; cat > "$tmp")
 chmod %[3]s "$tmp"
 mv -f "$tmp" %[2]s
+trap - EXIT
 `, Quote(dir), Quote(path), mode)
 	_, err := c.Run(ctx, script, RunOptions{Sudo: true, Stdin: bytes.NewReader(content)})
 	return err
@@ -204,7 +209,8 @@ func pollStep(ctx context.Context, c *Client, s StepSpec, offset int64) ([]byte,
 	// the final result before its unit exits, so "inactive" followed by a
 	// "running" result really means the wrapper died. The other order races
 	// with a step that finishes between the two reads.
-	script := fmt.Sprintf(`if [ -f %[1]s ]; then tail -c +%[2]d %[1]s; fi
+	// Bound each poll chunk to 4 MiB so stdout + markers stay well under Client.Run's 8 MiB cap.
+	script := fmt.Sprintf(`if [ -f %[1]s ]; then tail -c +%[2]d %[1]s | head -c 4194304; fi
 printf '\n%[3]s\n'
 systemctl is-active %[5]s 2>/dev/null || true
 printf '\n%[3]s\n'
@@ -235,6 +241,12 @@ func CleanupStep(ctx context.Context, c *Client, product, opID, step string) err
 	if err := ValidIdent(product); err != nil {
 		return err
 	}
+	if err := ValidIdent(opID); err != nil {
+		return err
+	}
+	if err := ValidIdent(step); err != nil {
+		return err
+	}
 	res, log, script := stepPaths(product, opID, step)
 	_, err := c.Run(ctx, "rm -f "+Quote(res)+" "+Quote(log)+" "+Quote(script), RunOptions{Sudo: true})
 	return err
@@ -259,6 +271,9 @@ func PutFile(ctx context.Context, c *Client, path string, content []byte, mode, 
 		return fmt.Errorf("invalid owner %q", owner)
 	}
 	dir := path[:strings.LastIndex(path, "/")]
+	if dir == "" {
+		dir = "/"
+	}
 	script := fmt.Sprintf(`set -e
 install -d -m %[4]s %[1]s
 tmp=%[2]s.nd-tmp.$$

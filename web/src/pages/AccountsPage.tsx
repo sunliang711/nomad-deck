@@ -92,7 +92,14 @@ export function AccountsPage() {
                       最后活跃：{fmtTime(s.last_seen_at)} · 过期：{fmtTime(s.expires_at)}
                     </div>
                   </div>
-                  <Button size="sm" onClick={() => void apiDelete(`/api/v1/auth/sessions/${s.id}`).then(() => load())}>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      void apiDelete(`/api/v1/auth/sessions/${s.id}`)
+                        .then(() => load())
+                        .catch((ex) => setErr(ex.message))
+                    }
+                  >
                     注销
                   </Button>
                 </div>
@@ -130,7 +137,7 @@ export function AccountsPage() {
                       <Badge tone={a.role === 'admin' ? 'blue' : 'neutral'}>{a.role}</Badge>
                     </td>
                     <td className="py-2 pr-3">
-                      <Badge tone={a.is_disabled ? 'red' : 'green'}>{a.is_disabled ? '已停用' : '启用'}</Badge>
+                      <Badge tone={a.disabled ? 'red' : 'green'}>{a.disabled ? '已停用' : '启用'}</Badge>
                     </td>
                     <td className="py-2 pr-3">{fmtTime(a.last_login_at)}</td>
                     <td className="py-2 text-right">
@@ -158,11 +165,11 @@ export function AccountsPage() {
                         </Button>
                         <Button
                           size="sm"
-                          variant={a.is_disabled ? 'primary' : 'danger'}
+                          variant={a.disabled ? 'primary' : 'danger'}
                           onClick={() => {
-                            const act = a.is_disabled ? 'enable' : 'disable';
+                            const act = a.disabled ? 'enable' : 'disable';
                             setPwAction({
-                              title: `${a.is_disabled ? '启用' : '停用'}账号 ${a.username}`,
+                              title: `${a.disabled ? '启用' : '停用'}账号 ${a.username}`,
                               run: async (pw) => {
                                 await apiPost(`/api/v1/admins/${a.id}/${act}`, { current_password: pw });
                                 await load();
@@ -170,7 +177,7 @@ export function AccountsPage() {
                             });
                           }}
                         >
-                          {a.is_disabled ? '启用' : '停用'}
+                          {a.disabled ? '启用' : '停用'}
                         </Button>
                       </div>
                     </td>

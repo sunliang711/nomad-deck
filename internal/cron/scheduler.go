@@ -52,19 +52,21 @@ type Scheduler struct {
 	handlers map[string]Handler // built-in job_key or custom payload type
 	customs  map[string]customType
 
-	mu      sync.Mutex
-	running map[string]bool
-	queued  map[string]queuedRun
-	wake    chan struct{}
-	cancel  context.CancelFunc
-	base    context.Context
-	wg      sync.WaitGroup
-	started bool
+	mu       sync.Mutex
+	running  map[string]bool
+	queued   map[string]queuedRun
+	wake     chan struct{}
+	cancel   context.CancelFunc
+	base     context.Context
+	wg       sync.WaitGroup
+	started  bool
+	stopping bool
 }
 
 type queuedRun struct {
 	at      time.Time
 	trigger string
+	actor   audit.Actor
 }
 
 func (s *Scheduler) now() time.Time {
@@ -115,14 +117,15 @@ func (s *Scheduler) location(ctx context.Context) *time.Location {
 	return loc
 }
 
-var parser = robfig.NewParser(robfig.Minute | robfig.Hour | robfig.Dom | robfig.Month | robfig.Dow | robfig.Descriptor)
+var parser = robfig.NewParser(robfig.Minute | robfig.Hour | robfig.Dom | robfig.Month | robfig.Dow)
 
 // ParseExpr validates a five-field cron expression.
 func ParseExpr(expr string) (robfig.Schedule, error) {
-	if strings.Count(strings.TrimSpace(expr), " ") > 4 || strings.Contains(expr, "TZ=") || strings.Contains(expr, "CRON_TZ=") {
+	fields := strings.Fields(expr)
+	if len(fields) != 5 || strings.Contains(expr, "TZ=") || strings.Contains(expr, "CRON_TZ=") {
 		return nil, errors.New("需为 5 段 Cron 表达式（分 时 日 月 周），时区由系统设置统一指定")
 	}
-	sch, err := parser.Parse(expr)
+	sch, err := parser.Parse(strings.Join(fields, " "))
 	if err != nil {
 		return nil, fmt.Errorf("Cron 表达式无效：%v", err)
 	}
@@ -146,7 +149,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil
 	}
-	s.started = true
+	s.stopping = false
 	s.mu.Unlock()
 	if err := s.seed(ctx); err != nil {
 		return err
@@ -160,7 +163,14 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
+	if s.started {
+		s.mu.Unlock()
+		cancel()
+		return nil
+	}
 	s.cancel, s.base = cancel, runCtx
+	s.started = true
+	s.wg.Add(1)
 	s.mu.Unlock()
 	now := s.now()
 	for _, j := range jobs {
@@ -172,15 +182,18 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		}
 		_ = db.SetCronNext(ctx, s.DB.Writer, j.ID, s.next(ctx, j, now))
 	}
-	s.wg.Add(1)
 	go s.loop(runCtx)
 	return nil
 }
 
 // Stop ends the loop and cancels running jobs.
 func (s *Scheduler) Stop() {
-	if s.cancel != nil {
-		s.cancel()
+	s.mu.Lock()
+	s.stopping = true
+	cancel := s.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 	s.wg.Wait()
 }
@@ -299,13 +312,17 @@ func (s *Scheduler) fire(ctx context.Context, j *db.CronJob, at time.Time, trigg
 		return skip(err.Error())
 	}
 	s.mu.Lock()
+	if s.stopping || ctx.Err() != nil {
+		s.mu.Unlock()
+		return nil, &auth.Error{Status: 409, Code: "scheduler_stopped", Message: "调度器正在停止"}
+	}
 	if s.running[j.ID] {
 		if trigger == "manual" && j.OverlapPolicy != "queue_one" {
 			s.mu.Unlock()
 			return nil, ErrAlreadyRunning
 		}
 		if j.OverlapPolicy == "queue_one" {
-			s.queued[j.ID] = queuedRun{at: at, trigger: trigger}
+			s.queued[j.ID] = queuedRun{at: at, trigger: trigger, actor: actor}
 			s.mu.Unlock()
 			return nil, nil
 		}
@@ -320,12 +337,12 @@ func (s *Scheduler) fire(ctx context.Context, j *db.CronJob, at time.Time, trigg
 		return nil, err
 	}
 	s.running[j.ID] = true
+	s.wg.Add(1)
 	s.mu.Unlock()
 	if trigger == "manual" {
 		_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cron.run", ResourceType: "cron_job", ResourceID: j.ID,
 			ResourceName: j.JobKey, Summary: map[string]any{"run_id": rec.ID}})
 	}
-	s.wg.Add(1)
 	go s.execute(ctx, j, rec, h)
 	return rec, nil
 }
@@ -374,7 +391,11 @@ func (s *Scheduler) execute(parent context.Context, j *db.CronJob, rec *db.CronR
 	s.mu.Unlock()
 	if again && parent.Err() == nil {
 		if fresh, err := db.GetCronJob(bg, s.DB.Reader, j.ID); err == nil && (fresh.Enabled || q.trigger == "manual") {
-			_, _ = s.fire(parent, fresh, q.at, q.trigger, audit.ActorCron)
+			a := q.actor
+			if a.Name == "" {
+				a = audit.ActorCron
+			}
+			_, _ = s.fire(parent, fresh, q.at, q.trigger, a)
 		}
 	}
 }

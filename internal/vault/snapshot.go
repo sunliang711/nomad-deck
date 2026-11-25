@@ -120,6 +120,10 @@ func (s *Service) CreateSnapshot(ctx context.Context, actor audit.Actor, cluster
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.snapshot", TargetType: "cluster", TargetID: clusterID,
 		Locks: []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Shared}}, TriggeredBy: actor.Name,
 		Run: func(ctx context.Context, t *ops.Task) error {
+			cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
 			step, err := t.Step("导出并加密 Raft 快照", "")
 			if err != nil {
 				return err
@@ -343,6 +347,10 @@ func (s *Service) Restore(ctx context.Context, actor audit.Actor, clusterID, sna
 		Locks: append(memberLocks(clusterID, members), ops.LockReq{Key: ops.SnapshotLock(clusterID), Mode: ops.Shared}), TriggeredBy: actor.Name,
 		Params: map[string]any{"snapshot_id": sn.ID, "force": intent.Force, "resume_from": intent.Phase},
 		Run: func(ctx context.Context, t *ops.Task) error {
+			cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
 			return s.runRestore(ctx, t, actor, cl, sn, intent)
 		}})
 	if err != nil {
@@ -489,7 +497,10 @@ func (s *Service) runRestore(ctx context.Context, t *ops.Task, actor audit.Actor
 			if err != nil {
 				return err
 			}
-			c, _ := s.client(cl, am, "")
+			c, err := s.client(cl, am, "")
+			if err != nil {
+				return err
+			}
 			tok, _ := s.adminToken(ctx, cl.ID)
 			if tok != "" {
 				if _, err := c.WithToken(tok).LookupSelf(ctx); err == nil {

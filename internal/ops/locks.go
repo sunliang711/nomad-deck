@@ -35,18 +35,22 @@ func SnapshotLock(clusterID string) string { return "snapshots:" + clusterID }
 func HostLock(nodeID, product string) string { return "host:" + nodeID + ":" + product }
 
 type lockState struct {
-	shared         int
-	exclusive      bool
-	waitingWriters int
+	shared    int
+	exclusive bool
 }
 
-// LockManager grants sets of locks atomically (all or nothing), which rules
-// out lock-order deadlocks. Waiting exclusive requests block new shared
-// grants on the same key so writers are not starved.
+type lockWaiter struct {
+	reqs []LockReq
+}
+
+// LockManager grants sets of locks atomically (all or nothing) in FIFO order
+// for conflicting waiters, preventing both lock-order deadlocks and writer
+// starvation while remaining deadlock-free on mixed Exclusive/Shared lock sets.
 type LockManager struct {
-	mu    sync.Mutex
-	locks map[string]*lockState
-	wake  chan struct{}
+	mu      sync.Mutex
+	locks   map[string]*lockState
+	waiters []*lockWaiter
+	wake    chan struct{}
 }
 
 // NewLockManager creates an empty manager.
@@ -63,15 +67,41 @@ func (m *LockManager) state(key string) *lockState {
 	return s
 }
 
-func (m *LockManager) grantable(reqs []LockReq) bool {
-	for _, r := range reqs {
-		s := m.state(r.Key)
+func (m *LockManager) waiterIndex(w *lockWaiter) int {
+	for i, item := range m.waiters {
+		if item == w {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *LockManager) removeWaiter(w *lockWaiter) {
+	if idx := m.waiterIndex(w); idx >= 0 {
+		m.waiters = append(m.waiters[:idx], m.waiters[idx+1:]...)
+	}
+}
+
+func (m *LockManager) grantable(w *lockWaiter) bool {
+	idx := m.waiterIndex(w)
+	for _, r := range w.reqs {
+		s := m.locks[r.Key]
 		if r.Mode == Exclusive {
-			if s.exclusive || s.shared > 0 {
+			if s != nil && (s.exclusive || s.shared > 0) {
 				return false
 			}
-		} else if s.exclusive || s.waitingWriters > 0 {
+			continue
+		}
+		if s != nil && s.exclusive {
 			return false
+		}
+		// Only earlier queued exclusive waiters on this key block a shared request.
+		for j := 0; j < idx; j++ {
+			for _, wr := range m.waiters[j].reqs {
+				if wr.Key == r.Key && wr.Mode == Exclusive {
+					return false
+				}
+			}
 		}
 	}
 	return true
@@ -89,20 +119,11 @@ func (m *LockManager) Acquire(ctx context.Context, reqs []LockReq) (func(), erro
 	if len(reqs) == 0 {
 		return func() {}, nil
 	}
+	w := &lockWaiter{reqs: reqs}
 	m.mu.Lock()
-	for _, r := range reqs {
-		if r.Mode == Exclusive {
-			m.state(r.Key).waitingWriters++
-		}
-	}
+	m.waiters = append(m.waiters, w)
 	for {
-		// A waiting writer must not block itself.
-		for _, r := range reqs {
-			if r.Mode == Exclusive {
-				m.state(r.Key).waitingWriters--
-			}
-		}
-		if m.grantable(reqs) {
+		if m.grantable(w) {
 			for _, r := range reqs {
 				s := m.state(r.Key)
 				if r.Mode == Exclusive {
@@ -111,14 +132,11 @@ func (m *LockManager) Acquire(ctx context.Context, reqs []LockReq) (func(), erro
 					s.shared++
 				}
 			}
+			m.removeWaiter(w)
+			m.broadcast()
 			m.mu.Unlock()
 			var once sync.Once
 			return func() { once.Do(func() { m.release(reqs) }) }, nil
-		}
-		for _, r := range reqs {
-			if r.Mode == Exclusive {
-				m.state(r.Key).waitingWriters++
-			}
 		}
 		wake := m.wake
 		m.mu.Unlock()
@@ -126,11 +144,7 @@ func (m *LockManager) Acquire(ctx context.Context, reqs []LockReq) (func(), erro
 		case <-wake:
 		case <-ctx.Done():
 			m.mu.Lock()
-			for _, r := range reqs {
-				if r.Mode == Exclusive {
-					m.state(r.Key).waitingWriters--
-				}
-			}
+			m.removeWaiter(w)
 			m.broadcast()
 			m.mu.Unlock()
 			return nil, ctx.Err()
@@ -143,13 +157,16 @@ func (m *LockManager) release(reqs []LockReq) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, r := range reqs {
-		s := m.state(r.Key)
+		s := m.locks[r.Key]
+		if s == nil {
+			continue
+		}
 		if r.Mode == Exclusive {
 			s.exclusive = false
 		} else if s.shared > 0 {
 			s.shared--
 		}
-		if !s.exclusive && s.shared == 0 && s.waitingWriters == 0 {
+		if !s.exclusive && s.shared == 0 {
 			delete(m.locks, r.Key)
 		}
 	}

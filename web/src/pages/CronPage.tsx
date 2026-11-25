@@ -190,7 +190,11 @@ export function CronPage() {
                               <Button
                                 size="sm"
                                 variant="danger"
-                                onClick={() => void apiDelete(`/api/v1/cron-jobs/${j.id}`).then(() => load())}
+                                onClick={() =>
+                                  void apiDelete(`/api/v1/cron-jobs/${j.id}`)
+                                    .then(() => load())
+                                    .catch((ex) => setErr(ex.message))
+                                }
                               >
                                 <Trash2 className="h-3 w-3" />
                               </Button>
@@ -261,7 +265,7 @@ export function CronPage() {
             <>
               <Select label="任务类型" value={form.payload_type} onChange={(e) => setForm({ ...form, payload_type: e.target.value })}>
                 <option value="cluster_snapshot">cluster_snapshot</option>
-                <option value="cluster_doctor">cluster_doctor</option>
+                <option value="doctor">doctor</option>
                 <option value="nomad_job_export">nomad_job_export</option>
               </Select>
               <Input label="关联集群 ID" required value={form.cluster_id} onChange={(e) => setForm({ ...form, cluster_id: e.target.value })} />

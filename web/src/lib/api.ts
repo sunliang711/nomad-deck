@@ -10,6 +10,7 @@ export class ApiError extends Error {
 }
 
 let csrfToken = '';
+let onUnauthorizedHandler: (() => void) | null = null;
 
 export function setCSRFToken(token: string) {
   csrfToken = token || '';
@@ -19,12 +20,16 @@ export function getCSRFToken(): string {
   return csrfToken;
 }
 
+export function setOnUnauthorized(fn: (() => void) | null) {
+  onUnauthorizedHandler = fn;
+}
+
 async function parseError(resp: Response): Promise<ApiError> {
   const text = await resp.text();
   try {
     const j = JSON.parse(text);
     const code = j?.error?.code || 'error';
-    const msg = j?.error?.message || text || `HTTP ${resp.status}`;
+    const msg = j?.error?.message || j?.run?.error_message || text || `HTTP ${resp.status}`;
     return new ApiError(resp.status, code, msg);
   } catch {
     return new ApiError(resp.status, 'http_error', text || `HTTP ${resp.status}`);
@@ -47,6 +52,9 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
     credentials: 'same-origin',
   });
   if (!resp.ok) {
+    if (resp.status === 401 && path !== '/api/v1/auth/login' && path !== '/api/v1/auth/status') {
+      onUnauthorizedHandler?.();
+    }
     throw await parseError(resp);
   }
   if (resp.status === 204) {
@@ -99,6 +107,9 @@ export async function apiDownload(path: string, body?: unknown, fallbackFilename
     credentials: 'same-origin',
   });
   if (!resp.ok) {
+    if (resp.status === 401) {
+      onUnauthorizedHandler?.();
+    }
     throw await parseError(resp);
   }
   const blob = await resp.blob();
@@ -135,7 +146,7 @@ export function openSSE(
       }
     });
   };
-  for (const ev of ['step', 'log', 'done', 'watch', 'update', 'snapshot', 'error', 'message']) {
+  for (const ev of ['step', 'log', 'done', 'watch', 'update', 'change', 'end', 'snapshot']) {
     bind(ev);
   }
   es.onmessage = (ev) => {

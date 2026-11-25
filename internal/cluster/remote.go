@@ -255,7 +255,14 @@ func (r *Remote) ReconcileTasks(ctx context.Context, targetType, targetID string
 		if err != nil {
 			return nil, 0, err
 		}
-		running := false
+		taskRunning := false
+		hostRunning := map[string]bool{}
+		type stepCleanup struct {
+			c      *sshx.Client
+			nodeID string
+			stepID string
+		}
+		var cleanups []stepCleanup
 		for _, st := range steps {
 			if st.RemoteUnit == "" || st.NodeID == "" {
 				continue
@@ -267,29 +274,39 @@ func (r *Remote) ReconcileTasks(ctx context.Context, targetType, targetID string
 			}
 			if err != nil {
 				rs.Status, rs.Error = "unreachable", err.Error()
-				running = true
+				taskRunning = true
+				hostRunning[st.NodeID] = true
 				rep.Steps = append(rep.Steps, rs)
 				continue
 			}
 			stepID := strings.TrimPrefix(st.RemoteUnit, sshx.UnitName(task.RemoteOpID, ""))
+			stepRunning := false
 			res, err := sshx.CheckStep(ctx, c, sshx.StepSpec{Product: r.Product, OpID: task.RemoteOpID, Step: stepID})
 			if err != nil {
 				rs.Status, rs.Error = "unknown", err.Error()
-				running = true
+				stepRunning = true
 			} else {
 				rs.Status = res.Status
 				if res.Status == "running" {
-					running = true
+					stepRunning = true
 				}
 			}
-			if !running {
-				_, _ = c.Run(ctx, fmt.Sprintf(`if grep -q %s %s 2>/dev/null; then rm -f %s; fi`, sshx.Quote(task.RemoteOpID),
-					sshx.Quote(r.OpLock), sshx.Quote(r.OpLock)), sshx.RunOptions{Sudo: true})
-				_ = sshx.CleanupStep(ctx, c, r.Product, task.RemoteOpID, stepID)
+			if stepRunning {
+				taskRunning = true
+				hostRunning[st.NodeID] = true
+			} else {
+				cleanups = append(cleanups, stepCleanup{c: c, nodeID: st.NodeID, stepID: stepID})
 			}
 			rep.Steps = append(rep.Steps, rs)
 		}
-		if running {
+		for _, cl := range cleanups {
+			if !hostRunning[cl.nodeID] {
+				_, _ = cl.c.Run(ctx, fmt.Sprintf(`if grep -q %s %s 2>/dev/null; then rm -f %s; fi`, sshx.Quote(task.RemoteOpID),
+					sshx.Quote(r.OpLock), sshx.Quote(r.OpLock)), sshx.RunOptions{Sudo: true})
+			}
+			_ = sshx.CleanupStep(ctx, cl.c, r.Product, task.RemoteOpID, cl.stepID)
+		}
+		if taskRunning {
 			rep.Resolved = false
 			continue
 		}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, Search, Terminal } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, fmtBytes, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -36,12 +36,14 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
   const [volumes, setVolumes] = useState<any[]>([]);
   const [plugins, setPlugins] = useState<any[]>([]);
   const [variables, setVariables] = useState<any[]>([]);
-  const [varEdit, setVarEdit] = useState<{ path: string; items: string; modifyIndex?: number } | null>(null);
+  const [varEdit, setVarEdit] = useState<{ namespace: string; path: string; items: string; modifyIndex?: number } | null>(null);
   const [evaluations, setEvaluations] = useState<any[]>([]);
   const [scaleCount, setScaleCount] = useState(1);
   const [scaleGroup, setScaleGroup] = useState('');
   const [err, setErr] = useState('');
   const [notice, setNotice] = useState('');
+  const subTabRef = useRef(subTab);
+  subTabRef.current = subTab;
 
   const loadNamespaces = useCallback(async () => {
     try {
@@ -79,7 +81,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
           apiGet(`/api/v1/nomad/${clusterId}/volumes`),
           apiGet(`/api/v1/nomad/${clusterId}/plugins`),
         ]);
-        setVolumes(vRes.volumes || []);
+        setVolumes(vRes.csi || []);
         setPlugins(pRes.plugins || []);
       } else if (view === 'variables') {
         const res = await apiGet(`/api/v1/nomad/${clusterId}/variables`);
@@ -93,6 +95,9 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
     }
   }, [clusterId]);
 
+  const loadJobsRef = useRef(loadJobs);
+  loadJobsRef.current = loadJobs;
+
   useEffect(() => {
     void loadNamespaces();
   }, [loadNamespaces]);
@@ -104,21 +109,21 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
 
   // Shared blocking-query SSE watch for live refresh.
   useEffect(() => {
-    const stop = openSSE(`/api/v1/nomad/${clusterId}/watch?topics=jobs,allocations,evaluations,nodes`, {
+    const stop = openSSE(`/api/v1/nomad/${clusterId}/watch?topics=jobs,evaluations,nodes`, {
       onEvent: (ev) => {
-        if (ev === 'watch' || ev === 'update') {
-          if (subTab === 'jobs') void loadJobs();
+        if (ev === 'change' || ev === 'watch' || ev === 'update') {
+          if (subTabRef.current === 'jobs') void loadJobsRef.current();
         }
       },
     });
     return stop;
-  }, [clusterId, subTab, loadJobs]);
+  }, [clusterId]);
 
   const inspectJob = async (job: any) => {
     setSelectedJob(job);
     setSelectedAlloc(null);
-    const ns = job.Namespace || namespace;
-    const jid = encodeURIComponent(job.ID);
+    const ns = job.namespace || namespace;
+    const jid = encodeURIComponent(job.id);
     try {
       const [sum, allocs, deps, evals] = await Promise.all([
         apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${jid}/summary`),
@@ -126,15 +131,15 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
         apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${jid}/deployments`),
         apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${jid}/evaluations`),
       ]);
-      const s = sum.summary || sum;
+      const s = sum.data || sum.summary || sum;
       setJobSummary(s);
-      setJobAllocs(allocs.allocations || []);
-      setJobDeps(deps.deployments || []);
-      setJobEvals(evals.evaluations || []);
-      const firstGrp = s?.TaskGroups?.[0];
+      setJobAllocs(allocs.data || allocs.allocations || []);
+      setJobDeps(deps.data || deps.deployments || []);
+      setJobEvals(evals.data || evals.evaluations || []);
+      const firstGrp = (job.groups && job.groups[0]) || Object.keys(s?.Summary || {})[0] || '';
       if (firstGrp) {
-        setScaleGroup(firstGrp.Name);
-        setScaleCount(firstGrp.Count ?? 1);
+        setScaleGroup(firstGrp);
+        setScaleCount(1);
       }
     } catch (ex: any) {
       setErr(ex?.message || '加载 Job 详情失败');
@@ -186,18 +191,21 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
   useEffect(() => {
     if (!selectedAlloc?.ID || !logTask) return;
     setAllocLogs('');
-    return openSSE(
+    const stop = openSSE(
       `/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/logs/stream?task=${encodeURIComponent(logTask)}&type=stdout&follow=true`,
       {
         onEvent: (ev, d) => {
           if (ev === 'log' && d?.data) {
             setAllocLogs((p) => p + d.data);
+          } else if (ev === 'end') {
+            stop();
           } else if (typeof d === 'string') {
             setAllocLogs((p) => p + d);
           }
         },
       },
     );
+    return stop;
   }, [clusterId, selectedAlloc?.ID, logTask]);
 
   return (
@@ -223,9 +231,10 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
             className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs dark:border-slate-700 dark:bg-slate-950"
           >
             <option value="*">全部 Namespace (*)</option>
-            {(namespaces.length ? namespaces : [{ Name: 'default' }]).map((ns: any) => (
-              <option key={ns.Name} value={ns.Name}>{ns.Name}</option>
-            ))}
+            {(namespaces.length ? namespaces : [{ name: 'default' }]).map((ns: any) => {
+              const nsName = ns.name || ns.Name;
+              return <option key={nsName} value={nsName}>{nsName}</option>;
+            })}
           </select>
           <form
             onSubmit={(e) => {
@@ -276,10 +285,10 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {jobs.map((j) => (
-                      <tr key={`${j.Namespace}:${j.ID}`}>
-                        <td className="py-2 pr-3 font-mono font-medium">{j.ID}</td>
-                        <td className="py-2 pr-3">{j.Namespace} · {j.Type}</td>
-                        <td className="py-2 pr-3"><Badge tone={statusTone(j.Status)}>{j.Status}</Badge></td>
+                      <tr key={`${j.namespace}:${j.id}`}>
+                        <td className="py-2 pr-3 font-mono font-medium">{j.id}</td>
+                        <td className="py-2 pr-3">{j.namespace} · {j.type}</td>
+                        <td className="py-2 pr-3"><Badge tone={statusTone(j.status)}>{j.status}</Badge></td>
                         <td className="py-2 text-right">
                           <Button size="sm" onClick={() => void inspectJob(j)}>运行态详情</Button>
                         </td>
@@ -292,11 +301,22 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
           </Card>
 
           {selectedJob && jobSummary && (
-            <Card title={`Job 运行态：${selectedJob.ID} (${selectedJob.Namespace})`}>
+            <Card title={`Job 运行态：${selectedJob.id} (${selectedJob.namespace})`}>
               <div className="space-y-4 text-xs">
                 {isAdmin && (
                   <div className="flex flex-wrap items-center gap-2 rounded bg-slate-50 p-2.5 dark:bg-slate-950">
-                    <span>Task Group：<b>{scaleGroup}</b></span>
+                    <span>Task Group：</span>
+                    {selectedJob.groups?.length > 1 ? (
+                      <select
+                        value={scaleGroup}
+                        onChange={(e) => setScaleGroup(e.target.value)}
+                        className="rounded border border-slate-300 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-900"
+                      >
+                        {selectedJob.groups.map((g: string) => <option key={g} value={g}>{g}</option>)}
+                      </select>
+                    ) : (
+                      <b>{scaleGroup || '-'}</b>
+                    )}
                     <input
                       type="number"
                       min={0}
@@ -309,36 +329,36 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                       variant="primary"
                       onClick={() =>
                         void apiPost(
-                          `/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.Namespace)}/jobs/${encodeURIComponent(selectedJob.ID)}/scale`,
+                          `/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/scale`,
                           { group: scaleGroup, count: scaleCount },
                         ).then(() => { setNotice('扩缩副本请求已提交'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))
                       }
                     >
                       扩缩副本
                     </Button>
-                    {selectedJob.Type === 'batch' && (
-                      <>
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.Namespace)}/jobs/${encodeURIComponent(selectedJob.ID)}/periodic/force`, {})
-                              .then(() => setNotice('已触发 Periodic 运行'))
-                              .catch((ex) => setErr(ex.message))
-                          }
-                        >
-                          立即触发 Periodic
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.Namespace)}/jobs/${encodeURIComponent(selectedJob.ID)}/dispatch`, { meta: {} })
-                              .then(() => setNotice('已派发 Parameterized 子任务'))
-                              .catch((ex) => setErr(ex.message))
-                          }
-                        >
-                          Dispatch 派发
-                        </Button>
-                      </>
+                    {selectedJob.periodic && (
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/periodic/force`, {})
+                            .then(() => setNotice('已触发 Periodic 运行'))
+                            .catch((ex) => setErr(ex.message))
+                        }
+                      >
+                        立即触发 Periodic
+                      </Button>
+                    )}
+                    {selectedJob.parameterized && (
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/dispatch`, { meta: {} })
+                            .then(() => setNotice('已派发 Parameterized 子任务'))
+                            .catch((ex) => setErr(ex.message))
+                        }
+                      >
+                        Dispatch 派发
+                      </Button>
                     )}
                   </div>
                 )}
@@ -351,10 +371,10 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                         <span>{d.ID.slice(0, 8)} · <Badge tone={statusTone(d.Status)}>{d.Status}</Badge> {d.StatusDescription}</span>
                         {isAdmin && d.Status === 'running' && (
                           <div className="flex gap-1">
-                            <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/promote`, {}).then(() => inspectJob(selectedJob))}>Promote</Button>
-                            <Button size="sm" variant="danger" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/fail`, {}).then(() => inspectJob(selectedJob))}>Fail</Button>
-                            <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/pause`, {}).then(() => inspectJob(selectedJob))}>Pause</Button>
-                            <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/resume`, {}).then(() => inspectJob(selectedJob))}>Resume</Button>
+                            <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/promote`, {}).then(() => inspectJob(selectedJob)).catch((ex) => setErr(ex.message))}>Promote</Button>
+                            <Button size="sm" variant="danger" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/fail`, {}).then(() => inspectJob(selectedJob)).catch((ex) => setErr(ex.message))}>Fail</Button>
+                            <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/pause`, {}).then(() => inspectJob(selectedJob)).catch((ex) => setErr(ex.message))}>Pause</Button>
+                            <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/resume`, {}).then(() => inspectJob(selectedJob)).catch((ex) => setErr(ex.message))}>Resume</Button>
                           </div>
                         )}
                       </div>
@@ -407,8 +427,8 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                       <Button size="sm" variant="primary" onClick={() => setTerminal({ allocId: selectedAlloc.ID, task: logTask })}>
                         <Terminal className="h-3 w-3" /> 打开交互式终端
                       </Button>
-                      <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/restart`, { task: logTask }).then(() => setNotice('已请求重启 Task'))}>重启 Task</Button>
-                      <Button size="sm" variant="danger" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stop`, {}).then(() => setNotice('已请求停止 Alloc'))}>停止 Alloc</Button>
+                      <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/restart`, { task: logTask }).then(() => setNotice('已请求重启 Task')).catch((ex) => setErr(ex.message))}>重启 Task</Button>
+                      <Button size="sm" variant="danger" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stop`, {}).then(() => setNotice('已请求停止 Alloc')).catch((ex) => setErr(ex.message))}>停止 Alloc</Button>
                     </div>
                   )}
                 </div>
@@ -439,7 +459,9 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                           onClick={() => {
                             const parent = fsPath.split('/').slice(0, -1).join('/');
                             setFsPath(parent);
-                            void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/ls?path=${encodeURIComponent(parent)}`).then((r) => setFsFiles(r.files || r || []));
+                            void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/ls?path=${encodeURIComponent(parent)}`)
+                              .then((r) => setFsFiles(r.files || r || []))
+                              .catch((ex) => setErr(ex.message));
                           }}
                         >
                           上级
@@ -448,28 +470,30 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                     </div>
                     <div className="h-56 overflow-auto rounded border border-slate-200 p-2 dark:border-slate-800">
                       {(fsFiles || []).map((f: any) => (
-                        <div key={f.Name} className="flex items-center justify-between py-1">
-                          <span className="font-mono">{f.IsDir ? `${f.Name}/` : f.Name}</span>
+                        <div key={f.name} className="flex items-center justify-between py-1">
+                          <span className="font-mono">{f.is_dir ? `${f.name}/` : f.name}</span>
                           <div className="flex gap-1">
-                            <span className="text-slate-500">{fmtBytes(f.Size)}</span>
-                            {f.IsDir ? (
+                            <span className="text-slate-500">{fmtBytes(f.size)}</span>
+                            {f.is_dir ? (
                               <Button
                                 size="sm"
                                 onClick={() => {
-                                  const np = fsPath ? `${fsPath}/${f.Name}` : f.Name;
+                                  const np = fsPath ? `${fsPath}/${f.name}` : f.name;
                                   setFsPath(np);
-                                  void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/ls?path=${encodeURIComponent(np)}`).then((r) => setFsFiles(r.files || r || []));
+                                  void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/ls?path=${encodeURIComponent(np)}`)
+                                    .then((r) => setFsFiles(r.files || r || []))
+                                    .catch((ex) => setErr(ex.message));
                                 }}
                               >
                                 进入
                               </Button>
                             ) : (
-                              isAdmin && (
+                              isAdmin && f.readable !== false && (
                                 <>
                                   <Button
                                     size="sm"
                                     onClick={() => {
-                                      const fp = fsPath ? `${fsPath}/${f.Name}` : f.Name;
+                                      const fp = fsPath ? `${fsPath}/${f.name}` : f.name;
                                       void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/content/readat?path=${encodeURIComponent(fp)}&offset=0&limit=32768`)
                                         .then((r) => setFilePreview({ path: fp, text: typeof r === 'string' ? r : r.data || JSON.stringify(r) }))
                                         .catch((ex) => setErr(ex.message));
@@ -480,8 +504,9 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                                   <Button
                                     size="sm"
                                     onClick={() => {
-                                      const fp = fsPath ? `${fsPath}/${f.Name}` : f.Name;
-                                      void apiDownload(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/content/download?path=${encodeURIComponent(fp)}`, undefined, f.Name);
+                                      const fp = fsPath ? `${fsPath}/${f.name}` : f.name;
+                                      void apiDownload(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/content/download?path=${encodeURIComponent(fp)}`, undefined, f.name)
+                                        .catch((ex) => setErr(ex.message));
                                     }}
                                   >
                                     下载
@@ -505,34 +530,35 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
         <Card title="Nomad Client 节点">
           <div className="space-y-2 text-xs">
             {clients.map((c) => (
-              <div key={c.ID} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2.5 dark:border-slate-800">
+              <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2.5 dark:border-slate-800">
                 <div>
-                  <span className="font-semibold">{c.Name}</span> <span className="font-mono text-slate-500">({c.ID.slice(0, 8)})</span>
-                  <div className="text-slate-500">调度：{c.SchedulingEligibility} · Drain：{c.Drain ? '是' : '否'}</div>
+                  <span className="font-semibold">{c.name}</span> <span className="font-mono text-slate-500">({(c.id || '').slice(0, 8)})</span>
+                  <div className="text-slate-500">调度：{c.scheduling_eligibility} · Drain：{c.drain ? '是' : '否'}</div>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <Badge tone={statusTone(c.Status)}>{c.Status}</Badge>
+                  <Badge tone={statusTone(c.status)}>{c.status}</Badge>
                   {isAdmin && (
                     <>
                       <Button
                         size="sm"
                         onClick={() =>
-                          void apiPost(`/api/v1/nomad/${clusterId}/clients/${c.ID}/eligibility`, {
-                            eligible: c.SchedulingEligibility !== 'eligible',
-                          }).then(() => loadInfraViews('clients'))
+                          void apiPost(`/api/v1/nomad/${clusterId}/clients/${c.id}/eligibility`, {
+                            eligible: c.scheduling_eligibility !== 'eligible',
+                          }).then(() => loadInfraViews('clients')).catch((ex) => setErr(ex.message))
                         }
                       >
-                        {c.SchedulingEligibility === 'eligible' ? '设为不可调度' : '恢复可调度'}
+                        {c.scheduling_eligibility === 'eligible' ? '设为不可调度' : '恢复可调度'}
                       </Button>
                       <Button
                         size="sm"
                         variant="danger"
                         onClick={() =>
-                          void apiPost(`/api/v1/nomad/${clusterId}/clients/${c.ID}/drain`, { enable: !c.Drain })
+                          void apiPost(`/api/v1/nomad/${clusterId}/clients/${c.id}/drain`, { cancel: Boolean(c.drain) })
                             .then(() => loadInfraViews('clients'))
+                            .catch((ex) => setErr(ex.message))
                         }
                       >
-                        {c.Drain ? '取消 Drain' : 'Drain'}
+                        {c.drain ? '取消 Drain' : 'Drain'}
                       </Button>
                     </>
                   )}
@@ -563,16 +589,28 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
         <Card title="CSI 卷与存储插件">
           <div className="space-y-3 text-xs">
             <div>CSI 卷数量：{volumes.length} · 插件数量：{plugins.length}</div>
-            {volumes.map((v) => (
-              <div key={v.ID} className="flex items-center justify-between rounded border border-slate-200 p-2 dark:border-slate-800">
-                <span className="font-mono">{v.ID} ({v.Name})</span>
-                {isAdmin && (
-                  <Button size="sm" variant="danger" onClick={() => void apiDelete(`/api/v1/nomad/${clusterId}/volumes/${v.ID}`).then(() => loadInfraViews('storage'))}>
-                    注销
-                  </Button>
-                )}
-              </div>
-            ))}
+            {volumes.map((v) => {
+              const vid = v.ID || v.id;
+              const vns = v.Namespace || v.namespace || 'default';
+              return (
+                <div key={`${vns}:${vid}`} className="flex items-center justify-between rounded border border-slate-200 p-2 dark:border-slate-800">
+                  <span className="font-mono">{vid} ({v.Name || v.name || vns})</span>
+                  {isAdmin && (
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      onClick={() =>
+                        void apiDelete(`/api/v1/nomad/${clusterId}/volumes/${encodeURIComponent(vid)}?namespace=${encodeURIComponent(vns)}`)
+                          .then(() => loadInfraViews('storage'))
+                          .catch((ex) => setErr(ex.message))
+                      }
+                    >
+                      注销
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </Card>
       )}
@@ -580,19 +618,36 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
       {subTab === 'variables' && (
         <Card
           title="Nomad Variables"
-          actions={isAdmin && <Button size="sm" variant="primary" onClick={() => setVarEdit({ path: '', items: '{}' })}>新建 Variable</Button>}
+          actions={
+            isAdmin && (
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => setVarEdit({ namespace: namespace === '*' ? 'default' : namespace, path: '', items: '{}' })}
+              >
+                新建 Variable
+              </Button>
+            )
+          }
         >
           <div className="space-y-2 text-xs">
             {variables.map((v) => (
-              <div key={`${v.Namespace}:${v.Path}`} className="flex items-center justify-between rounded border border-slate-200 p-2 dark:border-slate-800">
-                <span className="font-mono">{v.Namespace} / {v.Path}</span>
+              <div key={`${v.namespace}:${v.path}`} className="flex items-center justify-between rounded border border-slate-200 p-2 dark:border-slate-800">
+                <span className="font-mono">{v.namespace} / {v.path}</span>
                 {isAdmin && (
                   <div className="flex gap-1">
                     <Button
                       size="sm"
                       onClick={() =>
-                        void apiPost(`/api/v1/nomad/${clusterId}/variables/item/reveal?path=${encodeURIComponent(v.Path)}&namespace=${encodeURIComponent(v.Namespace)}`, {})
-                          .then((r) => setVarEdit({ path: v.Path, items: JSON.stringify(r.variable?.Items || {}, null, 2), modifyIndex: r.variable?.ModifyIndex }))
+                        void apiPost(`/api/v1/nomad/${clusterId}/variables/item/reveal?path=${encodeURIComponent(v.path)}&namespace=${encodeURIComponent(v.namespace)}`, {})
+                          .then((r) =>
+                            setVarEdit({
+                              namespace: r.variable?.namespace || v.namespace,
+                              path: r.variable?.path || v.path,
+                              items: JSON.stringify(r.variable?.items || {}, null, 2),
+                              modifyIndex: r.variable?.modify_index,
+                            }),
+                          )
                           .catch((ex) => setErr(ex.message))
                       }
                     >
@@ -601,7 +656,11 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                     <Button
                       size="sm"
                       variant="danger"
-                      onClick={() => void apiDelete(`/api/v1/nomad/${clusterId}/variables/item?path=${encodeURIComponent(v.Path)}&namespace=${encodeURIComponent(v.Namespace)}`).then(() => loadInfraViews('variables'))}
+                      onClick={() =>
+                        void apiDelete(`/api/v1/nomad/${clusterId}/variables/item?path=${encodeURIComponent(v.path)}&namespace=${encodeURIComponent(v.namespace)}`)
+                          .then(() => loadInfraViews('variables'))
+                          .catch((ex) => setErr(ex.message))
+                      }
                     >
                       删除
                     </Button>
@@ -630,14 +689,17 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
       <Modal open={Boolean(varEdit)} title="编辑 Nomad Variable" onClose={() => setVarEdit(null)} wide>
         {varEdit && (
           <div className="space-y-3 text-xs">
-            <Input label="Path" value={varEdit.path} onChange={(e) => setVarEdit({ ...varEdit, path: e.target.value })} />
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <Input label="Namespace" value={varEdit.namespace} onChange={(e) => setVarEdit({ ...varEdit, namespace: e.target.value })} />
+              <Input label="Path" value={varEdit.path} onChange={(e) => setVarEdit({ ...varEdit, path: e.target.value })} />
+            </div>
             <CodeEditor value={varEdit.items} onChange={(v) => setVarEdit({ ...varEdit, items: v })} height="220px" />
             <Button
               variant="primary"
               onClick={() => {
                 try {
                   const items = JSON.parse(varEdit.items);
-                  void apiPut(`/api/v1/nomad/${clusterId}/variables/item?path=${encodeURIComponent(varEdit.path)}&namespace=${encodeURIComponent(namespace === '*' ? 'default' : namespace)}`, {
+                  void apiPut(`/api/v1/nomad/${clusterId}/variables/item?path=${encodeURIComponent(varEdit.path)}&namespace=${encodeURIComponent(varEdit.namespace || 'default')}`, {
                     items,
                     cas: varEdit.modifyIndex,
                   }).then(() => { setVarEdit(null); return loadInfraViews('variables'); }).catch((ex) => setErr(ex.message));

@@ -79,10 +79,62 @@ func (v Semver) Compare(other Semver) int {
 	if other.Pre == "" {
 		return -1
 	}
-	if v.Pre < other.Pre {
+	return comparePre(v.Pre, other.Pre)
+}
+
+func comparePre(a, b string) int {
+	pa := strings.Split(a, ".")
+	pb := strings.Split(b, ".")
+	n := len(pa)
+	if len(pb) < n {
+		n = len(pb)
+	}
+	for i := 0; i < n; i++ {
+		if pa[i] == pb[i] {
+			continue
+		}
+		aNum := pa[i] != "" && isDigits(pa[i])
+		bNum := pb[i] != "" && isDigits(pb[i])
+		switch {
+		case aNum && bNum:
+			na, ea := strconv.Atoi(pa[i])
+			nb, eb := strconv.Atoi(pb[i])
+			if ea == nil && eb == nil {
+				if na < nb {
+					return -1
+				}
+				if na > nb {
+					return 1
+				}
+			}
+			if len(pa[i]) != len(pb[i]) {
+				if len(pa[i]) < len(pb[i]) {
+					return -1
+				}
+				return 1
+			}
+			if pa[i] < pb[i] {
+				return -1
+			}
+			return 1
+		case aNum:
+			return -1
+		case bNum:
+			return 1
+		default:
+			if pa[i] < pb[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	if len(pa) < len(pb) {
 		return -1
 	}
-	return 1
+	if len(pa) > len(pb) {
+		return 1
+	}
+	return 0
 }
 
 // CompareSemver parses a and b and returns -1, 0, or +1.

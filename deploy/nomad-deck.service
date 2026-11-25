@@ -4,6 +4,8 @@ Documentation=https://github.com/sunliang711/nomad-deck
 After=network-online.target
 Wants=network-online.target
 OnFailure=nomad-deck-rollback.service
+StartLimitIntervalSec=600
+StartLimitBurst=2
 
 [Service]
 Type=notify

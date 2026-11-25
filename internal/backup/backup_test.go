@@ -572,3 +572,29 @@ func TestDisasterRecoveryAndOffsiteSnapshotRestore(t *testing.T) {
 		t.Fatalf("recovered snapshot payload mismatch: %q", dstDrv.gotSnap)
 	}
 }
+
+func TestSaveConfigEmptyPassphrasePassesKeyCheck(t *testing.T) {
+	svc, _ := newTestService(t, 3)
+	ctx := context.Background()
+	actor := audit.Actor{Name: "root"}
+
+	pass := "long-enough-backup-passphrase"
+	if _, err := svc.SaveConfig(ctx, actor, ConfigInput{Enabled: false, Passphrase: &pass}); err != nil {
+		t.Fatalf("SaveConfig non-empty passphrase: %v", err)
+	}
+	empty := ""
+	view, err := svc.SaveConfig(ctx, actor, ConfigInput{Enabled: false, Passphrase: &empty})
+	if err != nil {
+		t.Fatalf("SaveConfig empty passphrase: %v", err)
+	}
+	if view.PassphraseSet {
+		t.Fatal("expected PassphraseSet=false after clearing passphrase")
+	}
+	probs, err := db.CheckKeyIDs(ctx, svc.DB.Reader, crypto.KeyIDOf, svc.Keys.Has)
+	if err != nil {
+		t.Fatalf("CheckKeyIDs: %v", err)
+	}
+	if len(probs) > 0 {
+		t.Fatalf("unexpected key check problems: %+v", probs)
+	}
+}

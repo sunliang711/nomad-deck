@@ -395,6 +395,7 @@ func (s *Service) Connect(ctx context.Context, n *db.Node) (*sshx.Client, error)
 		if err := db.UpdateNodeHostKey(ctx, s.DB.Writer, n.ID, c.HostKeyFingerprint, s.DB.Now()); err != nil {
 			return nil, err
 		}
+		s.Pool.Rekey(n.ID+"|", n.ID+"|"+c.HostKeyFingerprint, c)
 		n.HostKeyFingerprint = c.HostKeyFingerprint
 	}
 	return c, nil

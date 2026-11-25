@@ -125,6 +125,10 @@ func (s *Service) CreateSnapshot(ctx context.Context, actor audit.Actor, cluster
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.snapshot", TargetType: "cluster", TargetID: clusterID,
 		Locks: []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Shared}}, TriggeredBy: actor.Name,
 		Run: func(ctx context.Context, t *ops.Task) error {
+			cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
 			step, err := t.Step("导出并加密 Raft 快照", "")
 			if err != nil {
 				return err

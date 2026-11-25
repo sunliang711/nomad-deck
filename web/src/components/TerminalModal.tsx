@@ -5,6 +5,26 @@ import '@xterm/xterm/css/xterm.css';
 import { apiPost, wsURL } from '../lib/api';
 import { ErrorAlert, Modal } from './UI';
 
+const utf8Encoder = new TextEncoder();
+
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function strToB64(s: string): string {
+  const bytes = utf8Encoder.encode(s);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) {
+    bin += String.fromCharCode(bytes[i]);
+  }
+  return btoa(bin);
+}
+
 export function TerminalModal({
   open,
   onClose,
@@ -71,9 +91,9 @@ export function TerminalModal({
             try {
               const frame = JSON.parse(ev.data);
               if (frame.stdout?.data) {
-                term.write(atob(frame.stdout.data));
+                term.write(b64ToBytes(frame.stdout.data));
               } else if (frame.stderr?.data) {
-                term.write(atob(frame.stderr.data));
+                term.write(b64ToBytes(frame.stderr.data));
               } else if (frame.error) {
                 setErr(frame.error);
               }
@@ -95,7 +115,7 @@ export function TerminalModal({
         };
         term.onData((d) => {
           if (ws?.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ stdin: { data: btoa(d) } }));
+            ws.send(JSON.stringify({ stdin: { data: strToB64(d) } }));
           }
         });
         term.onResize(({ cols, rows }) => {

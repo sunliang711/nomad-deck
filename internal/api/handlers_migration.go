@@ -12,16 +12,19 @@ import (
 )
 
 // barrierGuard rejects state-changing requests while the control plane is
-// under a global maintenance barrier (for example during an import).
+// under a global maintenance barrier (for example during an import), except for
+// authentication login/logout so admins can inspect status or recover sessions.
 func (a *API) barrierGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
 		default:
-			if a.Ops != nil {
-				if reason := a.Ops.Barrier(); reason != "" {
-					writeError(w, http.StatusServiceUnavailable, "maintenance", "控制面处于全局维护状态（"+reason+"），暂不接受变更")
-					return
+			if r.URL.Path != "/api/v1/auth/login" && r.URL.Path != "/api/v1/auth/logout" {
+				if a.Ops != nil {
+					if reason := a.Ops.Barrier(); reason != "" {
+						writeError(w, http.StatusServiceUnavailable, "maintenance", "控制面处于全局维护状态（"+reason+"），暂不接受变更")
+						return
+					}
 				}
 			}
 		}
@@ -40,11 +43,9 @@ func (a *API) migrationExport(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := a.actor(r)
 	name := fmt.Sprintf("nomad-deck-%s.ndbundle", time.Now().UTC().Format("20060102T150405Z"))
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
-	w.Header().Set("Cache-Control", "no-store")
+	dw := &deferredDownloadWriter{w: w, contentType: "application/octet-stream", filename: name}
 	m, err := a.Migration.Export(r.Context(), migration.ExportOptions{Kind: migration.KindMigration, Include: in.Include,
-		Passphrase: in.Passphrase, CreatedBy: actor.Name}, w)
+		Passphrase: in.Passphrase, CreatedBy: actor.Name}, dw)
 	summary := map[string]any{"include": in.Include}
 	if m != nil {
 		summary["rows"], summary["log_files"] = m.Rows, m.LogFiles
@@ -52,8 +53,11 @@ func (a *API) migrationExport(w http.ResponseWriter, r *http.Request) {
 	_ = a.Auth.Audit.Record(r.Context(), nil, audit.Event{Actor: actor, Action: "migration.export", ResourceType: "control_plane",
 		Summary: summary, Err: err})
 	if err != nil {
-		w.Header().Del("Content-Disposition")
-		a.writeErr(w, r, err)
+		if !dw.wrote {
+			a.writeErr(w, r, err)
+			return
+		}
+		a.Log.Error("migration export failed", "err", err)
 	}
 }
 

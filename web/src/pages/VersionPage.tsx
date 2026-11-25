@@ -191,7 +191,11 @@ export function VersionPage() {
                     <Button
                       type="button"
                       variant="danger"
-                      onClick={() => void apiDelete('/api/v1/system/self-update/schedule').then((r) => setSchedule(r.schedule))}
+                      onClick={() =>
+                        void apiDelete('/api/v1/system/self-update/schedule')
+                          .then((r) => setSchedule(r.schedule))
+                          .catch((ex) => setErr(ex.message))
+                      }
                     >
                       取消预约
                     </Button>

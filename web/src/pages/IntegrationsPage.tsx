@@ -18,55 +18,65 @@ export function IntegrationsPage() {
   const [err, setErr] = useState('');
 
   const [showCreate, setShowCreate] = useState(false);
-  const [createForm, setCreateForm] = useState({ name: '', nomad_cluster_id: '', vault_cluster_id: '', auth_mount: 'jwt-nomad' });
+  const [createForm, setCreateForm] = useState({ name: '', source_cluster_id: '', target_cluster_id: '', auth_path: 'jwt-nomad' });
   const [showRole, setShowRole] = useState(false);
   const [roleForm, setRoleForm] = useState({
-    name: '',
+    role_name: '',
     policy_mode: 'explicit',
-    policies: 'default',
-    bound_namespaces: 'default',
-    token_ttl: '1h',
+    secret_paths: 'secret/data/*',
+    bound_namespace: 'default',
+    token_period: '1h',
   });
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (focusId?: string) => {
     setErr('');
     try {
       const [iRes, cRes] = await Promise.all([apiGet('/api/v1/integrations'), apiGet('/api/v1/clusters')]);
       const list = iRes.integrations || [];
       setItems(list);
       setClusters(cRes.clusters || []);
-      if (selected) {
-        const fresh = await apiGet(`/api/v1/integrations/${selected.id}`);
+      const targetId = focusId || list[0]?.id;
+      if (targetId) {
+        const fresh = await apiGet(`/api/v1/integrations/${targetId}`);
         setSelected(fresh.integration);
-      } else if (list.length > 0) {
-        const fresh = await apiGet(`/api/v1/integrations/${list[0].id}`);
-        setSelected(fresh.integration);
+      } else {
+        setSelected(null);
       }
     } catch (ex: any) {
       setErr(ex?.message || '加载联动配置失败');
     }
-  }, [selected?.id]);
+  }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   const selectItem = async (id: string) => {
+    setErr('');
     setPlan(null);
     setDoctor(null);
     setExampleHCL('');
-    const res = await apiGet(`/api/v1/integrations/${id}`);
-    setSelected(res.integration);
+    try {
+      const res = await apiGet(`/api/v1/integrations/${id}`);
+      setSelected(res.integration);
+    } catch (ex: any) {
+      setErr(ex?.message || '加载联动详情失败');
+    }
   };
 
   const createIntegration = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr('');
     try {
-      const res = await apiPost('/api/v1/integrations', createForm);
+      const nomadDefault = clusters.find((c) => c.type === 'nomad')?.id || '';
+      const vaultDefault = clusters.find((c) => c.type === 'vault')?.id || '';
+      const res = await apiPost('/api/v1/integrations', {
+        ...createForm,
+        source_cluster_id: createForm.source_cluster_id || nomadDefault,
+        target_cluster_id: createForm.target_cluster_id || vaultDefault,
+      });
       setShowCreate(false);
-      await load();
-      if (res.integration?.id) await selectItem(res.integration.id);
+      await load(res.integration?.id);
     } catch (ex: any) {
       setErr(ex?.message || '创建联动失败');
     }
@@ -78,11 +88,11 @@ export function IntegrationsPage() {
     setErr('');
     try {
       await apiPost(`/api/v1/integrations/${selected.id}/roles`, {
-        name: roleForm.name,
+        role_name: roleForm.role_name,
         policy_mode: roleForm.policy_mode,
-        policies: roleForm.policies.split(',').map((s) => s.trim()).filter(Boolean),
-        bound_claims: { nomad_namespace: roleForm.bound_namespaces.split(',').map((s) => s.trim()).filter(Boolean) },
-        token_ttl: roleForm.token_ttl,
+        secret_paths: roleForm.secret_paths.split(',').map((s) => s.trim()).filter(Boolean),
+        bound_claims: { nomad_namespace: roleForm.bound_namespace.trim() },
+        token_period: roleForm.token_period,
       });
       setShowRole(false);
       await selectItem(selected.id);
@@ -115,7 +125,7 @@ export function IntegrationsPage() {
               onClick={() => {
                 const n = clusters.find((c) => c.type === 'nomad')?.id || '';
                 const v = clusters.find((c) => c.type === 'vault')?.id || '';
-                setCreateForm({ name: 'nomad-vault', nomad_cluster_id: n, vault_cluster_id: v, auth_mount: 'jwt-nomad' });
+                setCreateForm({ name: 'nomad-vault', source_cluster_id: n, target_cluster_id: v, auth_path: 'jwt-nomad' });
                 setShowCreate(true);
               }}
             >
@@ -132,25 +142,25 @@ export function IntegrationsPage() {
       ) : (
         <div className="space-y-4">
           <Card
-            title={`${selected.name}（${selected.nomad_cluster_name || selected.nomad_cluster_id} ↔ ${selected.vault_cluster_name || selected.vault_cluster_id}）`}
+            title={`${selected.name}（${selected.source_cluster || selected.source_cluster_id} ↔ ${selected.target_cluster || selected.target_cluster_id}）`}
             actions={
               isAdmin && (
                 <div className="flex flex-wrap gap-1.5">
-                  <Button size="sm" onClick={() => void apiPost(`/api/v1/integrations/${selected.id}/plan`).then((r) => setPlan(r.plan)).catch((ex) => setErr(ex.message))}>
+                  <Button size="sm" onClick={() => void apiPost(`/api/v1/integrations/${selected.id}/plan`, {}).then((r) => setPlan(r.plan)).catch((ex) => setErr(ex.message))}>
                     Plan 预览
                   </Button>
                   <Button
                     size="sm"
                     variant="primary"
                     onClick={() =>
-                      void apiPost(`/api/v1/integrations/${selected.id}/apply`)
+                      void apiPost(`/api/v1/integrations/${selected.id}/apply`, {})
                         .then((r) => r.task?.id && openTask(r.task.id, `Apply 联动: ${selected.name}`))
                         .catch((ex) => setErr(ex.message))
                     }
                   >
                     一键 Apply
                   </Button>
-                  <Button size="sm" onClick={() => void apiPost(`/api/v1/integrations/${selected.id}/doctor`).then((r) => setDoctor(r.report)).catch((ex) => setErr(ex.message))}>
+                  <Button size="sm" onClick={() => void apiPost(`/api/v1/integrations/${selected.id}/doctor`, {}).then((r) => setDoctor(r.report)).catch((ex) => setErr(ex.message))}>
                     四段式体检
                   </Button>
                   <Button
@@ -169,7 +179,7 @@ export function IntegrationsPage() {
             }
           >
             <div className="mb-3 flex flex-wrap gap-3 text-xs text-slate-600 dark:text-slate-300">
-              <span>Auth Mount: <code className="font-mono">{selected.auth_mount}</code></span>
+              <span>Auth Mount: <code className="font-mono">{selected.auth_path}</code></span>
               <span>状态: <Badge tone={statusTone(selected.status)}>{selected.status}</Badge></span>
             </div>
 
@@ -184,15 +194,15 @@ export function IntegrationsPage() {
                 {selected.roles.map((r: any) => (
                   <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2.5 dark:border-slate-800">
                     <div>
-                      <span className="font-mono font-semibold">{r.name}</span>
-                      <span className="ml-2 text-slate-500">mode: {r.policy_mode} · policies: {(r.policies || []).join(', ')}</span>
+                      <span className="font-mono font-semibold">{r.role_name}</span>
+                      <span className="ml-2 text-slate-500">mode: {r.policy_mode} · paths: {(r.secret_paths || []).join(', ')}</span>
                     </div>
                     {isAdmin && (
                       <div className="flex gap-1">
                         <Button
                           size="sm"
                           onClick={() =>
-                            void apiPost(`/api/v1/integrations/${selected.id}/job-example`, { role_name: r.name })
+                            void apiPost(`/api/v1/integrations/${selected.id}/job-example`, { role: r.role_name })
                               .then((res) => setExampleHCL(res.hcl || ''))
                               .catch((ex) => setErr(ex.message))
                           }
@@ -202,7 +212,11 @@ export function IntegrationsPage() {
                         <Button
                           size="sm"
                           variant="danger"
-                          onClick={() => void apiDelete(`/api/v1/integrations/${selected.id}/roles/${r.id}`).then(() => selectItem(selected.id))}
+                          onClick={() =>
+                            void apiDelete(`/api/v1/integrations/${selected.id}/roles/${r.id}`)
+                              .then(() => selectItem(selected.id))
+                              .catch((ex) => setErr(ex.message))
+                          }
                         >
                           <Trash2 className="h-3 w-3" />
                         </Button>
@@ -246,13 +260,13 @@ export function IntegrationsPage() {
       <Modal open={showCreate} title="新建 Nomad-Vault 联动" onClose={() => setShowCreate(false)}>
         <form onSubmit={createIntegration} className="space-y-3 text-xs">
           <Input label="联动名称" required value={createForm.name} onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })} />
-          <Select label="Nomad 集群" value={createForm.nomad_cluster_id} onChange={(e) => setCreateForm({ ...createForm, nomad_cluster_id: e.target.value })}>
+          <Select label="Nomad 集群" value={createForm.source_cluster_id || clusters.find((c) => c.type === 'nomad')?.id || ''} onChange={(e) => setCreateForm({ ...createForm, source_cluster_id: e.target.value })}>
             {clusters.filter((c) => c.type === 'nomad').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
-          <Select label="Vault 集群" value={createForm.vault_cluster_id} onChange={(e) => setCreateForm({ ...createForm, vault_cluster_id: e.target.value })}>
+          <Select label="Vault 集群" value={createForm.target_cluster_id || clusters.find((c) => c.type === 'vault')?.id || ''} onChange={(e) => setCreateForm({ ...createForm, target_cluster_id: e.target.value })}>
             {clusters.filter((c) => c.type === 'vault').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
-          <Input label="Vault JWT Auth Mount" required value={createForm.auth_mount} onChange={(e) => setCreateForm({ ...createForm, auth_mount: e.target.value })} />
+          <Input label="Vault JWT Auth Mount" required value={createForm.auth_path} onChange={(e) => setCreateForm({ ...createForm, auth_path: e.target.value })} />
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setShowCreate(false)}>取消</Button>
             <Button type="submit" variant="primary">创建</Button>
@@ -262,14 +276,14 @@ export function IntegrationsPage() {
 
       <Modal open={showRole} title="添加工作负载 Role" onClose={() => setShowRole(false)}>
         <form onSubmit={addRole} className="space-y-3 text-xs">
-          <Input label="Role 名称" required value={roleForm.name} onChange={(e) => setRoleForm({ ...roleForm, name: e.target.value })} />
+          <Input label="Role 名称" required value={roleForm.role_name} onChange={(e) => setRoleForm({ ...roleForm, role_name: e.target.value })} />
           <Select label="Policy 模式" value={roleForm.policy_mode} onChange={(e) => setRoleForm({ ...roleForm, policy_mode: e.target.value })}>
-            <option value="explicit">explicit（固定策略列表）</option>
+            <option value="explicit">explicit（固定路径列表）</option>
             <option value="templated">templated（ACL 模板变量）</option>
           </Select>
-          <Input label="Policies（逗号分隔）" required value={roleForm.policies} onChange={(e) => setRoleForm({ ...roleForm, policies: e.target.value })} />
-          <Input label="允许的 Nomad Namespaces（逗号分隔）" required value={roleForm.bound_namespaces} onChange={(e) => setRoleForm({ ...roleForm, bound_namespaces: e.target.value })} />
-          <Input label="Token TTL" value={roleForm.token_ttl} onChange={(e) => setRoleForm({ ...roleForm, token_ttl: e.target.value })} />
+          <Input label="Secret 路径或挂载（逗号分隔，如 secret/data/*）" required value={roleForm.secret_paths} onChange={(e) => setRoleForm({ ...roleForm, secret_paths: e.target.value })} />
+          <Input label="允许的 Nomad Namespace" required value={roleForm.bound_namespace} onChange={(e) => setRoleForm({ ...roleForm, bound_namespace: e.target.value })} />
+          <Input label="Token Period" value={roleForm.token_period} onChange={(e) => setRoleForm({ ...roleForm, token_period: e.target.value })} />
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setShowRole(false)}>取消</Button>
             <Button type="submit" variant="primary">保存</Button>

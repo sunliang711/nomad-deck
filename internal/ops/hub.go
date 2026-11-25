@@ -49,6 +49,9 @@ func (h *Hub) Subscribe(taskID string) (<-chan Event, func()) {
 				delete(set, ch)
 				close(ch)
 			}
+			if len(set) == 0 {
+				delete(h.subs, taskID)
+			}
 		}
 		h.mu.Unlock()
 	}
@@ -65,6 +68,9 @@ func (h *Hub) Publish(taskID string, ev Event) {
 			delete(h.subs[taskID], ch)
 			close(ch)
 		}
+	}
+	if len(h.subs[taskID]) == 0 {
+		delete(h.subs, taskID)
 	}
 }
 

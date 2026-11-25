@@ -279,10 +279,12 @@ func (a *API) jobOp(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &in) {
 			return
 		}
-		w.Header().Set("Content-Type", "application/zip")
-		w.Header().Set("Content-Disposition", `attachment; filename="nomad-jobs.zip"`)
-		w.Header().Set("Cache-Control", "no-store")
-		if err := a.Jobs.Export(ctx, a.actor(r), clusterID, in, w); err != nil {
+		dw := &deferredDownloadWriter{w: w, contentType: "application/zip", filename: "nomad-jobs.zip"}
+		if err := a.Jobs.Export(ctx, a.actor(r), clusterID, in, dw); err != nil {
+			if !dw.wrote {
+				a.writeErr(w, r, err)
+				return
+			}
 			a.Log.Error("job export", "err", err)
 		}
 	case "render":

@@ -161,11 +161,11 @@ func ResolveRelease(releases []GitHubRelease, target, channel, goos, goarch stri
 		if r.Draft {
 			continue
 		}
-		if r.Prerelease && channel != ChannelPrerelease {
-			continue
-		}
 		sv, err := ParseSemver(r.TagName)
 		if err != nil {
+			continue
+		}
+		if (r.Prerelease || sv.Pre != "") && channel != ChannelPrerelease {
 			continue
 		}
 		if wantLatest {
@@ -393,13 +393,13 @@ func extractBinary(tarGzPath, destPath string) error {
 func defaultVerifyBinary(ctx context.Context, binPath, wantVer string) error {
 	vctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(vctx, binPath, "--version").CombinedOutput()
+	out, err := exec.CommandContext(vctx, binPath, "version").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	want := strings.TrimPrefix(NormalizeTag(wantVer), "v")
 	if !strings.Contains(string(out), want) {
-		return fmt.Errorf("--version 输出 %q 与目标版本 %s 不符", strings.TrimSpace(string(out)), wantVer)
+		return fmt.Errorf("version 输出 %q 与目标版本 %s 不符", strings.TrimSpace(string(out)), wantVer)
 	}
 	return nil
 }

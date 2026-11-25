@@ -159,6 +159,19 @@ func RunAutoRollback(ctx context.Context, dataDir, binDir string) error {
 		_, _ = tx.ExecContext(ctx, `UPDATE operation_task_steps SET status = ?, error_message = ?, finished_at = ? WHERE task_id = ? AND status = 'running'`,
 			db.TaskFailed, msg, nowStr, res.TaskID)
 	}
+	var schedJSON string
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM system_settings WHERE key = ?`, SettingSchedule).Scan(&schedJSON); err == nil && schedJSON != "" {
+		var sc Schedule
+		if json.Unmarshal([]byte(schedJSON), &sc) == nil && sc.Status == SchedUpgrading && (res.TaskID == "" || sc.TaskID == res.TaskID) {
+			sc.Status = SchedFailed
+			sc.Message = msg
+			sc.NextCheckAt = nil
+			sc.FinishedAt = &now
+			if sb, err := json.Marshal(&sc); err == nil {
+				_ = db.PutSetting(ctx, tx, SettingSchedule, string(sb), false, nowStr)
+			}
+		}
+	}
 	sumJSON, _ := json.Marshal(map[string]any{
 		"from_version": res.FromVersion, "to_version": res.ToVersion, "backup_file": filepath.Base(res.BackupFile),
 	})
@@ -228,6 +241,11 @@ func RunBackupRollback(ctx context.Context, dataDir, binDir, backupFile string) 
 				db.TaskRolledBack, cur.ErrorMessage, nowStr, cur.TaskID)
 		}
 	}
+	backupMsg := "已通过本机命令恢复升级前备份：" + filepath.Base(backupFile)
+	_, _ = tx.ExecContext(ctx, `UPDATE operation_task_steps SET status = 'interrupted', error_message = ?, finished_at = ? WHERE status = 'running' AND task_id IN (SELECT id FROM operation_tasks WHERE action = 'system.self_update' AND status IN ('pending', 'running'))`,
+		backupMsg, nowStr)
+	_, _ = tx.ExecContext(ctx, `UPDATE operation_tasks SET status = ?, error_message = ?, finished_at = ? WHERE action = 'system.self_update' AND status IN ('pending', 'running')`,
+		db.TaskRolledBack, backupMsg, nowStr)
 	sumJSON, _ := json.Marshal(map[string]any{"backup_file": filepath.Base(backupFile)})
 	_, err = tx.ExecContext(ctx, `INSERT INTO audit_logs (id, actor_id, actor_name, action, resource_type, resource_name, request_summary_json, result, created_at)
 		VALUES (?, 'local', 'local-cli', 'system.manual_rollback_backup', 'control_plane', 'self', ?, 'success', ?)`,

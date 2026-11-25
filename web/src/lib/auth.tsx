@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { apiGet, apiPost, setCSRFToken } from './api';
+import { apiGet, apiPost, setCSRFToken, setOnUnauthorized } from './api';
 
 export interface AuthUser {
   id: string;
@@ -55,7 +55,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    setOnUnauthorized(() => {
+      setCSRFToken('');
+      setAuthenticated(false);
+      setUser(null);
+    });
     void refresh();
+    return () => setOnUnauthorized(null);
   }, [refresh]);
 
   const logout = useCallback(async () => {

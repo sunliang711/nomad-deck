@@ -326,7 +326,7 @@ func (s *Service) SaveConfig(ctx context.Context, actor audit.Actor, in ConfigIn
 		if err := db.PutSettingJSON(ctx, tx, SettingIncludeHistory, include, now); err != nil {
 			return err
 		}
-		if err := db.PutSetting(ctx, tx, SettingPassphrase, encPass, true, now); err != nil {
+		if err := db.PutSetting(ctx, tx, SettingPassphrase, encPass, encPass != "", now); err != nil {
 			return err
 		}
 		if err := db.PutSetting(ctx, tx, SettingTargets, encTargets, true, now); err != nil {

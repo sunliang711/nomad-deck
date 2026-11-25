@@ -13,6 +13,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
+RUN rm -rf ./internal/ui/dist
 COPY --from=web-builder /src/internal/ui/dist ./internal/ui/dist
 ARG VERSION=dev
 ARG COMMIT=none

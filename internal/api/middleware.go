@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/netip"
@@ -129,7 +130,8 @@ func (a *API) clientIP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := remoteIP(r.RemoteAddr)
 		if a.isTrusted(ip) {
-			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if vals := r.Header.Values("X-Forwarded-For"); len(vals) > 0 {
+				xff := strings.Join(vals, ",")
 				parts := strings.Split(xff, ",")
 				for i := len(parts) - 1; i >= 0; i-- {
 					cand := strings.TrimSpace(parts[i])
@@ -145,6 +147,55 @@ func (a *API) clientIP(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxClientIP, ip)))
 	})
+}
+
+type deferredDownloadWriter struct {
+	w           http.ResponseWriter
+	contentType string
+	filename    string
+	wrote       bool
+}
+
+func (d *deferredDownloadWriter) Header() http.Header { return d.w.Header() }
+
+func (d *deferredDownloadWriter) Write(p []byte) (int, error) {
+	if !d.wrote {
+		d.wrote = true
+		d.applyHeaders()
+		d.w.WriteHeader(http.StatusOK)
+	}
+	return d.w.Write(p)
+}
+
+func (d *deferredDownloadWriter) WriteHeader(statusCode int) {
+	if !d.wrote {
+		d.wrote = true
+		d.applyHeaders()
+	}
+	d.w.WriteHeader(statusCode)
+}
+
+func (d *deferredDownloadWriter) applyHeaders() {
+	d.w.Header().Set("Content-Type", d.contentType)
+	d.w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{
+		"filename": sanitizeDownloadFilename(d.filename),
+	}))
+	d.w.Header().Set("Cache-Control", "no-store")
+	d.w.Header().Set("X-Content-Type-Options", "nosniff")
+}
+
+func sanitizeDownloadFilename(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '/' || r == '\\' || r == '"' || r == ';' {
+			return '_'
+		}
+		return r
+	}, name)
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || name == ".." {
+		return "download.bin"
+	}
+	return name
 }
 
 func (a *API) isTrusted(ip string) bool {

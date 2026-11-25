@@ -315,7 +315,11 @@ func (s *Service) finishInit(ctx context.Context, t *ops.Task, actor audit.Actor
 	if err != nil {
 		return err
 	}
-	lc, _ := s.client(cl, leader, "")
+	lc, err := s.client(cl, leader, "")
+	if err != nil {
+		step.Finish(err, nil)
+		return err
+	}
 	if sealed, err := unsealWith(ctx, lc, keys); err != nil || sealed {
 		err = fmt.Errorf("解封首节点失败：%v", err)
 		step.Finish(err, nil)
@@ -722,10 +726,15 @@ func (s *Service) runSeal(ctx context.Context, t *ops.Task, cl *cluster, targets
 		if err != nil {
 			return err
 		}
-		c, _ := s.client(cl, active, tok)
-		err = c.Seal(ctx)
-		step.Finish(err, nil)
-		errs = append(errs, err)
+		c, cerr := s.client(cl, active, tok)
+		if cerr != nil {
+			step.Finish(cerr, nil)
+			errs = append(errs, cerr)
+		} else {
+			err = c.Seal(ctx)
+			step.Finish(err, nil)
+			errs = append(errs, err)
+		}
 	}
 	_, _, _ = s.SyncStatus(ctx, cl.ID)
 	return errors.Join(errs...)
@@ -788,9 +797,16 @@ func (s *Service) AutoUnsealSweep(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	unfinished, _ := db.ListUnfinishedTasks(ctx, s.DB.Reader)
+	busyUnseal := map[string]bool{}
+	for _, ut := range unfinished {
+		if ut.TargetType == "cluster" && ut.Action == "vault.unseal" {
+			busyUnseal[ut.TargetID] = true
+		}
+	}
 	submitted := 0
 	for _, c := range clusters {
-		if c.InitState != db.InitInitialized || c.MaintenanceMode || !c.TLSEnabled {
+		if c.InitState != db.InitInitialized || c.MaintenanceMode || !c.TLSEnabled || busyUnseal[c.ID] {
 			continue
 		}
 		cu, err := db.GetCustody(ctx, s.DB.Reader, c.ID)
@@ -931,22 +947,38 @@ func (s *Service) RecoverToken(ctx context.Context, actor audit.Actor, clusterID
 		return nil, err
 	}
 	if tok, err := s.adminToken(ctx, clusterID); err == nil {
-		c, _ := s.client(cl, am, tok)
-		if _, err := c.LookupSelf(ctx); err == nil {
-			return nil, conflict("token_valid", "运维 Token 仍然有效，无需应急恢复")
+		if c, cerr := s.client(cl, am, tok); cerr == nil {
+			if _, err := c.LookupSelf(ctx); err == nil {
+				return nil, conflict("token_valid", "运维 Token 仍然有效，无需应急恢复")
+			}
 		}
 	}
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "vault.recover_token", TargetType: "cluster", TargetID: clusterID,
 		Locks: []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}}, TriggeredBy: actor.Name,
 		Run: func(ctx context.Context, t *ops.Task) error {
+			cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			am, err := s.activeMember(ctx, cl, members)
+			if err != nil {
+				return err
+			}
 			step, err := t.Step("经 generate-root 重签运维 Token", am.NodeID)
 			if err != nil {
 				return err
 			}
 			keys, _, err := s.activeKeys(ctx, clusterID)
 			if err == nil {
-				c, _ := s.client(cl, am, "")
-				err = s.reissueAdminToken(ctx, cl, c, keys, step.Logf)
+				var c *Client
+				c, err = s.client(cl, am, "")
+				if err == nil {
+					err = s.reissueAdminToken(ctx, cl, c, keys, step.Logf)
+				}
 			}
 			step.Finish(err, nil)
 			return err

@@ -7,8 +7,10 @@ package vault
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"nomad-deck/internal/pki"
@@ -31,6 +34,14 @@ type Client struct {
 
 // NewClient builds a client trusting caBundle (empty for plain HTTP).
 func NewClient(addr, caBundle, token string, timeout time.Duration) (*Client, error) {
+	tr, err := newVaultTransport(addr, caBundle)
+	if err != nil {
+		return nil, err
+	}
+	return newClientWithTransport(addr, token, tr, timeout), nil
+}
+
+func newVaultTransport(addr, caBundle string) (*http.Transport, error) {
 	tr := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 10 * time.Second, MaxIdleConnsPerHost: 4,
 		IdleConnTimeout: 30 * time.Second, ForceAttemptHTTP2: true}
 	if strings.HasPrefix(addr, "https://") {
@@ -40,10 +51,60 @@ func NewClient(addr, caBundle, token string, timeout time.Duration) (*Client, er
 		}
 		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	}
+	return tr, nil
+}
+
+func newClientWithTransport(addr, token string, tr *http.Transport, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &Client{Addr: strings.TrimRight(addr, "/"), Token: token, HTTP: &http.Client{Transport: tr, Timeout: timeout}}, nil
+	return &Client{Addr: strings.TrimRight(addr, "/"), Token: token, HTTP: &http.Client{Transport: tr, Timeout: timeout}}
+}
+
+type transportCache struct {
+	mu  sync.Mutex
+	trs map[string]*http.Transport
+}
+
+func (c *transportCache) get(addr, caBundle string) (*http.Transport, error) {
+	prefix := "http"
+	if strings.HasPrefix(addr, "https://") {
+		prefix = "https"
+	}
+	sum := sha256.Sum256([]byte(prefix + "\x00" + caBundle))
+	key := hex.EncodeToString(sum[:])
+	c.mu.Lock()
+	if c.trs != nil {
+		if tr := c.trs[key]; tr != nil {
+			c.mu.Unlock()
+			return tr, nil
+		}
+	}
+	c.mu.Unlock()
+
+	tr, err := newVaultTransport(addr, caBundle)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if c.trs == nil {
+		c.trs = map[string]*http.Transport{}
+	}
+	if existing := c.trs[key]; existing != nil {
+		c.mu.Unlock()
+		tr.CloseIdleConnections()
+		return existing, nil
+	}
+	for len(c.trs) >= 64 {
+		for k, old := range c.trs {
+			old.CloseIdleConnections()
+			delete(c.trs, k)
+			break
+		}
+	}
+	c.trs[key] = tr
+	c.mu.Unlock()
+	return tr, nil
 }
 
 // WithToken returns a copy using another token.

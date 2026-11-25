@@ -46,8 +46,31 @@ type clusterView struct {
 func clusterOf(c *db.Cluster) clusterView {
 	return clusterView{ID: c.ID, Name: c.Name, Type: c.Type, Mode: c.Mode, TLSEnabled: c.TLSEnabled, PublicAPIURL: c.PublicAPIURL,
 		InitState: c.InitState, MaintenanceMode: c.MaintenanceMode, MaintenanceReason: c.MaintenanceReason,
-		HealthStatus: c.HealthStatus, CAExpiresAt: fmtTime(c.CAExpiresAt), Settings: json.RawMessage(c.ConfigJSON),
+		HealthStatus: c.HealthStatus, CAExpiresAt: fmtTime(c.CAExpiresAt), Settings: sanitizeClusterSettings(c.ConfigJSON),
 		CreatedAt: fmtTime(c.CreatedAt)}
+}
+
+func sanitizeClusterSettings(raw string) json.RawMessage {
+	if strings.TrimSpace(raw) == "" {
+		return json.RawMessage("{}")
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return json.RawMessage("{}")
+	}
+	if dd, ok := m["docker_defaults"].(map[string]any); ok {
+		if pp, ok := dd["pull_proxy"].(map[string]any); ok {
+			if enc, _ := pp["password_encrypted"].(string); enc != "" {
+				pp["password_set"] = true
+			}
+			delete(pp, "password_encrypted")
+		}
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return json.RawMessage("{}")
+	}
+	return b
 }
 
 type memberView struct {
@@ -79,7 +102,13 @@ func memberOf(m *db.ClusterNode) memberView {
 func strictJSON(body []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
-	return dec.Decode(v)
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("trailing data after JSON object")
+	}
+	return nil
 }
 
 func taskResponse(w http.ResponseWriter, t *db.OperationTask) {
@@ -193,25 +222,30 @@ func (a *API) createCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var c *db.Cluster
+	var parseErr error
 	switch kind.Type {
 	case "vault":
 		var in vault.CreateInput
-		if err = strictJSON(body, &struct {
+		if parseErr = strictJSON(body, &struct {
 			Type string `json:"type"`
 			*vault.CreateInput
-		}{CreateInput: &in}); err == nil {
+		}{CreateInput: &in}); parseErr == nil {
 			c, err = a.Vault.CreateCluster(r.Context(), a.actor(r), in)
 		}
 	case "nomad":
 		var in nomad.CreateInput
-		if err = strictJSON(body, &struct {
+		if parseErr = strictJSON(body, &struct {
 			Type string `json:"type"`
 			*nomad.CreateInput
-		}{CreateInput: &in}); err == nil {
+		}{CreateInput: &in}); parseErr == nil {
 			c, err = a.Nomad.CreateCluster(r.Context(), a.actor(r), in)
 		}
 	default:
 		writeError(w, http.StatusBadRequest, "invalid_argument", "type 需为 vault 或 nomad")
+		return
+	}
+	if parseErr != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "请求体不是合法的 JSON："+parseErr.Error())
 		return
 	}
 	if err != nil {
@@ -610,9 +644,12 @@ func (a *API) downloadSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sid := chi.URLParam(r, "snapshot_id")
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s.ndsnap"`, c.Name, sid))
-	if err := d.WriteArchive(r.Context(), a.actor(r), c.ID, sid, in.Passphrase, w); err != nil {
+	dw := &deferredDownloadWriter{w: w, contentType: "application/octet-stream", filename: c.Name + "-" + sid + ".ndsnap"}
+	if err := d.WriteArchive(r.Context(), a.actor(r), c.ID, sid, in.Passphrase, dw); err != nil {
+		if !dw.wrote {
+			a.writeErr(w, r, err)
+			return
+		}
 		a.Log.Error("snapshot download failed", "err", err)
 	}
 }
@@ -624,12 +661,12 @@ func (a *API) uploadSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<30)
 	mr, err := r.MultipartReader()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_argument", "需要 multipart/form-data 请求")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<30)
 	pass := ""
 	for {
 		part, err := mr.NextPart()
@@ -1160,13 +1197,20 @@ func (a *API) streamNodeLogs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "no_stream", "当前连接不支持流式输出")
 		return
 	}
+	sessID := principalFrom(r.Context()).Session.ID
+	releaseStream, ok := a.acquireLogStream(sessID, node.ID)
+	if !ok {
+		writeError(w, http.StatusTooManyRequests, "too_many_log_streams", "日志流连接数已达上限，请关闭部分日志窗口后再试")
+		return
+	}
+	defer releaseStream()
 	client, err := a.Hosts.Connect(r.Context(), node)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
 	}
 
-	revoked, cancelRevoke := a.Auth.Revocations.Subscribe(principalFrom(r.Context()).Session.ID)
+	revoked, cancelRevoke := a.Auth.Revocations.Subscribe(sessID)
 	defer cancelRevoke()
 
 	h := w.Header()

@@ -7,8 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"nomad-deck/internal/selfupdate"
@@ -48,9 +46,7 @@ func rollbackCmd(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 	resolvedBinDir := *binDir
 	if resolvedBinDir == "" {
-		if exe, err := os.Executable(); err == nil {
-			resolvedBinDir = filepath.Dir(exe)
-		}
+		resolvedBinDir = selfupdate.ResolveBinDir()
 	}
 	ctx := context.Background()
 

@@ -168,15 +168,27 @@ func ConvertCompose(src []byte, opt ComposeOptions) (*ComposeResult, error) {
 			}
 		}
 		// Ports.
-		if n, ok := raw["ports"]; ok {
+		if n, ok := raw["ports"]; ok && n.Kind == yaml.SequenceNode {
 			net := &Network{Mode: "bridge"}
 			static := false
+			usedLabels := map[string]bool{}
 			for _, p := range n.Content {
 				pt, isStatic, err := portOf(p)
 				if err != nil {
 					add(name, "warn", "端口 %s 无法转换：%v", p.Value, err)
 					continue
 				}
+				base := pt.Label
+				if usedLabels[pt.Label] {
+					for suffix := 2; ; suffix++ {
+						cand := base + "_" + strconv.Itoa(suffix)
+						if !usedLabels[cand] {
+							pt.Label = cand
+							break
+						}
+					}
+				}
+				usedLabels[pt.Label] = true
 				static = static || isStatic
 				net.Ports = append(net.Ports, pt)
 				t.Config.Ports = append(t.Config.Ports, pt.Label)
@@ -189,7 +201,7 @@ func ConvertCompose(src []byte, opt ComposeOptions) (*ComposeResult, error) {
 			}
 		}
 		// Volumes.
-		if n, ok := raw["volumes"]; ok {
+		if n, ok := raw["volumes"]; ok && n.Kind == yaml.SequenceNode {
 			for _, v := range n.Content {
 				src, dst, ro, typ := volumeOf(v)
 				switch {

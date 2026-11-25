@@ -54,6 +54,17 @@ func (s *Service) RenewCerts(ctx context.Context, actor audit.Actor, clusterID s
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.cert_renew", TargetType: "cluster", TargetID: clusterID,
 		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name,
 		Run: func(ctx context.Context, t *ops.Task) error {
+			cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			if err := s.requireOperable(cl); err != nil {
+				return err
+			}
+			members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
 			gi, err := s.genInput(ctx, cl, members)
 			if err != nil {
 				return err
@@ -519,11 +530,17 @@ func (s *Service) upgradeNode(ctx context.Context, t *ops.Task, cl *nomadCluster
 	if err := s.waitVersion(ctx, cl, m, in.Version); err != nil {
 		// The new binary never served: nothing was migrated, switch back.
 		nc.Step.Logf("新版本未能启动（%v），回切到 %s", err, old)
-		if old != "" {
-			if _, rerr := nc.Run(ctx, ActivateBinaryScript(old)); rerr == nil {
-				_ = s.service(ctx, nc, "restart")
-				_ = s.recoverNode(ctx, cl, m, nc.Step.Logf)
-			}
+		if old == "" {
+			return fmt.Errorf("%s 升级失败且无旧版本可回退：%w", m.NodeName, err)
+		}
+		if _, rerr := nc.Run(ctx, ActivateBinaryScript(old)); rerr != nil {
+			return fmt.Errorf("%s 升级失败且回切旧版本 %s 失败（%v）：%w", m.NodeName, old, rerr, err)
+		}
+		if serr := s.service(ctx, nc, "restart"); serr != nil {
+			return fmt.Errorf("%s 回切旧版本 %s 后重启失败（%v）：%w", m.NodeName, old, serr, err)
+		}
+		if recErr := s.recoverNode(ctx, cl, m, nc.Step.Logf); recErr != nil {
+			return fmt.Errorf("%s 回切旧版本 %s 后未恢复健康（%v）：%w", m.NodeName, old, recErr, err)
 		}
 		return fmt.Errorf("%s 升级失败并已回切旧版本，后续节点未升级：%w", m.NodeName, ops.ErrRolledBack)
 	}

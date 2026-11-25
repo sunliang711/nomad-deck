@@ -428,6 +428,11 @@ func (s *Service) DeleteRole(ctx context.Context, actor audit.Actor, id, roleID 
 	if err != nil {
 		return err
 	}
+	release, err := s.Ops.Locks.Acquire(ctx, []ops.LockReq{{Key: ops.ClusterLock(l.TargetClusterID), Mode: ops.Exclusive}})
+	if err != nil {
+		return err
+	}
+	defer release()
 	r, err := db.GetRole(ctx, s.DB.Reader, roleID)
 	if err != nil || r.IntegrationID != id {
 		return &auth.Error{Status: 404, Code: "not_found", Message: "Role 不存在"}
@@ -593,6 +598,9 @@ func (s *Service) onVaultCA(ctx context.Context, clusterID string, log func(stri
 		}
 		log("联动 %s：已提交 Nomad 侧 vault-ca.crt 滚动下发任务 %s（单 Server 集群会短暂中断），等待完成", i.Name, task.ID)
 		if err := s.waitTask(ctx, task.ID); err != nil {
+			if ctx.Err() != nil {
+				s.Ops.Cancel(task.ID)
+			}
 			return fmt.Errorf("联动 %s 的 Nomad 侧 Vault CA 下发失败：%w", i.Name, err)
 		}
 		if err := s.markNomadSHA(ctx, i.ID); err != nil {

@@ -321,7 +321,7 @@ func (s *Service) Restart(ctx context.Context, actor audit.Actor, clusterID, ns,
 }
 
 func (s *Service) restartAlloc(ctx context.Context, c *nomad.Client, allocID string, log func(string, ...any)) error {
-	restarts := func() (int, string) {
+	restarts := func() (int, string, error) {
 		var a struct {
 			ClientStatus string `json:"ClientStatus"`
 			TaskStates   map[string]struct {
@@ -330,7 +330,7 @@ func (s *Service) restartAlloc(ctx context.Context, c *nomad.Client, allocID str
 			} `json:"TaskStates"`
 		}
 		if err := c.Request(ctx, http.MethodGet, "allocation/"+url.PathEscape(allocID), nil, &a); err != nil {
-			return -1, ""
+			return -1, "", err
 		}
 		n, running := 0, a.ClientStatus == "running"
 		for _, ts := range a.TaskStates {
@@ -340,17 +340,20 @@ func (s *Service) restartAlloc(ctx context.Context, c *nomad.Client, allocID str
 			}
 		}
 		if running {
-			return n, "running"
+			return n, "running", nil
 		}
-		return n, a.ClientStatus
+		return n, a.ClientStatus, nil
 	}
-	before, _ := restarts()
+	before, _, err := restarts()
+	if err != nil {
+		return nomadErr(err)
+	}
 	if err := c.Request(ctx, http.MethodPost, "client/allocation/"+url.PathEscape(allocID)+"/restart", map[string]any{"AllTasks": true}, nil); err != nil {
 		return nomadErr(err)
 	}
 	deadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(deadline) {
-		if n, st := restarts(); n > before && st == "running" {
+		if n, st, rerr := restarts(); rerr == nil && n > before && st == "running" {
 			log("已重启并恢复运行（重启次数 %d）", n)
 			return nil
 		}

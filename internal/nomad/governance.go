@@ -602,7 +602,11 @@ func (s *Service) RevokeToken(ctx context.Context, actor audit.Actor, clusterID,
 	if err != nil {
 		return err
 	}
-	if self, err := api.TokenSelf(ctx); err == nil && self.AccessorID == accessor {
+	self, err := api.TokenSelf(ctx)
+	if err != nil {
+		return nomadErr(err)
+	}
+	if self.AccessorID == accessor {
 		return conflict("protected_token", "不能吊销控制面自身持有的 Management Token")
 	}
 	if err := api.Request(ctx, http.MethodDelete, "acl/token/"+url.PathEscape(accessor), nil, nil); err != nil {

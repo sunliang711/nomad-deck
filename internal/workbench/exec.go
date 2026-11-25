@@ -52,11 +52,9 @@ type execState struct {
 }
 
 func (s *Service) execs() *execState {
-	if s.exec == nil {
-		s.execOnce.Do(func() {
-			s.exec = &execState{tickets: map[string]*Ticket{}, sessions: map[string]int{}}
-		})
-	}
+	s.execOnce.Do(func() {
+		s.exec = &execState{tickets: map[string]*Ticket{}, sessions: map[string]int{}}
+	})
 	return s.exec
 }
 
@@ -251,7 +249,13 @@ func (s *Service) Relay(ctx context.Context, actor audit.Actor, t *Ticket, brows
 	go pump(browser, upstream, "browser")
 	go pump(upstream, browser, "nomad")
 	idleDur := time.Duration(db.IntSetting(ctx, s.DB.Reader, "nomad.exec_idle_minutes", int(TerminalIdle/time.Minute))) * time.Minute
+	if idleDur <= 0 {
+		idleDur = TerminalIdle
+	}
 	maxDur := time.Duration(db.IntSetting(ctx, s.DB.Reader, "nomad.exec_max_minutes", int(TerminalMaxRuntime/time.Minute))) * time.Minute
+	if maxDur <= 0 {
+		maxDur = TerminalMaxRuntime
+	}
 	idle := time.NewTimer(idleDur)
 	max := time.NewTimer(maxDur)
 	defer idle.Stop()
@@ -263,9 +267,6 @@ loop:
 		case reason = <-done:
 			break loop
 		case <-activity:
-			if !idle.Stop() {
-				<-idle.C
-			}
 			idle.Reset(idleDur)
 		case <-idle.C:
 			reason = "idle timeout"

@@ -318,9 +318,8 @@ func dockerPrecheckScript(format, dir string) string {
 	if format == "deb" {
 		return fmt.Sprintf(`set -e
 cd %s
-DEBIAN_FRONTEND=noninteractive apt-get install --simulate -y --allow-change-held-packages ./*.deb >/tmp/nd-docker-sim.log 2>&1 || { cat /tmp/nd-docker-sim.log; echo "依赖预检失败：上面列出的系统依赖无法从已配置的软件源获得"; exit 1; }
-grep -E '^Inst ' /tmp/nd-docker-sim.log | awk '{print $2}' | tr '\n' ' '
-rm -f /tmp/nd-docker-sim.log
+sim_out=$(DEBIAN_FRONTEND=noninteractive apt-get install --simulate -y --allow-change-held-packages ./*.deb 2>&1) || { printf '%%s\n' "$sim_out"; echo "依赖预检失败：上面列出的系统依赖无法从已配置的软件源获得"; exit 1; }
+printf '%%s\n' "$sim_out" | grep -E '^Inst ' | awk '{print $2}' | tr '\n' ' '
 `, sshx.Quote(dir))
 	}
 	return fmt.Sprintf(`cd %s || exit 1
@@ -1110,6 +1109,11 @@ func (s *Service) UpdateDockerConfig(ctx context.Context, actor audit.Actor, nod
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "docker.config", TargetType: "node", TargetID: nodeID, Locks: s.dockerLocks(d),
 		TriggeredBy: actor.Name,
 		Run: func(ctx context.Context, t *ops.Task) error {
+			freshHost, err := db.GetNode(ctx, s.DB.Reader, nodeID)
+			if err != nil {
+				return err
+			}
+			d.node = freshHost
 			nc, err := s.dockerRemote().Open(ctx, t, nodeID, "更新 Docker 守护进程配置")
 			if err != nil {
 				return err
@@ -1131,6 +1135,8 @@ func (s *Service) UpdateDockerConfig(ctx context.Context, actor audit.Actor, nod
 		ResourceName: d.node.Name, OperationTaskID: task.ID, Summary: map[string]any{"pull_proxy": proxyMode(cfg.PullProxy)}})
 	return task, nil
 }
+
+var reURLCreds = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@`)
 
 func proxyMode(p *PullProxy) string {
 	if p == nil {
@@ -1192,7 +1198,9 @@ func (s *Service) TestPullProxy(ctx context.Context, actor audit.Actor, nodeID s
 		return nil, err
 	}
 	d.host = cfg
-	d.proxyAAD = nodeProxyAAD(nodeID)
+	if d.host.PullProxy != nil {
+		d.proxyAAD = nodeProxyAAD(nodeID)
+	}
 	eff := d.effective()
 	proxyURL, _, err := s.pullProxyURL(ctx, d, eff.PullProxy)
 	if err != nil {
@@ -1211,22 +1219,23 @@ func (s *Service) TestPullProxy(ctx context.Context, actor audit.Actor, nodeID s
 		Tools map[string]bool `json:"tools"`
 	}
 	_ = json.Unmarshal([]byte(n.ProbeJSON), &probe)
-	env := "NO_PROXY= no_proxy= "
-	if proxyURL != "" {
-		env += "HTTPS_PROXY=" + sshx.Quote(proxyURL) + " HTTP_PROXY=" + sshx.Quote(proxyURL) + " https_proxy=" + sshx.Quote(proxyURL) +
-			" http_proxy=" + sshx.Quote(proxyURL) + " "
-	}
-	var script string
+	var cmd string
 	switch {
 	case probe.Tools["curl"]:
-		script = env + "curl -sS -o /dev/null -w '%{http_code}' --max-time 20 " + sshx.Quote(registry)
+		cmd = "curl -sS -o /dev/null -w '%{http_code}' --max-time 20 " + sshx.Quote(registry)
 	case probe.Tools["wget"]:
-		script = env + "wget -S -O /dev/null --timeout=20 --tries=1 " + sshx.Quote(registry) + " 2>&1 | awk '/^  HTTP\\//{c=$2} END{print c}'"
+		cmd = "wget -S -O /dev/null --timeout=20 --tries=1 " + sshx.Quote(registry) + " 2>&1 | awk '/^  HTTP\\//{c=$2} END{print c}'"
 	default:
 		return nil, conflict("no_http_client", "主机上没有 curl 或 wget，无法从节点测试代理")
 	}
+	script := "export NO_PROXY= no_proxy=; " + cmd
+	var opts sshx.RunOptions
+	if proxyURL != "" {
+		script = `IFS= read -r _nd_p; export HTTPS_PROXY="$_nd_p" HTTP_PROXY="$_nd_p" https_proxy="$_nd_p" http_proxy="$_nd_p" NO_PROXY= no_proxy=; ` + cmd
+		opts.Stdin = strings.NewReader(proxyURL + "\n")
+	}
 	start := time.Now()
-	r, err := c.Run(ctx, script, sshx.RunOptions{})
+	r, err := c.Run(ctx, script, opts)
 	res.DurationMS = time.Since(start).Milliseconds()
 	out := ""
 	if r != nil {
@@ -1243,7 +1252,7 @@ func (s *Service) TestPullProxy(ctx context.Context, actor audit.Actor, nodeID s
 		if r != nil && len(r.Stderr) > 0 {
 			msg = strings.TrimSpace(string(r.Stderr))
 		}
-		res.Error = msg
+		res.Error = audit.RedactString(reURLCreds.ReplaceAllString(msg, "${1}***@"))
 	default:
 		res.Error = fmt.Sprintf("镜像仓库返回 HTTP %d", res.StatusCode)
 	}

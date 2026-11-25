@@ -127,3 +127,11 @@ func CountConsecutiveFailedBackups(ctx context.Context, q Querier, kind string) 
 	}
 	return n, rows.Err()
 }
+
+// FailRunningBackupRuns marks any backup runs left in 'running' state after a
+// previous crash or restart as failed.
+func FailRunningBackupRuns(ctx context.Context, q Querier, msg string, at time.Time) error {
+	_, err := q.ExecContext(ctx, `UPDATE backup_runs SET status = 'failed', error_message = ?, finished_at = ? WHERE status = 'running'`,
+		msg, FormatTime(at))
+	return err
+}

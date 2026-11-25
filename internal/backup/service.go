@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -399,10 +400,12 @@ func (s *Service) loadOffsiteSnapshots(ctx context.Context) []migration.OffsiteS
 }
 
 func (s *Service) recordOffsiteSnapshot(ctx context.Context, snap migration.OffsiteSnapshot) {
-	m := map[string]migration.OffsiteSnapshot{}
-	_ = db.GetSettingJSON(ctx, s.DB.Reader, SettingOffsiteSnapshots, &m)
-	m[snap.ClusterID] = snap
-	_ = db.PutSettingJSON(ctx, s.DB.Writer, SettingOffsiteSnapshots, m, s.DB.NowString())
+	_ = s.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		m := map[string]migration.OffsiteSnapshot{}
+		_ = db.GetSettingJSON(ctx, tx, SettingOffsiteSnapshots, &m)
+		m[snap.ClusterID] = snap
+		return db.PutSettingJSON(ctx, tx, SettingOffsiteSnapshots, m, s.DB.NowString())
+	})
 }
 
 // ListHistory lists recent backup runs.

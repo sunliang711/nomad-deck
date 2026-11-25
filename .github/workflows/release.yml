@@ -38,10 +38,11 @@ jobs:
           mkdir -p dist
           ver_no_v="${VERSION#v}"
           short_sha="${COMMIT:0:7}"
-          ldflags="-s -w -X nomad-deck/internal/version.Version=${VERSION} -X nomad-deck/internal/version.Commit=${short_sha} -X nomad-deck/internal/version.Repo=${REPO}"
-          if [ -n "${RELEASE_PUBLIC_KEY}" ]; then
-            ldflags="${ldflags} -X nomad-deck/internal/version.ReleasePublicKey=${RELEASE_PUBLIC_KEY}"
+          if [ -z "${RELEASE_PUBLIC_KEY}" ]; then
+            echo "RELEASE_PUBLIC_KEY variable must be set for release builds" >&2
+            exit 1
           fi
+          ldflags="-s -w -X nomad-deck/internal/version.Version=${VERSION} -X nomad-deck/internal/version.Commit=${short_sha} -X nomad-deck/internal/version.Repo=${REPO} -X nomad-deck/internal/version.ReleasePublicKey=${RELEASE_PUBLIC_KEY}"
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os="${target%/*}"
             arch="${target#*/}"
@@ -67,6 +68,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/nomad-deck_*.tar.gz
             dist/SHA256SUMS

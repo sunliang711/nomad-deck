@@ -53,6 +53,8 @@ type Service struct {
 	// OnCAChange is called after the cluster CA bundle changed, so
 	// integrations can push the new trust bundle to their peers.
 	OnCAChange func(ctx context.Context, clusterID string, log func(string, ...any)) error
+
+	trCache transportCache
 }
 
 // Settings stored in clusters.config_json for Nomad clusters.
@@ -510,7 +512,12 @@ func (s *Service) clientCert(cl *nomadCluster) *ClientCert {
 }
 
 func (s *Service) client(cl *nomadCluster, m *db.ClusterNode, token string) (*Client, error) {
-	return NewClient(m.APIAddr, cl.CACertPEM, token, s.clientCert(cl), s.apiTimeout())
+	cert := s.clientCert(cl)
+	tr, err := s.trCache.get(m.APIAddr, cl.CACertPEM, cert)
+	if err != nil {
+		return nil, err
+	}
+	return newClientWithTransport(m.APIAddr, token, tr, s.apiTimeout()), nil
 }
 
 // managementToken decrypts the control plane's management token.

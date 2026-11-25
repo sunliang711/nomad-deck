@@ -54,8 +54,14 @@ func (c *ProxyConfig) Validate() error {
 		return errors.New("代理端口不合法")
 	}
 	for _, e := range c.NoProxy {
-		if strings.TrimSpace(e) == "" || strings.ContainsAny(e, " /\\") && !strings.Contains(e, "/") {
+		trimmed := strings.TrimSpace(e)
+		if trimmed == "" || strings.ContainsAny(e, " \t\r\n\\") {
 			return fmt.Errorf("no_proxy 条目 %q 不合法", e)
+		}
+		if strings.Contains(trimmed, "/") {
+			if _, err := netip.ParsePrefix(trimmed); err != nil {
+				return fmt.Errorf("no_proxy CIDR %q 不合法", e)
+			}
 		}
 	}
 	return nil
@@ -140,7 +146,7 @@ func (m *Manager) Save(ctx context.Context, tx *sql.Tx, cfg *ProxyConfig, passwo
 			}
 			val = enc
 		}
-		return db.PutSetting(ctx, tx, SettingProxyPassword, val, true, now)
+		return db.PutSetting(ctx, tx, SettingProxyPassword, val, val != "", now)
 	}
 	return nil
 }

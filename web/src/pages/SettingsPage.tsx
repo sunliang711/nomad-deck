@@ -224,7 +224,7 @@ export function SettingsPage() {
             {proxyTest && (
               <div className="space-y-1 rounded bg-slate-100 p-3 dark:bg-slate-950">
                 <div>出口 IP：<span className="font-mono">{proxyTest.exit_ip || '-'}</span></div>
-                {(proxyTest.checks || []).map((c: any, i: number) => (
+                {(proxyTest.results || []).map((c: any, i: number) => (
                   <div key={i} className="flex justify-between">
                     <span>{c.name} ({c.url})</span>
                     <Badge tone={c.ok ? 'green' : 'red'}>{c.ok ? `OK (${c.status_code})` : c.error}</Badge>

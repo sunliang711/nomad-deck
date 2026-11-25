@@ -228,12 +228,18 @@ func (s *Service) Login(ctx context.Context, username, password, ip, userAgent s
 	}
 	if !ok || a.Disabled {
 		if !ok {
-			attempts := a.FailedAttempts + 1
-			var until time.Time
-			if attempts >= LockThreshold {
-				until = started.Add(backoff(attempts))
-			}
-			if err := db.RecordLoginFailure(ctx, s.DB.Writer, a.ID, attempts, until, started); err != nil {
+			if err := s.DB.WithTx(ctx, func(tx *sql.Tx) error {
+				cur, err := db.GetAdmin(ctx, tx, a.ID)
+				if err != nil {
+					return err
+				}
+				attempts := cur.FailedAttempts + 1
+				var until time.Time
+				if attempts >= LockThreshold {
+					until = started.Add(backoff(attempts))
+				}
+				return db.RecordLoginFailure(ctx, tx, a.ID, attempts, until, started)
+			}); err != nil {
 				return nil, err
 			}
 		}
@@ -266,9 +272,10 @@ func (s *Service) Login(ctx context.Context, username, password, ip, userAgent s
 	return &LoginResult{Admin: a, Session: sess, Token: tok, CSRFToken: csrf}, nil
 }
 
-// CSRFToken derives the CSRF token bound to a session token.
+// CSRFToken derives the CSRF token bound to a session token without depending
+// on the mutable master keyring, so master-key rotation preserves active CSRF sessions.
 func (s *Service) CSRFToken(sessionToken string) string {
-	return crypto.HMACToken(s.Keys.Subkey("csrf"), sessionToken)
+	return crypto.HMACToken([]byte(sessionToken), "nomad-deck-csrf-v1")
 }
 
 // VerifyCSRF compares a submitted CSRF token with the session's stored hash.
@@ -454,12 +461,37 @@ func (s *Service) ipLockedUntil(ip string, now time.Time) time.Time {
 func (s *Service) ipFailure(ip string, now time.Time) {
 	s.ipMu.Lock()
 	defer s.ipMu.Unlock()
-	// Prune stale entries to bound memory.
-	if len(s.ipFailures) > 10000 {
+	// Prune stale entries to keep the map strictly bounded.
+	const maxIPFailures = 10000
+	if _, exists := s.ipFailures[ip]; !exists && len(s.ipFailures) >= maxIPFailures {
 		for k, st := range s.ipFailures {
 			if now.Sub(st.last) > 24*time.Hour {
 				delete(s.ipFailures, k)
 			}
+		}
+		if len(s.ipFailures) >= maxIPFailures {
+			for k, st := range s.ipFailures {
+				if !st.lockedUntil.After(now) {
+					delete(s.ipFailures, k)
+					if len(s.ipFailures) < maxIPFailures {
+						break
+					}
+				}
+			}
+		}
+		for len(s.ipFailures) >= maxIPFailures {
+			var oldestK string
+			var oldestT time.Time
+			for k, st := range s.ipFailures {
+				if oldestK == "" || st.last.Before(oldestT) {
+					oldestK = k
+					oldestT = st.last
+				}
+			}
+			if oldestK == "" {
+				break
+			}
+			delete(s.ipFailures, oldestK)
 		}
 	}
 	st := s.ipFailures[ip]

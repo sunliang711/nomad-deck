@@ -187,12 +187,15 @@ func (l *localStore) Rotate(_ context.Context, subdir, prefix string, keep int) 
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(names)))
 	deleted := 0
+	var delErrs []error
 	for i := keep; i < len(names); i++ {
-		if err := os.Remove(filepath.Join(dir, names[i])); err == nil {
+		if err := os.Remove(filepath.Join(dir, names[i])); err != nil {
+			delErrs = append(delErrs, err)
+		} else {
 			deleted++
 		}
 	}
-	return deleted, nil
+	return deleted, errors.Join(delErrs...)
 }
 
 func (l *localStore) List(_ context.Context, subdir, prefix string) ([]ObjectInfo, error) {
@@ -415,12 +418,15 @@ func (s *sftpStore) Rotate(ctx context.Context, subdir, prefix string, keep int)
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(names)))
 	deleted := 0
+	var delErrs []error
 	for i := keep; i < len(names); i++ {
-		if sf.Remove(path.Join(dir, names[i])) == nil {
+		if err := sf.Remove(path.Join(dir, names[i])); err != nil {
+			delErrs = append(delErrs, err)
+		} else {
 			deleted++
 		}
 	}
-	return deleted, nil
+	return deleted, errors.Join(delErrs...)
 }
 
 func (s *sftpStore) List(ctx context.Context, subdir, prefix string) ([]ObjectInfo, error) {
@@ -616,12 +622,15 @@ func (s *s3Store) Rotate(ctx context.Context, subdir, prefix string, keep int) (
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
 	deleted := 0
+	var delErrs []error
 	for i := keep; i < len(keys); i++ {
-		if s.client.RemoveObject(ctx, s.target.Bucket, keys[i], minio.RemoveObjectOptions{}) == nil {
+		if err := s.client.RemoveObject(ctx, s.target.Bucket, keys[i], minio.RemoveObjectOptions{}); err != nil {
+			delErrs = append(delErrs, err)
+		} else {
 			deleted++
 		}
 	}
-	return deleted, nil
+	return deleted, errors.Join(delErrs...)
 }
 
 func (s *s3Store) List(ctx context.Context, subdir, prefix string) ([]ObjectInfo, error) {
@@ -680,6 +689,9 @@ func (s *s3Store) Test(ctx context.Context) (*TestResult, error) {
 	obj.Close()
 	if err != nil {
 		return &TestResult{Type: TargetS3, Target: targetDesc, LatencyMS: time.Since(start).Milliseconds(), Error: err.Error()}, err
+	}
+	if rerr := s.client.RemoveObject(ctx, s.target.Bucket, key, minio.RemoveObjectOptions{}); rerr != nil {
+		return &TestResult{Type: TargetS3, Target: targetDesc, LatencyMS: time.Since(start).Milliseconds(), Error: "清理探测对象失败: " + rerr.Error()}, rerr
 	}
 	return &TestResult{OK: true, Type: TargetS3, Target: targetDesc, LatencyMS: time.Since(start).Milliseconds()}, nil
 }

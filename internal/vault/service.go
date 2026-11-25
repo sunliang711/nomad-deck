@@ -75,6 +75,8 @@ type Service struct {
 	// nodes move to the new CA, and after the old CA is dropped), so
 	// integrations can update the peers that trust this cluster.
 	OnCAChange func(ctx context.Context, clusterID string, log func(string, ...any)) error
+
+	trCache transportCache
 }
 
 // AdminClient returns a client for the active node using the managed
@@ -363,7 +365,11 @@ func (s *Service) AddMembers(ctx context.Context, actor audit.Actor, clusterID s
 // ---- Clients and credentials ----
 
 func (s *Service) client(cl *cluster, m *db.ClusterNode, token string) (*Client, error) {
-	return NewClient(m.APIAddr, cl.CACertPEM, token, s.apiTimeout())
+	tr, err := s.trCache.get(m.APIAddr, cl.CACertPEM)
+	if err != nil {
+		return nil, err
+	}
+	return newClientWithTransport(m.APIAddr, token, tr, s.apiTimeout()), nil
 }
 
 func (s *Service) adminToken(ctx context.Context, clusterID string) (string, error) {
@@ -621,9 +627,16 @@ func (s *Service) StatusDetail(ctx context.Context, clusterID string) (*StatusRe
 			}
 		}
 	}
+	byNodeID := make(map[string]*db.ClusterNode, len(members))
+	for _, m := range members {
+		byNodeID[m.NodeID] = m
+	}
 	seen := map[string]bool{}
-	for i, ns := range nodes {
-		m := members[i]
+	for _, ns := range nodes {
+		m := byNodeID[ns.NodeID]
+		if m == nil {
+			continue
+		}
 		d := NodeDetail{NodeStatus: ns, InstalledVersion: m.InstalledVersion, ConfigGeneration: memberConfig(m).ConfigGeneration,
 			CertExpiresAt: tp(m.CertExpiresAt), ServiceStatus: m.ServiceStatus, LastSyncedAt: tp(m.LastSyncedAt)}
 		d.VersionMismatch = ns.Version != "" && m.InstalledVersion != "" && ns.Version != m.InstalledVersion

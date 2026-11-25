@@ -3,7 +3,7 @@ import { Copy, KeyRound, Plus, RefreshCw, Server as ServerIcon, Trash2 } from 'l
 import { apiDelete, apiGet, apiPost, apiPut, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Select, statusTone } from '../components/UI';
+import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, PasswordConfirmModal, SectionTabs, Select, statusTone } from '../components/UI';
 
 export function InfraPage() {
   const { isAdmin } = useAuth();
@@ -34,6 +34,7 @@ export function InfraPage() {
   });
   const [pushNode, setPushNode] = useState<any>(null);
   const [pushPassword, setPushPassword] = useState('');
+  const [pwResetNode, setPwResetNode] = useState<any>(null);
   const [probeWarnings, setProbeWarnings] = useState<{ node: string; warnings: string[] } | null>(null);
   const [dockerNode, setDockerNode] = useState<any>(null);
   const [dockerInfo, setDockerInfo] = useState<any>(null);
@@ -76,7 +77,7 @@ export function InfraPage() {
     e.preventDefault();
     setErr('');
     try {
-      await apiPost('/api/v1/ssh-keys', { name: keyName.trim(), private_key_pem: privPEM });
+      await apiPost('/api/v1/ssh-keys', { name: keyName.trim(), private_key: privPEM });
       setKeyName('');
       setPrivPEM('');
       setShowImportKey(false);
@@ -154,10 +155,10 @@ export function InfraPage() {
     try {
       const res = await apiGet(`/api/v1/nodes/${n.id}/docker`);
       setDockerInfo(res.docker);
-      const cfg = res.docker?.config || {};
+      const cfg = res.docker?.host_config || res.docker?.effective || {};
       setDockerCfg({
         registry_mirrors: (cfg.registry_mirrors || []).join(','),
-        use_system_proxy: Boolean(cfg.pull_proxy?.use_system_proxy),
+        use_system_proxy: cfg.pull_proxy?.mode === 'system',
         proxy_url: cfg.pull_proxy?.url || '',
       });
     } catch (ex: any) {
@@ -188,9 +189,10 @@ export function InfraPage() {
         .filter(Boolean);
       const res = await apiPut(`/api/v1/nodes/${dockerNode.id}/docker/config`, {
         registry_mirrors: mirrors,
-        pull_proxy: dockerCfg.use_system_proxy || dockerCfg.proxy_url
-          ? { use_system_proxy: dockerCfg.use_system_proxy, url: dockerCfg.proxy_url.trim() }
-          : undefined,
+        pull_proxy: {
+          mode: dockerCfg.use_system_proxy ? 'system' : (dockerCfg.proxy_url.trim() ? 'custom' : 'none'),
+          url: dockerCfg.proxy_url.trim(),
+        },
       });
       if (res.task?.id) openTask(res.task.id, `更新 Docker 配置: ${dockerNode.name}`);
     } catch (ex: any) {
@@ -342,12 +344,7 @@ export function InfraPage() {
                             </Button>
                             <Button
                               size="sm"
-                              onClick={() =>
-                                void apiPost(`/api/v1/nodes/${n.id}/reset-fingerprint`).then(() => {
-                                  setNotice(`已重置 ${n.name} 主机指纹`);
-                                  return load();
-                                })
-                              }
+                              onClick={() => setPwResetNode(n)}
                             >
                               重置指纹
                             </Button>
@@ -418,7 +415,11 @@ export function InfraPage() {
                     {isAdmin && !k.is_default && (
                       <Button
                         size="sm"
-                        onClick={() => void apiPut(`/api/v1/ssh-keys/${k.id}/default`).then(() => load())}
+                        onClick={() =>
+                          void apiPut(`/api/v1/ssh-keys/${k.id}/default`)
+                            .then(() => load())
+                            .catch((ex) => setErr(ex.message))
+                        }
                       >
                         设为默认
                       </Button>
@@ -579,6 +580,19 @@ export function InfraPage() {
           </div>
         )}
       </Modal>
+
+      <PasswordConfirmModal
+        open={Boolean(pwResetNode)}
+        title={`重置主机指纹：${pwResetNode?.name || ''}`}
+        description="重置后下次连接将重新通过 TOFU 固定该节点公钥指纹。"
+        onClose={() => setPwResetNode(null)}
+        onConfirm={async (pw) => {
+          if (!pwResetNode) return;
+          await apiPost(`/api/v1/nodes/${pwResetNode.id}/reset-fingerprint`, { current_password: pw });
+          setNotice(`已重置 ${pwResetNode.name} 主机指纹`);
+          await load();
+        }}
+      />
     </div>
   );
 }

@@ -195,11 +195,12 @@ func TestMigrationReplace(t *testing.T) {
 	if _, err := db.GetNode(ctx, dst.app.DB.Reader, "late"); err == nil {
 		t.Fatal("replace removes rows that are not in the bundle")
 	}
-	// Step logs were restored and point into this data directory.
+	// Step logs were restored under this data directory and stored as a DataDir-relative path.
 	var lp string
 	_ = dst.app.DB.Reader.QueryRow(`SELECT log_path FROM operation_task_steps WHERE id = 'S1'`).Scan(&lp)
-	if got, err := os.ReadFile(lp); err != nil || string(got) != "step output\n" || filepath.Dir(filepath.Dir(lp)) != filepath.Join(dst.app.Config.DataDir, "ops") {
-		t.Fatalf("step log: %s %q %v", lp, got, err)
+	fullLogPath := filepath.Join(dst.app.Config.DataDir, lp)
+	if got, err := os.ReadFile(fullLogPath); err != nil || string(got) != "step output\n" || lp != filepath.Join("ops", "T1", "1.log") {
+		t.Fatalf("step log: %s (%s) %q %v", lp, fullLogPath, got, err)
 	}
 	// The control plane waits for activation; scheduled jobs pause.
 	if cron.Activated(ctx, dst.app.DB) {

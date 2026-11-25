@@ -23,6 +23,7 @@ import (
 	"nomad-deck/internal/config"
 	"nomad-deck/internal/crypto"
 	"nomad-deck/internal/db"
+	"nomad-deck/internal/selfupdate"
 	"nomad-deck/internal/server"
 	"nomad-deck/internal/version"
 )
@@ -51,6 +52,16 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "--version", "-version", "version":
+			fmt.Println("nomad-deck", version.String())
+			return nil
+		case "--help", "-h", "help":
+			fmt.Print(usage)
+			return nil
+		}
+	}
 	cmd := "serve"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
@@ -58,9 +69,6 @@ func run(args []string) error {
 	switch cmd {
 	case "serve":
 		return serve(args)
-	case "version", "--version", "-version":
-		fmt.Println("nomad-deck", version.String())
-		return nil
 	case "admin":
 		if len(args) == 0 || args[0] != "reset-password" {
 			return errors.New("未知的 admin 子命令\n" + usage)
@@ -70,9 +78,6 @@ func run(args []string) error {
 		return offlineBackup(args, os.Stdin, os.Stdout, os.Stderr)
 	case "rollback":
 		return rollbackCmd(args, os.Stdin, os.Stdout)
-	case "help", "-h", "--help":
-		fmt.Print(usage)
-		return nil
 	default:
 		return fmt.Errorf("未知命令 %q\n%s", cmd, usage)
 	}
@@ -117,6 +122,11 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	releaseLock, err := selfupdate.AcquireProcessLock(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
 	log := newLogger(cfg)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

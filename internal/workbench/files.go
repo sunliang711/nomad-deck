@@ -112,7 +112,7 @@ func (s *Service) ReadFile(ctx context.Context, actor audit.Actor, clusterID, al
 	if inSecrets(p) {
 		return nil, secretsRefused()
 	}
-	if offset < 0 || limit <= 0 || limit > MaxPreview {
+	if limit <= 0 || limit > MaxPreview {
 		limit = MaxPreview
 	}
 	if offset < 0 {
@@ -124,12 +124,12 @@ func (s *Service) ReadFile(ctx context.Context, actor audit.Actor, clusterID, al
 	}
 	resp, err := stream(ctx, c, fmt.Sprintf("client/fs/readat/%s?path=%s&offset=%d&limit=%d", allocID, url.QueryEscape(p), offset, limit))
 	if err != nil {
-		s.auditOp(ctx, actor, clusterID, "alloc_file_read", "alloc/"+allocID, map[string]any{"path": p}, err)
+		s.auditOp(context.WithoutCancel(ctx), actor, clusterID, "alloc_file_read", "alloc/"+allocID, map[string]any{"path": p}, err)
 		return nil, nomadErr(err)
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, MaxPreview))
-	s.auditOp(ctx, actor, clusterID, "alloc_file_read", "alloc/"+allocID, map[string]any{"path": p, "offset": offset, "bytes": len(b)}, err)
+	s.auditOp(context.WithoutCancel(ctx), actor, clusterID, "alloc_file_read", "alloc/"+allocID, map[string]any{"path": p, "offset": offset, "bytes": len(b)}, err)
 	return b, err
 }
 
@@ -151,12 +151,12 @@ func (s *Service) DownloadFile(ctx context.Context, actor audit.Actor, clusterID
 	}
 	resp, err := stream(ctx, c, "client/fs/cat/"+allocID+"?path="+url.QueryEscape(p))
 	if err != nil {
-		s.auditOp(ctx, actor, clusterID, "alloc_file_download", "alloc/"+allocID, map[string]any{"path": p}, err)
+		s.auditOp(context.WithoutCancel(ctx), actor, clusterID, "alloc_file_download", "alloc/"+allocID, map[string]any{"path": p}, err)
 		return nomadErr(err)
 	}
 	defer resp.Body.Close()
 	n, err := io.Copy(w, resp.Body)
-	s.auditOp(ctx, actor, clusterID, "alloc_file_download", "alloc/"+allocID, map[string]any{"path": p, "bytes": n}, err)
+	s.auditOp(context.WithoutCancel(ctx), actor, clusterID, "alloc_file_download", "alloc/"+allocID, map[string]any{"path": p, "bytes": n}, err)
 	return err
 }
 

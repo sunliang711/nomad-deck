@@ -238,10 +238,10 @@ type statsCache struct {
 
 func newStatsCache() *statsCache { return &statsCache{m: map[string]*statsEntry{}} }
 
-func (s *Service) cached(ctx context.Context, key string, ttl time.Duration, fetch func() (json.RawMessage, error)) (json.RawMessage, error) {
+func (s *Service) cached(ctx context.Context, key string, ttl time.Duration, fetch func(context.Context) (json.RawMessage, error)) (json.RawMessage, error) {
 	c := s.stats
 	if c == nil {
-		return fetch()
+		return fetch(ctx)
 	}
 	c.mu.Lock()
 	if e, ok := c.m[key]; ok {
@@ -256,22 +256,60 @@ func (s *Service) cached(ctx context.Context, key string, ttl time.Duration, fet
 			c.mu.Lock()
 			e = c.m[key]
 			c.mu.Unlock()
-			if e != nil {
-				return e.body, e.err
+			if e != nil && e.err == nil {
+				return e.body, nil
 			}
-			return fetch()
+			return fetch(ctx)
 		}
-		if time.Since(e.at) < ttl {
+		if e.err == nil && time.Since(e.at) < ttl {
 			c.mu.Unlock()
-			return e.body, e.err
+			return e.body, nil
+		}
+	}
+	if len(c.m) > 256 {
+		now := time.Now()
+		for k, v := range c.m {
+			if v.wait == nil && now.Sub(v.at) >= ttl {
+				delete(c.m, k)
+			}
+		}
+		for len(c.m) > 1024 {
+			var victim string
+			for k, v := range c.m {
+				if v.wait == nil {
+					victim = k
+					break
+				}
+			}
+			if victim == "" {
+				break
+			}
+			delete(c.m, victim)
 		}
 	}
 	e := &statsEntry{wait: make(chan struct{})}
 	c.m[key] = e
 	c.mu.Unlock()
-	body, err := fetch()
+
+	fctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	var body json.RawMessage
+	var err error
+	func() {
+		defer cancel()
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("stats fetch panic: %v", r)
+			}
+		}()
+		body, err = fetch(fctx)
+	}()
+
 	c.mu.Lock()
-	e.at, e.body, e.err = time.Now(), body, err
+	if err != nil {
+		delete(c.m, key)
+	} else {
+		e.at, e.body, e.err = time.Now(), body, nil
+	}
 	close(e.wait)
 	e.wait = nil
 	c.mu.Unlock()
@@ -291,8 +329,8 @@ func (s *Service) AllocStats(ctx context.Context, clusterID, id string) (json.Ra
 	if err := validUUID(id); err != nil {
 		return nil, err
 	}
-	return s.cached(ctx, clusterID+"|alloc|"+id, s.statsInterval(ctx), func() (json.RawMessage, error) {
-		return s.get(ctx, clusterID, "client/allocation/"+id+"/stats")
+	return s.cached(ctx, clusterID+"|alloc|"+id, s.statsInterval(ctx), func(fctx context.Context) (json.RawMessage, error) {
+		return s.get(fctx, clusterID, "client/allocation/"+id+"/stats")
 	})
 }
 
@@ -494,8 +532,8 @@ func (s *Service) ClientStats(ctx context.Context, clusterID, id string) (json.R
 	if err := validUUID(id); err != nil {
 		return nil, err
 	}
-	return s.cached(ctx, clusterID+"|node|"+id, s.statsInterval(ctx), func() (json.RawMessage, error) {
-		return s.get(ctx, clusterID, "client/stats?node_id="+id)
+	return s.cached(ctx, clusterID+"|node|"+id, s.statsInterval(ctx), func(fctx context.Context) (json.RawMessage, error) {
+		return s.get(fctx, clusterID, "client/stats?node_id="+id)
 	})
 }
 

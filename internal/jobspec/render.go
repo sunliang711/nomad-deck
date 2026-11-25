@@ -61,7 +61,10 @@ func (w *writer) valueTokens(path, kind, v string) (hclwrite.Tokens, bool) {
 		return nil, false
 	}
 	if reVarInterp.MatchString(v) {
-		return exprTokens(quoteMixed(v)), true
+		if tok := exprTokens(quoteMixed(v)); tok != nil {
+			return tok, true
+		}
+		return hclwrite.TokensForValue(cty.StringVal(v)), true
 	}
 	return hclwrite.TokensForValue(cty.StringVal(v)), true
 }
@@ -88,7 +91,15 @@ func quoteMixed(v string) string {
 
 var literalEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`, "${", "$${", "%{", "%%{")
 
-func escapeLiteral(s string) string { return literalEscaper.Replace(s) }
+func escapeLiteral(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r == 0 {
+			return -1
+		}
+		return r
+	}, s)
+	return literalEscaper.Replace(s)
+}
 
 // set writes one attribute; empty values are omitted.
 func (w *writer) set(b *hclwrite.Body, path, name, kind, v string) {
@@ -279,8 +290,15 @@ var reJobIDRe = regexp.MustCompile(`^[^\x00-\x1f"\\]{1,128}$`)
 func reJobIDLabel(s string) bool { return reJobIDRe.MatchString(s) }
 
 func exprTokens(src string) hclwrite.Tokens {
-	f, _ := hclwrite.ParseConfig([]byte("x = "+src+"\n"), "x", hcl.InitialPos)
-	return f.Body().GetAttribute("x").Expr().BuildTokens(nil)
+	f, diags := hclwrite.ParseConfig([]byte("x = "+src+"\n"), "x", hcl.InitialPos)
+	if diags.HasErrors() {
+		return nil
+	}
+	attr := f.Body().GetAttribute("x")
+	if attr == nil {
+		return nil
+	}
+	return attr.Expr().BuildTokens(nil)
 }
 
 func (w *writer) renderGroup(gb *hclwrite.Body, gp string, g *Group) {

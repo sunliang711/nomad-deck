@@ -33,9 +33,13 @@ type Service struct {
 	Log     *slog.Logger
 	// Idle waits until no scheduled job runs (the cron scheduler).
 	Idle func(ctx context.Context) error
+	// ExtraBusy reports whether another non-ops process (such as master-key rotation) is active.
+	ExtraBusy func() bool
 	// AfterImport runs after a committed import: revoke sessions, drop
 	// cached clients and connections.
 	AfterImport []func()
+	// AfterActivate runs after Activate commits.
+	AfterActivate []func()
 
 	mu       sync.Mutex
 	previews map[string]*preview

@@ -165,6 +165,11 @@ func (s *Service) prepare(ctx context.Context, actor audit.Actor) (*db.KeyRotati
 	if s.Keys.Next() == nil {
 		return nil, nil, &auth.Error{Status: 409, Code: "no_next_key", Message: "尚未加载待轮换的新主密钥（master_key_next）"}
 	}
+	if s.Ops != nil {
+		if reason := s.Ops.Barrier(); reason != "" {
+			return nil, nil, &auth.Error{Status: 409, Code: "maintenance_active", Message: "控制面处于全局维护状态（" + reason + "），暂不可发起主密钥轮换"}
+		}
+	}
 	if !s.running.CompareAndSwap(false, true) {
 		return nil, nil, &auth.Error{Status: 409, Code: "rotation_running", Message: "主密钥轮换正在进行中"}
 	}
@@ -356,9 +361,14 @@ func (s *Service) verifyPreUpgradeDB(ctx context.Context, path, newKeyID string)
 	defer d.Close()
 	isNew := func(id string) bool { return id == newKeyID }
 	for _, f := range db.EncryptedFields {
-		table := tableFromFieldName(f.Name)
+		table, col := tableAndColFromFieldName(f.Name)
 		if ok, err := tableExists(ctx, d, table); err != nil || !ok {
 			continue
+		}
+		if col != "" {
+			if ok, err := columnExists(ctx, d, table, col); err != nil || !ok {
+				continue
+			}
 		}
 		rows, err := d.QueryContext(ctx, f.Query)
 		if err != nil {
@@ -384,13 +394,19 @@ func (s *Service) verifyPreUpgradeDB(ctx context.Context, path, newKeyID string)
 	return nil
 }
 
-func tableFromFieldName(name string) string {
+func tableAndColFromFieldName(name string) (string, string) {
 	for i := 0; i < len(name); i++ {
 		if name[i] == '.' {
-			return name[:i]
+			rest := name[i+1:]
+			for j := 0; j < len(rest); j++ {
+				if rest[j] == '.' {
+					return name[:i], rest[:j]
+				}
+			}
+			return name[:i], rest
 		}
 	}
-	return name
+	return name, ""
 }
 
 func tableExists(ctx context.Context, q db.Querier, table string) (bool, error) {
@@ -399,9 +415,33 @@ func tableExists(ctx context.Context, q db.Querier, table string) (bool, error) 
 	return n > 0, err
 }
 
+func columnExists(ctx context.Context, q db.Querier, table, column string) (bool, error) {
+	rows, err := q.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 func (s *Service) rotateDB(ctx context.Context, sqlDB *sql.DB, newKeyID string, prog *Progress, onStep func()) error {
 	for _, sc := range db.SecretColumns {
 		if ok, err := tableExists(ctx, sqlDB, sc.Table); err != nil || !ok {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if ok, err := columnExists(ctx, sqlDB, sc.Table, sc.Column); err != nil || !ok {
 			if err != nil {
 				return err
 			}
@@ -488,16 +528,32 @@ func (s *Service) rotateSecretColumn(ctx context.Context, sqlDB *sql.DB, sc db.S
 	}
 
 	for _, c := range cands {
-		updated, changed, err := s.reencryptValue(sc, c.row, c.val, newKeyID)
-		if err != nil {
-			return fmt.Errorf("%s: %w", sc.Field, err)
-		}
-		if !changed {
-			continue
-		}
 		tx, err := sqlDB.BeginTx(ctx, nil)
 		if err != nil {
 			return err
+		}
+		freshVal, exists, err := readSecretRow(ctx, tx, sc, c.row)
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if !exists || freshVal == "" {
+			_ = tx.Rollback()
+			continue
+		}
+		c.row[sc.Column] = freshVal
+		if sc.Applies != nil && !sc.Applies(c.row) {
+			_ = tx.Rollback()
+			continue
+		}
+		updated, changed, err := s.reencryptValue(sc, c.row, freshVal, newKeyID)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("%s: %w", sc.Field, err)
+		}
+		if !changed {
+			_ = tx.Rollback()
+			continue
 		}
 		if err := updateSecretRow(ctx, tx, sc, c.row, updated); err != nil {
 			_ = tx.Rollback()
@@ -516,6 +572,34 @@ func (s *Service) rotateSecretColumn(ctx context.Context, sqlDB *sql.DB, sc db.S
 		}
 	}
 	return nil
+}
+
+func readSecretRow(ctx context.Context, tx *sql.Tx, sc db.SecretColumn, row map[string]any) (string, bool, error) {
+	var q string
+	var args []any
+	switch sc.Table {
+	case "system_settings":
+		q = `SELECT value FROM system_settings WHERE key = ?`
+		args = []any{db.RowString(row, "key")}
+	case "vault_secrets_custody":
+		q = fmt.Sprintf(`SELECT %s FROM vault_secrets_custody WHERE cluster_id = ?`, sc.Column)
+		args = []any{db.RowString(row, "cluster_id")}
+	case "vault_unseal_key_generations":
+		gen, _ := strconv.Atoi(db.RowString(row, "generation"))
+		q = `SELECT unseal_keys_encrypted FROM vault_unseal_key_generations WHERE cluster_id = ? AND generation = ?`
+		args = []any{db.RowString(row, "cluster_id"), gen}
+	default:
+		q = fmt.Sprintf(`SELECT %s FROM %s WHERE id = ?`, sc.Column, sc.Table)
+		args = []any{db.RowString(row, "id")}
+	}
+	var val string
+	if err := tx.QueryRowContext(ctx, q, args...).Scan(&val); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return val, true, nil
 }
 
 func rowIDLabel(table string, row map[string]any) string {

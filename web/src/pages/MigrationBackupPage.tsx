@@ -127,9 +127,30 @@ export function MigrationBackupPage() {
   };
 
   const buildTargetPayload = (t: any) => {
-    const out: any = { ...t };
-    if (t.type === 's3' && (!t.secret_access_key || t.secret_access_key === '')) {
-      delete out.secret_access_key;
+    const out: any = {
+      id: t.id,
+      name: t.name,
+      type: t.type,
+      enabled: Boolean(t.enabled),
+      retention_count: Number(t.retention_count || 0),
+      snapshot_retention_count: Number(t.snapshot_retention_count || 0),
+      path: t.path,
+      host: t.host,
+      port: Number(t.port || 22),
+      username: t.username,
+      ssh_key_id: t.ssh_key_id,
+      host_key_fingerprint: t.host_key_fingerprint,
+      remote_dir: t.remote_dir,
+      endpoint: t.endpoint,
+      region: t.region,
+      bucket: t.bucket,
+      prefix: t.prefix,
+      access_key_id: t.access_key_id,
+      use_ssl: Boolean(t.use_ssl),
+      path_style: Boolean(t.path_style),
+    };
+    if (t.type === 's3' && t.secret_access_key) {
+      out.secret_access_key = t.secret_access_key;
     }
     return out;
   };

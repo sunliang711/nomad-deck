@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -55,6 +56,57 @@ type API struct {
 	TrustedProxies []netip.Prefix
 	HTTPS          bool // cookies and HSTS assume the browser uses HTTPS
 	Ready          *atomic.Bool
+
+	logStreamMu       sync.Mutex
+	logStreamsGlobal  int
+	logStreamsSession map[string]int
+	logStreamsNode    map[string]int
+}
+
+func (a *API) acquireLogStream(sessionID, nodeID string) (func(), bool) {
+	const (
+		maxGlobalLogStreams  = 32
+		maxSessionLogStreams = 4
+		maxNodeLogStreams    = 4
+	)
+	a.logStreamMu.Lock()
+	defer a.logStreamMu.Unlock()
+	if a.logStreamsGlobal >= maxGlobalLogStreams {
+		return nil, false
+	}
+	if a.logStreamsSession == nil {
+		a.logStreamsSession = map[string]int{}
+	}
+	if a.logStreamsNode == nil {
+		a.logStreamsNode = map[string]int{}
+	}
+	if a.logStreamsSession[sessionID] >= maxSessionLogStreams {
+		return nil, false
+	}
+	if a.logStreamsNode[nodeID] >= maxNodeLogStreams {
+		return nil, false
+	}
+	a.logStreamsGlobal++
+	a.logStreamsSession[sessionID]++
+	a.logStreamsNode[nodeID]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			a.logStreamMu.Lock()
+			defer a.logStreamMu.Unlock()
+			a.logStreamsGlobal--
+			if a.logStreamsSession[sessionID] <= 1 {
+				delete(a.logStreamsSession, sessionID)
+			} else {
+				a.logStreamsSession[sessionID]--
+			}
+			if a.logStreamsNode[nodeID] <= 1 {
+				delete(a.logStreamsNode, nodeID)
+			} else {
+				a.logStreamsNode[nodeID]--
+			}
+		})
+	}, true
 }
 
 // Handler builds the HTTP handler tree.

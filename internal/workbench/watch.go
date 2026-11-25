@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -258,6 +259,9 @@ func (h *Hub) run(ctx context.Context, q *query) {
 			continue
 		}
 		backoff = time.Second
+		if next == 0 {
+			next = 1
+		}
 		if next < index {
 			index = 0 // index went backwards (restore or new leader): resync
 			continue
@@ -292,12 +296,20 @@ func blocking(ctx context.Context, c *nomad.Client, path string, index uint64, w
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	var body json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
 		return nil, 0, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, 0, fmt.Errorf("nomad: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		msg := strings.TrimSpace(string(raw))
+		if len(msg) > 512 {
+			msg = msg[:512]
+		}
+		return nil, 0, fmt.Errorf("nomad: HTTP %d: %s", resp.StatusCode, msg)
+	}
+	var body json.RawMessage
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, 0, err
 	}
 	idx, _ := strconv.ParseUint(resp.Header.Get("X-Nomad-Index"), 10, 64)
 	return body, idx, nil

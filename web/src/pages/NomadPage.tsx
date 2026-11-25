@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, RefreshCw, Terminal } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -12,6 +13,8 @@ import { CodeEditor } from '../components/CodeEditor';
 export function NomadPage() {
   const { isAdmin } = useAuth();
   const { openTask, openNodeLogs } = useOpsDrawer();
+  const [searchParams] = useSearchParams();
+  const queryId = searchParams.get('id') || '';
   const [clusters, setClusters] = useState<any[]>([]);
   const [nodes, setNodes] = useState<any[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -35,14 +38,27 @@ export function NomadPage() {
   const [snapPass, setSnapPass] = useState('');
   const [snapFile, setSnapFile] = useState<File | null>(null);
   const [pwAction, setPwAction] = useState<{ title: string; run: (pw: string) => Promise<void> } | null>(null);
+  const [dlModal, setDlModal] = useState<{ title: string; run: (pw: string, passphrase: string) => Promise<void> } | null>(null);
+  const [dlPw, setDlPw] = useState('');
+  const [dlPass, setDlPass] = useState('');
+  const [dlBusy, setDlBusy] = useState(false);
+  const [dlErr, setDlErr] = useState('');
 
   const loadList = useCallback(async () => {
-    const [cRes, nRes] = await Promise.all([apiGet('/api/v1/clusters?type=nomad'), apiGet('/api/v1/nodes')]);
-    const list = cRes.clusters || [];
-    setClusters(list);
-    setNodes(nRes.nodes || []);
-    if (!selectedId && list.length > 0) setSelectedId(list[0].id);
-  }, [selectedId]);
+    try {
+      const [cRes, nRes] = await Promise.all([apiGet('/api/v1/clusters?type=nomad'), apiGet('/api/v1/nodes')]);
+      const list = cRes.clusters || [];
+      setClusters(list);
+      setNodes(nRes.nodes || []);
+      setSelectedId((prev) => {
+        if (prev && list.some((c: any) => c.id === prev)) return prev;
+        if (queryId && list.some((c: any) => c.id === queryId)) return queryId;
+        return list[0]?.id || '';
+      });
+    } catch (ex: any) {
+      setErr(ex?.message || '加载 Nomad 集群列表失败');
+    }
+  }, [queryId]);
 
   const loadOpsTab = useCallback(async () => {
     if (!selectedId) return;
@@ -140,7 +156,7 @@ export function NomadPage() {
             onChange={setTab}
           />
 
-          {tab === 'workbench' && <NomadWorkbench clusterId={selectedId} />}
+          {tab === 'workbench' && <NomadWorkbench key={selectedId} clusterId={selectedId} />}
 
           {tab === 'nodes' && (
             <div className="space-y-4">
@@ -149,20 +165,46 @@ export function NomadPage() {
                   <div className="flex flex-wrap items-center gap-3 text-xs">
                     <div className="flex items-center gap-1.5">
                       <Input placeholder="版本" value={deployVer} onChange={(e) => setDeployVer(e.target.value)} />
-                      <Button variant="primary" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer, use_proxy: useProxy }).then((r) => openTask(r.task.id))}>一键部署</Button>
+                      <Button variant="primary" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer, use_proxy: useProxy }).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>一键部署</Button>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <Input placeholder="升级版本" value={upVer} onChange={(e) => setUpVer(e.target.value)} />
-                      <Button onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer, use_proxy: useProxy, confirm: true }).then((r) => openTask(r.task.id))}>滚动升级</Button>
+                      <Button onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer, use_proxy: useProxy, confirm: true }).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>滚动升级</Button>
                     </div>
                     <label className="flex items-center gap-1.5">
                       <input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} /> 使用系统代理
                     </label>
-                    <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {}).then((r) => openTask(r.task.id))}>续期证书</Button>
-                    <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, {}).then((r) => openTask(r.task.id))}>轮换 CA</Button>
-                    <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/gossip/rotate`, {}).then((r) => openTask(r.task.id))}>轮换 Gossip</Button>
-                    <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/doctor`).then((r) => setNotice(r.report?.summary || 'Doctor 完成'))}>Doctor 体检</Button>
-                    <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/reconcile`).then((r) => setNotice(r.report?.message || '已核对'))}>核对解锁</Button>
+                    <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>续期证书</Button>
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        setPwAction({
+                          title: '确认轮换 Nomad 集群 CA',
+                          run: async (pw) => {
+                            const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
+                            if (r.task?.id) openTask(r.task.id, '轮换 Nomad CA');
+                          },
+                        })
+                      }
+                    >
+                      轮换 CA
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        setPwAction({
+                          title: '确认轮换 Nomad Gossip 密钥',
+                          run: async (pw) => {
+                            const r = await apiPost(`/api/v1/clusters/${selectedId}/gossip/rotate`, { current_password: pw });
+                            if (r.task?.id) openTask(r.task.id, '轮换 Gossip 密钥');
+                          },
+                        })
+                      }
+                    >
+                      轮换 Gossip
+                    </Button>
+                    <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/doctor`, {}).then((r) => setNotice(r.report?.summary || 'Doctor 完成')).catch((ex) => setErr(ex.message))}>Doctor 体检</Button>
+                    <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {}).then((r) => setNotice(r.report?.message || '已核对')).catch((ex) => setErr(ex.message))}>核对解锁</Button>
                   </div>
                 </Card>
               )}
@@ -182,20 +224,20 @@ export function NomadPage() {
                       {clusterNodes.map((n: any) => (
                         <tr key={n.node_id}>
                           <td className="py-2 pr-3">
-                            <div className="font-medium">{n.node_name}</div>
+                            <div className="font-medium">{n.name}</div>
                             <Badge>{n.role}</Badge>
                           </td>
-                          <td className="py-2 pr-3 font-mono">{n.advertise_addr} · {n.installed_version || '-'}</td>
+                          <td className="py-2 pr-3 font-mono">{n.api_addr} · {n.installed_version || '-'}</td>
                           <td className="py-2 pr-3">{n.service_status} · {n.raft_role}</td>
                           <td className="py-2 text-right">
                             <div className="flex flex-wrap justify-end gap-1">
-                              <Button size="sm" onClick={() => openNodeLogs(selectedId, n.node_id, `Nomad 日志: ${n.node_name}`)}>
+                              <Button size="sm" onClick={() => openNodeLogs(selectedId, n.node_id, `Nomad 日志: ${n.name}`)}>
                                 <Terminal className="h-3 w-3" /> 日志
                               </Button>
                               {isAdmin && (
                                 <>
-                                  <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {}).then((r) => openTask(r.task.id))}>重启</Button>
-                                  <Button size="sm" variant="danger" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {}).then((r) => openTask(r.task.id))}>缩容</Button>
+                                  <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>重启</Button>
+                                  <Button size="sm" variant="danger" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>缩容</Button>
                                 </>
                               )}
                             </div>
@@ -212,7 +254,7 @@ export function NomadPage() {
           {tab === 'snapshots' && (
             <Card
               title="Nomad Raft 快照"
-              actions={isAdmin && <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/snapshots`).then((r) => openTask(r.task.id))}>创建快照</Button>}
+              actions={isAdmin && <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/snapshots`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>创建快照</Button>}
             >
               {isAdmin && (
                 <form
@@ -241,17 +283,20 @@ export function NomadPage() {
                       <div className="flex gap-1">
                         <Button
                           size="sm"
-                          onClick={() =>
-                            setPwAction({
+                          onClick={() => {
+                            setDlPw('');
+                            setDlPass('');
+                            setDlErr('');
+                            setDlModal({
                               title: `下载快照 ${sn.id}`,
-                              run: async (pw) => {
+                              run: async (pw, passphrase) => {
                                 await apiDownload(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}/download`, {
                                   current_password: pw,
-                                  passphrase: pw.length >= 12 ? pw : pw + '-backup-archive',
+                                  passphrase,
                                 }, `${cluster.name}-${sn.id}.ndsnap`);
                               },
-                            })
-                          }
+                            });
+                          }}
                         >
                           下载
                         </Button>
@@ -270,7 +315,7 @@ export function NomadPage() {
                         >
                           恢复
                         </Button>
-                        <Button size="sm" onClick={() => void apiDelete(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}`).then(() => loadOpsTab())}>删除</Button>
+                        <Button size="sm" onClick={() => void apiDelete(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}`).then(() => loadOpsTab()).catch((ex) => setErr(ex.message))}>删除</Button>
                       </div>
                     )}
                   </div>
@@ -285,11 +330,11 @@ export function NomadPage() {
                 <div className="space-y-3 text-xs">
                   <div className="font-semibold">Namespaces ({namespaces.length})</div>
                   <div className="flex flex-wrap gap-1.5">
-                    {namespaces.map((ns) => <Badge key={ns.Name}>{ns.Name}</Badge>)}
+                    {namespaces.map((ns) => <Badge key={ns.name}>{ns.name}</Badge>)}
                   </div>
                   <div className="font-semibold pt-2">Node Pools ({pools.length})</div>
                   <div className="flex flex-wrap gap-1.5">
-                    {pools.map((p) => <Badge key={p.Name}>{p.Name}</Badge>)}
+                    {pools.map((p) => <Badge key={p.name}>{p.name}</Badge>)}
                   </div>
                 </div>
               </Card>
@@ -298,8 +343,8 @@ export function NomadPage() {
                 <div className="space-y-3 text-xs">
                   <div className="flex flex-wrap gap-1.5">
                     {policies.map((p) => (
-                      <Button key={p.Name} size="sm" onClick={() => void apiGet(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(p.Name)}`).then((r) => setPolicyEdit({ name: p.Name, rules: r.policy?.Rules || '' }))}>
-                        {p.Name}
+                      <Button key={p.name} size="sm" onClick={() => void apiGet(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(p.name)}`).then((r) => setPolicyEdit({ name: p.name, rules: r.policy?.rules || '' })).catch((ex) => setErr(ex.message))}>
+                        {p.name}
                       </Button>
                     ))}
                   </div>
@@ -307,17 +352,17 @@ export function NomadPage() {
                   <CodeEditor value={policyEdit.rules} onChange={(v) => setPolicyEdit({ ...policyEdit, rules: v })} readOnly={!isAdmin} height="160px" />
                   {isAdmin && (
                     <div className="flex gap-2">
-                      <Button variant="primary" onClick={() => policyEdit.name && void apiPost(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`, { rules: policyEdit.rules }).catch(() => void apiPut(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`, { rules: policyEdit.rules })).then(() => loadGovernance())}>保存 Policy</Button>
-                      <Button onClick={() => void apiPost(`/api/v1/nomad/${selectedId}/acl/tokens`, { name: 'ops-token', type: 'client', policies: policyEdit.name ? [policyEdit.name] : [] }).then((r) => { setNewToken(r.token?.SecretID || ''); return loadGovernance(); })}>签发 Client Token</Button>
+                      <Button variant="primary" onClick={() => policyEdit.name && void apiPut(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`, { rules: policyEdit.rules }).then(() => { setNotice('Policy 已保存'); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>保存 Policy</Button>
+                      <Button onClick={() => void apiPost(`/api/v1/nomad/${selectedId}/acl/tokens`, { name: 'ops-token', policies: policyEdit.name ? [policyEdit.name] : [] }).then((r) => { setNewToken(r.token?.secret_id || ''); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>签发 Client Token</Button>
                     </div>
                   )}
                   <div className="border-t border-slate-200 pt-2 dark:border-slate-800">
                     <div className="mb-1 font-semibold">ACL Tokens ({tokens.length})</div>
                     {tokens.slice(0, 10).map((tk) => (
-                      <div key={tk.AccessorID} className="flex items-center justify-between py-1">
-                        <span className="font-mono">{tk.Name} ({tk.AccessorID.slice(0, 8)})</span>
+                      <div key={tk.accessor_id} className="flex items-center justify-between py-1">
+                        <span className="font-mono">{tk.name} ({(tk.accessor_id || '').slice(0, 8)})</span>
                         {isAdmin && (
-                          <Button size="sm" variant="danger" onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/acl/tokens/${tk.AccessorID}`).then(() => loadGovernance())}>吊销</Button>
+                          <Button size="sm" variant="danger" onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/acl/tokens/${tk.accessor_id}`).then(() => loadGovernance()).catch((ex) => setErr(ex.message))}>吊销</Button>
                         )}
                       </div>
                     ))}
@@ -395,6 +440,34 @@ export function NomadPage() {
           if (pwAction) await pwAction.run(pw);
         }}
       />
+
+      <Modal open={Boolean(dlModal)} title={dlModal?.title || ''} onClose={() => setDlModal(null)}>
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!dlModal) return;
+            setDlBusy(true);
+            setDlErr('');
+            try {
+              await dlModal.run(dlPw, dlPass);
+              setDlModal(null);
+            } catch (ex: any) {
+              setDlErr(ex?.message || '操作失败');
+            } finally {
+              setDlBusy(false);
+            }
+          }}
+          className="space-y-3 text-xs"
+        >
+          <ErrorAlert message={dlErr} />
+          <Input label="当前管理员登录密码" type="password" required value={dlPw} onChange={(e) => setDlPw(e.target.value)} />
+          <Input label="归档加密口令（至少 12 位）" type="password" required minLength={12} value={dlPass} onChange={(e) => setDlPass(e.target.value)} />
+          <div className="flex justify-end gap-2">
+            <Button type="button" onClick={() => setDlModal(null)}>取消</Button>
+            <Button type="submit" variant="primary" disabled={dlBusy}>{dlBusy ? '导出中...' : '确认导出'}</Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

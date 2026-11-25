@@ -48,21 +48,59 @@ type Engine struct {
 	Log     *slog.Logger
 	DataDir string
 
-	wg      sync.WaitGroup
-	mu      sync.Mutex
-	cancel  map[string]context.CancelFunc
-	barrier string
+	wg         sync.WaitGroup
+	mu         sync.Mutex
+	cancel     map[string]context.CancelFunc
+	submitting int
+	barrier    string
+	barrierSeq uint64
+	barrierTok uint64
 }
 
 // ErrBarrier is returned while the control plane is under a global
 // maintenance barrier (for example during a migration import).
 var ErrBarrier = errors.New("控制面处于全局维护状态，暂不接受新的运维任务")
 
+// TryAcquireBarrier atomically raises the global maintenance barrier if no
+// barrier is currently active, returning a release function scoped to this
+// acquisition.
+func (e *Engine) TryAcquireBarrier(reason string) (func(), bool) {
+	if reason == "" {
+		return nil, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.barrier != "" {
+		return nil, false
+	}
+	e.barrierSeq++
+	tok := e.barrierSeq
+	e.barrier = reason
+	e.barrierTok = tok
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			e.mu.Lock()
+			if e.barrierTok == tok {
+				e.barrier = ""
+				e.barrierTok = 0
+			}
+			e.mu.Unlock()
+		})
+	}, true
+}
+
 // SetBarrier raises (non-empty reason) or lowers the global maintenance
 // barrier. While raised, new tasks are refused.
 func (e *Engine) SetBarrier(reason string) {
 	e.mu.Lock()
+	e.barrierSeq++
 	e.barrier = reason
+	if reason == "" {
+		e.barrierTok = 0
+	} else {
+		e.barrierTok = e.barrierSeq
+	}
 	e.mu.Unlock()
 }
 
@@ -77,7 +115,7 @@ func (e *Engine) Barrier() string {
 func (e *Engine) Active() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return len(e.cancel)
+	return len(e.cancel) + e.submitting
 }
 
 // NewEngine creates an engine storing step logs under dataDir/ops.
@@ -126,9 +164,21 @@ func (e *Engine) Submit(ctx context.Context, s Spec) (*db.OperationTask, error) 
 	if s.Run == nil || s.Action == "" {
 		return nil, errors.New("task spec requires Action and Run")
 	}
-	if e.Barrier() != "" {
+	e.mu.Lock()
+	if e.barrier != "" {
+		e.mu.Unlock()
 		return nil, ErrBarrier
 	}
+	e.submitting++
+	e.mu.Unlock()
+	submitted := false
+	defer func() {
+		if !submitted {
+			e.mu.Lock()
+			e.submitting--
+			e.mu.Unlock()
+		}
+	}()
 	mode := "none"
 	for _, l := range normalize(s.Locks) {
 		if l.Mode == Exclusive {
@@ -155,7 +205,9 @@ func (e *Engine) Submit(ctx context.Context, s Spec) (*db.OperationTask, error) 
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	e.mu.Lock()
+	e.submitting--
 	e.cancel[id] = cancel
+	submitted = true
 	e.mu.Unlock()
 	e.wg.Add(1)
 	go e.execute(runCtx, cancel, t, s, timeout)
@@ -331,6 +383,10 @@ type stepSink struct{ s *Step }
 func (w *stepSink) Write(p []byte) (int, error) {
 	s := w.s
 	s.mu.Lock()
+	if s.done {
+		s.mu.Unlock()
+		return 0, io.ErrClosedPipe
+	}
 	off := s.offset
 	n, err := s.file.Write(p)
 	s.offset += int64(n)
@@ -356,15 +412,15 @@ func (s *Step) SetRemoteUnit(unit string) {
 
 // Finish completes the step (idempotent).
 func (s *Step) Finish(err error, exitCode *int) {
+	_ = s.redactor.Flush()
 	s.mu.Lock()
 	if s.done {
 		s.mu.Unlock()
 		return
 	}
 	s.done = true
-	s.mu.Unlock()
-	_ = s.redactor.Flush()
 	_ = s.file.Close()
+	s.mu.Unlock()
 	status, msg := "success", ""
 	if err != nil {
 		status, msg = "failed", audit.RedactString(err.Error())

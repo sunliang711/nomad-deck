@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -160,13 +161,21 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 	wb.Init()
 	drivers := map[string]cluster.Driver{"nomad": nomadSvc.Driver(), "vault": vaultSvc.Driver()}
 	sched := &cron.Scheduler{DB: d, Audit: rec, Ops: engine, Log: log}
-	mig := &migration.Service{DB: d, Keys: keys, Audit: rec, Ops: engine, DataDir: cfg.DataDir, Log: log, Idle: sched.Idle,
-		AfterImport: []func(){authSvc.Revocations.RevokeAll, pool.Close}}
-	backupSvc := &backup.Service{DB: d, Keys: keys, Audit: rec, Migration: mig, Drivers: drivers, DataDir: cfg.DataDir, Log: log}
 	rotSvc := &rotation.Service{DB: d, Keys: keys, Audit: rec, Ops: engine, DataDir: cfg.DataDir, Log: log}
+	resched := func() { sched.Reschedule(context.Background()) }
+	mig := &migration.Service{DB: d, Keys: keys, Audit: rec, Ops: engine, DataDir: cfg.DataDir, Log: log,
+		Idle: sched.Idle, ExtraBusy: rotSvc.IsRunning,
+		AfterImport:   []func(){authSvc.Revocations.RevokeAll, pool.Close, resched},
+		AfterActivate: []func(){resched}}
+	mig.CleanupTempImports()
+	backupSvc := &backup.Service{DB: d, Keys: keys, Audit: rec, Migration: mig, Drivers: drivers, DataDir: cfg.DataDir, Log: log}
+	if err := db.FailRunningBackupRuns(ctx, d.Writer, "控制面重启导致备份任务中断", d.Now()); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("recover backup runs: %w", err)
+	}
 	selfUpdateSvc := &selfupdate.Service{
 		DB: d, Audit: rec, Ops: engine, Proxy: proxy, DataDir: cfg.DataDir, Log: log,
-		CronIdle: sched.Idle, CronResume: sched.Reschedule,
+		CronIdle: sched.Idle, CronResume: sched.Reschedule, ExtraBusy: rotSvc.IsRunning,
 	}
 	selfUpdateSvc.PrepareBarrierOnOpen(ctx)
 	sched.Install(&cron.Platform{Hosts: hostSvc, Drivers: drivers, Vault: vaultSvc, Integrations: integrations, Jobs: jobSvc,
@@ -204,14 +213,13 @@ func (a *App) Close() error {
 // Run serves HTTP(S) until ctx is cancelled.
 func (a *App) Run(ctx context.Context) error {
 	cfg := a.Config
-	releaseLock, err := selfupdate.AcquireProcessLock(cfg.DataDir)
-	if err != nil {
-		return err
-	}
-	defer releaseLock()
 
 	runCtx, cancelRun := context.WithCancel(ctx)
-	defer cancelRun()
+	var bgWG sync.WaitGroup
+	defer func() {
+		cancelRun()
+		bgWG.Wait()
+	}()
 	if a.SelfUpdate != nil {
 		a.SelfUpdate.OnRestart = func(code int) {
 			a.exitCode.Store(int32(code))
@@ -230,6 +238,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	srv := &http.Server{
 		Handler:           a.API.Handler(),
+		BaseContext:       func(net.Listener) context.Context { return runCtx },
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		ErrorLog:          slog.NewLogLogger(a.Log.Handler(), slog.LevelWarn),
@@ -254,7 +263,11 @@ func (a *App) Run(ctx context.Context) error {
 		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
 	}
 
-	go a.sessionJanitor(runCtx)
+	bgWG.Add(1)
+	go func() {
+		defer bgWG.Done()
+		a.sessionJanitor(runCtx)
+	}()
 	if err := a.Cron.Start(runCtx); err != nil {
 		ln.Close()
 		return fmt.Errorf("start scheduler: %w", err)
@@ -276,7 +289,11 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	if a.SelfUpdate != nil {
 		a.SelfUpdate.ConfirmOnStartup(runCtx)
-		go a.SelfUpdate.RunScheduler(runCtx)
+		bgWG.Add(1)
+		go func() {
+			defer bgWG.Done()
+			a.SelfUpdate.RunScheduler(runCtx)
+		}()
 	}
 
 	select {
@@ -289,6 +306,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	a.ready.Store(false)
 	_ = sdNotify("STOPPING=1")
+	a.Auth.Revocations.RevokeAll()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	err = srv.Shutdown(shutdownCtx)

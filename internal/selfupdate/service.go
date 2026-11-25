@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -71,6 +72,7 @@ type Service struct {
 	GOARCH             string
 	CronIdle           func(ctx context.Context) error
 	CronResume         func(ctx context.Context)
+	ExtraBusy          func() bool
 	BarrierWaitTimeout time.Duration
 	OnRestart          func(exitCode int)
 	ContainerCheck     func() bool
@@ -126,9 +128,7 @@ func (s *Service) defaults() {
 		s.GOARCH = runtime.GOARCH
 	}
 	if s.BinDir == "" {
-		if exe, err := os.Executable(); err == nil {
-			s.BinDir = filepath.Dir(exe)
-		}
+		s.BinDir = ResolveBinDir()
 	}
 	if s.BarrierWaitTimeout == 0 {
 		s.BarrierWaitTimeout = 10 * time.Minute
@@ -139,6 +139,41 @@ func (s *Service) defaults() {
 	if s.VerifyBinary == nil {
 		s.VerifyBinary = defaultVerifyBinary
 	}
+}
+
+// ResolveBinDir determines the control plane bin directory containing the
+// nomad-deck / nomad-deck.prev symlinks without dereferencing Linux /proc/self/exe
+// symlinks into versions/.
+func ResolveBinDir() string {
+	if len(os.Args) > 0 && os.Args[0] != "" && filepath.Base(os.Args[0]) != os.Args[0] {
+		if abs, err := filepath.Abs(os.Args[0]); err == nil {
+			dir := filepath.Dir(abs)
+			if isControlBinDir(dir) {
+				return dir
+			}
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		if filepath.Base(dir) == "versions" {
+			parent := filepath.Dir(dir)
+			if isControlBinDir(parent) {
+				return parent
+			}
+		}
+		return dir
+	}
+	return ""
+}
+
+func isControlBinDir(dir string) bool {
+	if _, err := os.Lstat(filepath.Join(dir, "nomad-deck")); err == nil {
+		return true
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "nomad-deck.prev")); err == nil {
+		return true
+	}
+	return false
 }
 
 func detectContainer() bool {
@@ -372,6 +407,17 @@ func (s *Service) startUpgradeWithProxy(ctx context.Context, actor audit.Actor, 
 	if err != nil {
 		return nil, &auth.Error{Status: 400, Code: "invalid_argument", Message: err.Error()}
 	}
+	return s.startUpgradeWithRelease(ctx, actor, rel, useProxy, scheduleID)
+}
+
+func (s *Service) startUpgradeWithRelease(ctx context.Context, actor audit.Actor, rel *ReleaseInfo, useProxy bool, scheduleID string) (*db.OperationTask, error) {
+	client, _, err := s.Proxy.Client(ctx, useProxy, 5*time.Minute)
+	if errors.Is(err, netx.ErrProxyNotConfigured) {
+		return nil, &auth.Error{Status: 400, Code: "proxy_not_configured", Message: "尚未配置系统代理"}
+	}
+	if err != nil {
+		return nil, err
+	}
 	if !rel.AssetsComplete {
 		return nil, &auth.Error{Status: 400, Code: "incomplete_release", Message: "目标版本缺少当前平台程序包或签名摘要文件"}
 	}
@@ -408,11 +454,14 @@ func (s *Service) startUpgradeWithProxy(ctx context.Context, actor audit.Actor, 
 	return task, nil
 }
 
-func (s *Service) runUpgradeTask(ctx context.Context, actor audit.Actor, t *ops.Task, rel *ReleaseInfo, client *http.Client, useProxy bool) error {
+func (s *Service) runUpgradeTask(ctx context.Context, actor audit.Actor, t *ops.Task, rel *ReleaseInfo, client *http.Client, useProxy bool) (retErr error) {
 	keepUpdating := false
 	defer func() {
 		if !keepUpdating {
 			s.updating.Store(false)
+			if retErr != nil && !errors.Is(retErr, ops.ErrHandover) {
+				s.markScheduleDone(context.Background(), t.ID, SchedFailed, retErr.Error())
+			}
 		}
 	}()
 
@@ -421,11 +470,16 @@ func (s *Service) runUpgradeTask(ctx context.Context, actor audit.Actor, t *ops.
 	if err != nil {
 		return err
 	}
-	s.Ops.SetBarrier("self_update")
+	releaseBarrier, ok := s.Ops.TryAcquireBarrier("self_update")
+	if !ok {
+		err := ops.ErrBarrier
+		st1.Finish(err, nil)
+		return err
+	}
 	lowerBarrier := true
 	defer func() {
 		if lowerBarrier {
-			s.Ops.SetBarrier("")
+			releaseBarrier()
 			if s.CronResume != nil {
 				s.CronResume(context.Background())
 			}
@@ -439,7 +493,7 @@ func (s *Service) runUpgradeTask(ctx context.Context, actor audit.Actor, t *ops.
 	st1.Logf("升级屏障已就绪，无并发运维或定时任务运行")
 	st1.Finish(nil, nil)
 
-	// Step 2: Download, verify Ed25519 signature + SHA-256, extract, dry-run --version.
+	// Step 2: Download, verify Ed25519 signature + SHA-256, extract, dry-run version.
 	st2, err := t.Step("下载并校验新版本", "")
 	if err != nil {
 		return err
@@ -475,7 +529,11 @@ func (s *Service) runUpgradeTask(ctx context.Context, actor audit.Actor, t *ops.
 	if err != nil {
 		return err
 	}
-	prevBin := s.currentTargetBinary()
+	prevBin, err := s.ensurePrevBinary()
+	if err != nil {
+		st4.Finish(err, nil)
+		return err
+	}
 	now := s.DB.Now()
 	res := UpdateResult{
 		State:        StatePrepared,
@@ -530,10 +588,14 @@ func (s *Service) waitForIdle(ctx context.Context, selfTaskID string) error {
 	deadline := time.Now().Add(s.BarrierWaitTimeout)
 	for {
 		active := s.Ops.Active()
-		if active <= 1 {
+		extra := s.ExtraBusy != nil && s.ExtraBusy()
+		if active <= 1 && !extra {
 			break
 		}
 		if time.Now().After(deadline) {
+			if extra {
+				return errors.New("等待主密钥轮换结束超时")
+			}
 			return fmt.Errorf("等待在途运维任务结束超时（仍有 %d 个任务）", active-1)
 		}
 		select {
@@ -550,6 +612,61 @@ func (s *Service) waitForIdle(ctx context.Context, selfTaskID string) error {
 		}
 	}
 	_ = selfTaskID
+	return nil
+}
+
+func (s *Service) ensurePrevBinary() (string, error) {
+	link := filepath.Join(s.BinDir, "nomad-deck")
+	fi, err := os.Lstat(link)
+	if err == nil && fi.Mode()&os.ModeSymlink == 0 && fi.Mode().IsRegular() {
+		dst := filepath.Join(s.BinDir, "versions", "nomad-deck-"+strings.TrimPrefix(s.CurrentVersion, "v"))
+		if _, serr := os.Stat(dst); errors.Is(serr, os.ErrNotExist) {
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return "", fmt.Errorf("创建版本目录失败：%w", err)
+			}
+			if err := copyBinaryFile(link, dst); err != nil {
+				return "", fmt.Errorf("归档当前版本二进制失败：%w", err)
+			}
+		}
+		return filepath.Clean(dst), nil
+	}
+	return s.currentTargetBinary(), nil
+}
+
+func copyBinaryFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".nd-prev-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		_ = tmp.Close()
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := io.Copy(tmp, in); err != nil {
+		return err
+	}
+	if err := tmp.Chmod(0o755); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		return err
+	}
+	cleanup = false
 	return nil
 }
 
@@ -787,11 +904,16 @@ func (s *Service) ManualRollback(ctx context.Context, actor audit.Actor) (*db.Op
 			if err != nil {
 				return err
 			}
-			s.Ops.SetBarrier("self_update")
+			releaseBarrier, ok := s.Ops.TryAcquireBarrier("self_update")
+			if !ok {
+				err := ops.ErrBarrier
+				st1.Finish(err, nil)
+				return err
+			}
 			lowerBarrier := true
 			defer func() {
 				if lowerBarrier {
-					s.Ops.SetBarrier("")
+					releaseBarrier()
 					if s.CronResume != nil {
 						s.CronResume(context.Background())
 					}
@@ -807,10 +929,15 @@ func (s *Service) ManualRollback(ctx context.Context, actor audit.Actor) (*db.Op
 			if err != nil {
 				return err
 			}
-			curBin := s.currentTargetBinary()
+			curBin, err := s.ensurePrevBinary()
+			if err != nil {
+				st2.Finish(err, nil)
+				return err
+			}
 			now := s.DB.Now()
+			prevRes := *res
 			nextRes := UpdateResult{
-				State:          StatePending,
+				State:          StatePrepared,
 				FromVersion:    s.CurrentVersion,
 				ToVersion:      targetVer,
 				TaskID:         t.ID,
@@ -826,6 +953,15 @@ func (s *Service) ManualRollback(ctx context.Context, actor audit.Actor) (*db.Op
 				return err
 			}
 			if err := s.swapSymlinks(curBin, prevBin); err != nil {
+				_ = db.PutSettingJSON(rctx, s.DB.Writer, SettingLastResult, prevRes, db.FormatTime(s.DB.Now()))
+				st2.Finish(err, nil)
+				return err
+			}
+			nextRes.State = StatePending
+			nextRes.UpdatedAt = s.DB.Now()
+			if err := db.PutSettingJSON(rctx, s.DB.Writer, SettingLastResult, nextRes, db.FormatTime(nextRes.UpdatedAt)); err != nil {
+				_ = s.swapSymlink(filepath.Join(s.BinDir, "nomad-deck"), curBin)
+				_ = db.PutSettingJSON(rctx, s.DB.Writer, SettingLastResult, prevRes, db.FormatTime(s.DB.Now()))
 				st2.Finish(err, nil)
 				return err
 			}

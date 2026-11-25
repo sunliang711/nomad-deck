@@ -267,44 +267,77 @@ func (s *Service) stepSchedule(ctx context.Context) time.Duration {
 
 func (s *Service) pollScheduleOnce(ctx context.Context, sc *Schedule) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	fresh, err := s.GetSchedule(ctx)
 	if err != nil || fresh == nil || fresh.ID != sc.ID || fresh.Status != SchedWaiting {
+		s.mu.Unlock()
+		return
+	}
+	schedID := fresh.ID
+	targetVer := fresh.TargetVersion
+	useProxy := fresh.UseProxy
+	createdBy := fresh.CreatedBy
+	intervalSec := fresh.IntervalSeconds
+	s.mu.Unlock()
+
+	var msg string
+	var picked *ReleaseInfo
+	client, _, cerr := s.Proxy.Client(ctx, useProxy, 30*time.Second)
+	if cerr != nil {
+		msg = "代理不可用：" + cerr.Error()
+	} else if rels, rerr := FetchReleases(ctx, client, s.APIBase, s.Repo); rerr != nil {
+		msg = "检查版本失败：" + rerr.Error()
+	} else if rel, rerr := ResolveRelease(rels, targetVer, s.channel(ctx), s.GOOS, s.GOARCH); rerr != nil {
+		msg = rerr.Error()
+	} else if !rel.AssetsComplete {
+		msg = fmt.Sprintf("版本 %s 资产尚未完整，继续等待", rel.Version)
+	} else if cmp, cerr := CompareSemver(rel.Version, s.CurrentVersion); cerr == nil && cmp > 0 {
+		picked = rel
+	} else {
+		msg = fmt.Sprintf("暂未发现高于 %s 的可用版本", s.CurrentVersion)
+	}
+
+	var triggeredTaskID, triggeredVer string
+	var triggerErr error
+	if picked != nil {
+		actor := audit.Actor{ID: "schedule:" + schedID, Name: createdBy}
+		task, terr := s.startUpgradeWithRelease(ctx, actor, picked, useProxy, schedID)
+		if terr != nil {
+			triggerErr = terr
+		} else {
+			triggeredTaskID = task.ID
+			triggeredVer = picked.Version
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, err := s.GetSchedule(ctx)
+	if err != nil || cur == nil || cur.ID != schedID || cur.Status != SchedWaiting {
+		if triggeredTaskID != "" {
+			_ = s.Ops.Cancel(triggeredTaskID)
+		}
 		return
 	}
 	now := s.DB.Now()
-	fresh.LastCheckedAt = &now
-	next := now.Add(time.Duration(fresh.IntervalSeconds) * time.Second)
-	fresh.NextCheckAt = &next
+	cur.LastCheckedAt = &now
+	next := now.Add(time.Duration(intervalSec) * time.Second)
+	cur.NextCheckAt = &next
 
-	client, _, cerr := s.Proxy.Client(ctx, fresh.UseProxy, 30*time.Second)
-	if cerr != nil {
-		fresh.Message = "代理不可用：" + cerr.Error()
-	} else if rels, rerr := FetchReleases(ctx, client, s.APIBase, s.Repo); rerr != nil {
-		fresh.Message = "检查版本失败：" + rerr.Error()
-	} else if rel, rerr := ResolveRelease(rels, fresh.TargetVersion, s.channel(ctx), s.GOOS, s.GOARCH); rerr != nil {
-		fresh.Message = rerr.Error()
-	} else if !rel.AssetsComplete {
-		fresh.Message = fmt.Sprintf("版本 %s 资产尚未完整，继续等待", rel.Version)
-	} else if cmp, cerr := CompareSemver(rel.Version, s.CurrentVersion); cerr == nil && cmp > 0 {
-		actor := audit.Actor{ID: "schedule:" + fresh.ID, Name: fresh.CreatedBy}
-		task, terr := s.startUpgradeWithProxy(ctx, actor, rel.Version, fresh.UseProxy, fresh.ID)
-		if terr != nil {
-			fresh.Message = "触发升级失败：" + terr.Error()
-		} else {
-			fresh.Status = SchedUpgrading
-			fresh.TaskID = task.ID
-			fresh.Message = fmt.Sprintf("已触发升级到 %s", rel.Version)
-			fresh.NextCheckAt = nil
-		}
+	if triggeredTaskID != "" {
+		cur.Status = SchedUpgrading
+		cur.TaskID = triggeredTaskID
+		cur.Message = fmt.Sprintf("已触发升级到 %s", triggeredVer)
+		cur.NextCheckAt = nil
+	} else if triggerErr != nil {
+		cur.Message = "触发升级失败：" + triggerErr.Error()
 	} else {
-		fresh.Message = fmt.Sprintf("暂未发现高于 %s 的可用版本", s.CurrentVersion)
+		cur.Message = msg
 	}
-	if fresh.Status == SchedWaiting && !now.Before(fresh.DeadlineAt) {
-		fresh.Status = SchedTimedOut
-		fresh.Message = "等待超时，目标版本未就绪"
-		fresh.NextCheckAt = nil
-		fresh.FinishedAt = &now
+	if cur.Status == SchedWaiting && !now.Before(cur.DeadlineAt) {
+		cur.Status = SchedTimedOut
+		cur.Message = "等待超时，目标版本未就绪"
+		cur.NextCheckAt = nil
+		cur.FinishedAt = &now
 	}
-	_ = db.PutSettingJSON(ctx, s.DB.Writer, SettingSchedule, fresh, db.FormatTime(s.DB.Now()))
+	_ = db.PutSettingJSON(ctx, s.DB.Writer, SettingSchedule, cur, db.FormatTime(s.DB.Now()))
 }

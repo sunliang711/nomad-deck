@@ -126,7 +126,10 @@ func (s *Service) recoverNode(ctx context.Context, cl *cluster, members []*db.Cl
 	}
 	nc.step.Logf("已使用第 %d 代密钥解封", gen)
 	if len(members) == 1 {
-		c, _ := s.client(cl, nc.m, "")
+		c, err := s.client(cl, nc.m, "")
+		if err != nil {
+			return err
+		}
 		return s.waitActive(ctx, c, 2*time.Minute)
 	}
 	return s.waitHealthyMember(ctx, cl, nc.m, nc.step.Logf)
@@ -218,7 +221,14 @@ func (s *Service) NodeJoin(ctx context.Context, actor audit.Actor, clusterID, no
 		Locks:       []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}, {Key: ops.HostLock(nodeID, "vault"), Mode: ops.Exclusive}},
 		TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID, "use_proxy": hc.useProxy, "version": cl.Settings.Version},
 		Run: func(ctx context.Context, t *ops.Task) error {
-			err := s.runJoin(ctx, t, cl, m.ID, hc)
+			freshCl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			if err := s.requireOperable(freshCl); err != nil {
+				return err
+			}
+			err = s.runJoin(ctx, t, freshCl, m.ID, hc)
 			if err != nil {
 				if mm, e := db.GetClusterNode(ctx, s.DB.Reader, clusterID, nodeID); e == nil {
 					mm.InstallState = "failed"
@@ -228,6 +238,7 @@ func (s *Service) NodeJoin(ctx context.Context, actor audit.Actor, clusterID, no
 			return err
 		}})
 	if err != nil {
+		_ = db.DeleteClusterNode(ctx, s.DB.Writer, m.ID)
 		return nil, err
 	}
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.node_join", ResourceType: "cluster", ResourceID: clusterID,
@@ -309,7 +320,19 @@ func (s *Service) NodeRemove(ctx context.Context, actor audit.Actor, clusterID, 
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.node_remove", TargetType: "cluster", TargetID: clusterID,
 		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID},
 		Run: func(ctx context.Context, t *ops.Task) error {
-			return s.runRemove(ctx, t, cl, members, m)
+			freshCl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			freshMembers, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			freshM, err := memberByNode(freshMembers, nodeID)
+			if err != nil {
+				return err
+			}
+			return s.runRemove(ctx, t, freshCl, freshMembers, freshM)
 		}})
 	if err != nil {
 		return nil, err
@@ -336,6 +359,15 @@ func (s *Service) wipe(ctx context.Context, nc *nodeCtx) error {
 	return err
 }
 
+func memberByNode(members []*db.ClusterNode, nodeID string) (*db.ClusterNode, error) {
+	for _, m := range members {
+		if m.NodeID == nodeID {
+			return m, nil
+		}
+	}
+	return nil, conflict("not_member", "节点不属于该集群")
+}
+
 func (s *Service) runRemove(ctx context.Context, t *ops.Task, cl *cluster, members []*db.ClusterNode, m *db.ClusterNode) error {
 	step, err := t.Step("移出 Raft "+m.NodeName, m.NodeID)
 	if err != nil {
@@ -358,8 +390,14 @@ func (s *Service) runRemove(ctx context.Context, t *ops.Task, cl *cluster, membe
 			return gateError(r)
 		}
 		if s.nodeRole(ctx, cl, m) == "active" {
-			tok, _ := s.adminToken(ctx, cl.ID)
-			c, _ := s.client(cl, m, tok)
+			tok, err := s.adminToken(ctx, cl.ID)
+			if err != nil {
+				return err
+			}
+			c, err := s.client(cl, m, tok)
+			if err != nil {
+				return err
+			}
 			step.Logf("目标为 Active，执行 step-down")
 			if err := c.StepDown(ctx); err != nil {
 				return err
@@ -422,14 +460,26 @@ func (s *Service) NodeService(ctx context.Context, actor audit.Actor, clusterID,
 		Locks:       []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}, {Key: ops.HostLock(nodeID, "vault"), Mode: ops.Exclusive}},
 		TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID, "action": action, "confirm_single": confirmSingle},
 		Run: func(ctx context.Context, t *ops.Task) (err error) {
-			nc, err := s.openNode(ctx, t, m, action)
+			freshCl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			freshMembers, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			freshM, err := memberByNode(freshMembers, nodeID)
+			if err != nil {
+				return err
+			}
+			nc, err := s.openNode(ctx, t, freshM, action)
 			if err != nil {
 				return err
 			}
 			defer func() { nc.done(ctx, err) }()
-			initialized := cl.InitState == db.InitInitialized
-			if initialized && action != "start" && s.nodeRole(ctx, cl, m) != "down" {
-				if err := s.gateFor(ctx, cl, m, confirmSingle, nc.step.Logf); err != nil {
+			initialized := freshCl.InitState == db.InitInitialized
+			if initialized && action != "start" && s.nodeRole(ctx, freshCl, freshM) != "down" {
+				if err := s.gateFor(ctx, freshCl, freshM, confirmSingle, nc.step.Logf); err != nil {
 					return err
 				}
 			}
@@ -439,7 +489,7 @@ func (s *Service) NodeService(ctx context.Context, actor audit.Actor, clusterID,
 			if action == "stop" || !initialized {
 				return nil
 			}
-			return s.recoverNode(ctx, cl, members, nc, "")
+			return s.recoverNode(ctx, freshCl, freshMembers, nc, "")
 		}})
 	if err != nil {
 		return nil, err
@@ -470,12 +520,19 @@ func (s *Service) RenewCerts(ctx context.Context, actor audit.Actor, clusterID s
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.cert_renew", TargetType: "cluster", TargetID: clusterID,
 		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name,
 		Run: func(ctx context.Context, t *ops.Task) error {
-			ca, err := s.caSigner(cl)
+			freshCl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
 			if err != nil {
 				return err
 			}
-			return s.rolling(ctx, t, cl, "续期证书", confirmSingle, func(nc *nodeCtx, ms []*db.ClusterNode) error {
-				return s.applyGeneration(ctx, nc, cl, ms, ca, cl.CACertPEM)
+			if err := s.requireOperable(freshCl); err != nil {
+				return err
+			}
+			ca, err := s.caSigner(freshCl)
+			if err != nil {
+				return err
+			}
+			return s.rolling(ctx, t, freshCl, "续期证书", confirmSingle, func(nc *nodeCtx, ms []*db.ClusterNode) error {
+				return s.applyGeneration(ctx, nc, freshCl, ms, ca, freshCl.CACertPEM)
 			})
 		}})
 	if err != nil {
@@ -555,6 +612,14 @@ func (s *Service) runRotateCA(ctx context.Context, t *ops.Task, clusterID string
 	if err != nil {
 		return err
 	}
+	// Every node must trust the new CA before any node presents a certificate
+	// from it: first ship the dual bundle keeping existing leaf certs, then reissue.
+	if err := s.rolling(ctx, t, cl, "下发双 CA 信任链", confirmSingle, func(nc *nodeCtx, ms []*db.ClusterNode) error {
+		return s.applyGenerationOpts(ctx, nc, cl, ms, ca, cl.CACertPEM, true)
+	}); err != nil {
+		return err
+	}
+	_ = t.Checkpoint(map[string]any{"phase": "reissue"})
 	if err := s.rolling(ctx, t, cl, "签发新 CA 证书", confirmSingle, func(nc *nodeCtx, ms []*db.ClusterNode) error {
 		return s.applyGeneration(ctx, nc, cl, ms, ca, cl.CACertPEM)
 	}); err != nil {
@@ -647,7 +712,14 @@ func (s *Service) Upgrade(ctx context.Context, actor audit.Actor, clusterID stri
 		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name,
 		Params: map[string]any{"from": cl.Settings.Version, "to": in.Version, "use_proxy": hc.useProxy, "confirm": in.Confirm},
 		Run: func(ctx context.Context, t *ops.Task) error {
-			return s.runUpgrade(ctx, t, cl, in, hc)
+			freshCl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			if err := s.requireOperable(freshCl); err != nil {
+				return err
+			}
+			return s.runUpgrade(ctx, t, freshCl, in, hc)
 		}})
 	if err != nil {
 		return nil, err
@@ -738,11 +810,17 @@ func (s *Service) upgradeNode(ctx context.Context, t *ops.Task, cl *cluster, mem
 	if _, err := s.waitAPI(ctx, cl, m, in.Version); err != nil {
 		// The new binary never served: storage was not touched, roll back.
 		nc.step.Logf("新版本未能启动（%v），回切到 %s", err, old)
-		if old != "" {
-			if _, rerr := s.run(ctx, nc, ActivateBinaryScript(old)); rerr == nil {
-				_ = s.service(ctx, t, nc, "restart")
-				_ = s.recoverNode(ctx, cl, members, nc, old)
-			}
+		if old == "" {
+			return fmt.Errorf("%s 升级失败且无旧版本可回退：%w", m.NodeName, err)
+		}
+		if _, rerr := s.run(ctx, nc, ActivateBinaryScript(old)); rerr != nil {
+			return fmt.Errorf("%s 升级失败且回切旧版本 %s 失败（%v）：%w", m.NodeName, old, rerr, err)
+		}
+		if serr := s.service(ctx, t, nc, "restart"); serr != nil {
+			return fmt.Errorf("%s 回切旧版本 %s 后重启失败（%v）：%w", m.NodeName, old, serr, err)
+		}
+		if recErr := s.recoverNode(ctx, cl, members, nc, old); recErr != nil {
+			return fmt.Errorf("%s 回切旧版本 %s 后未恢复健康（%v）：%w", m.NodeName, old, recErr, err)
 		}
 		return fmt.Errorf("%s 升级失败并已回切旧版本，后续节点未升级：%w", m.NodeName, ops.ErrRolledBack)
 	}
@@ -892,7 +970,14 @@ func (s *Service) Reconcile(ctx context.Context, actor audit.Actor, clusterID st
 		if err != nil {
 			return nil, err
 		}
-		running := false
+		taskRunning := false
+		hostRunning := map[string]bool{}
+		type stepCleanup struct {
+			c      *sshx.Client
+			nodeID string
+			stepID string
+		}
+		var cleanups []stepCleanup
 		for _, st := range steps {
 			if st.RemoteUnit == "" || st.NodeID == "" {
 				continue
@@ -906,29 +991,39 @@ func (s *Service) Reconcile(ctx context.Context, actor audit.Actor, clusterID st
 			c, err := s.Hosts.Connect(ctx, n)
 			if err != nil {
 				rs.Status, rs.Error = "unreachable", err.Error()
-				running = true
+				taskRunning = true
+				hostRunning[st.NodeID] = true
 				rep.Steps = append(rep.Steps, rs)
 				continue
 			}
 			stepID := strings.TrimPrefix(st.RemoteUnit, sshx.UnitName(task.RemoteOpID, ""))
+			stepRunning := false
 			r, err := sshx.CheckStep(ctx, c, sshx.StepSpec{Product: "vault", OpID: task.RemoteOpID, Step: stepID})
 			if err != nil {
 				rs.Status, rs.Error = "unknown", err.Error()
-				running = true
+				stepRunning = true
 			} else {
 				rs.Status = r.Status
 				if r.Status == "running" {
-					running = true
+					stepRunning = true
 				}
 			}
-			if !running {
-				_, _ = c.Run(ctx, fmt.Sprintf(`if grep -q %s %s 2>/dev/null; then rm -f %s; fi`, sshx.Quote(task.RemoteOpID),
-					sshx.Quote(OpLockFile), sshx.Quote(OpLockFile)), sshx.RunOptions{Sudo: true})
-				_ = sshx.CleanupStep(ctx, c, "vault", task.RemoteOpID, stepID)
+			if stepRunning {
+				taskRunning = true
+				hostRunning[st.NodeID] = true
+			} else {
+				cleanups = append(cleanups, stepCleanup{c: c, nodeID: st.NodeID, stepID: stepID})
 			}
 			rep.Steps = append(rep.Steps, rs)
 		}
-		if running {
+		for _, cl := range cleanups {
+			if !hostRunning[cl.nodeID] {
+				_, _ = cl.c.Run(ctx, fmt.Sprintf(`if grep -q %s %s 2>/dev/null; then rm -f %s; fi`, sshx.Quote(task.RemoteOpID),
+					sshx.Quote(OpLockFile), sshx.Quote(OpLockFile)), sshx.RunOptions{Sudo: true})
+			}
+			_ = sshx.CleanupStep(ctx, cl.c, "vault", task.RemoteOpID, cl.stepID)
+		}
+		if taskRunning {
 			rep.Resolved = false
 			continue
 		}
@@ -975,12 +1070,27 @@ func (s *Service) RollbackGeneration(ctx context.Context, actor audit.Actor, clu
 		Locks:       []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}, {Key: ops.HostLock(nodeID, "vault"), Mode: ops.Exclusive}},
 		TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID},
 		Run: func(ctx context.Context, t *ops.Task) (err error) {
-			nc, err := s.openNode(ctx, t, m, "切回上一配置代际")
+			freshCl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			if err := s.requireOperable(freshCl); err != nil {
+				return err
+			}
+			freshMembers, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			freshM, err := memberByNode(freshMembers, nodeID)
+			if err != nil {
+				return err
+			}
+			nc, err := s.openNode(ctx, t, freshM, "切回上一配置代际")
 			if err != nil {
 				return err
 			}
 			defer func() { nc.done(ctx, err) }()
-			mc := memberConfig(m)
+			mc := memberConfig(freshM)
 			out, err := s.run(ctx, nc, fmt.Sprintf(`ls -1 %s | grep -E '^[0-9]+$' | sort -n`, sshx.Quote(ReleasesDir)))
 			if err != nil {
 				return err
@@ -994,7 +1104,7 @@ func (s *Service) RollbackGeneration(ctx context.Context, actor audit.Actor, clu
 			if prev == 0 {
 				return conflict("no_previous_generation", "节点上没有可切回的上一配置代际")
 			}
-			if err := s.gateFor(ctx, cl, m, confirmSingle, nc.step.Logf); err != nil {
+			if err := s.gateFor(ctx, freshCl, freshM, confirmSingle, nc.step.Logf); err != nil {
 				return err
 			}
 			dir := GenerationDir(prev)

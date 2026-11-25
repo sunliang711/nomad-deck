@@ -216,7 +216,7 @@ func sum(b []byte) string {
 // buildGeneration renders a complete config generation for a node: a new
 // certificate (when TLS is on), the CA bundle and config.hcl.
 func (s *Service) buildGeneration(cl *cluster, m *db.ClusterNode, n *db.Node, peers []string, gen int,
-	ca *pki.CA, caBundle string) ([]GenerationFile, *pki.Material, error) {
+	ca *pki.CA, caBundle string, current *pki.Material) ([]GenerationFile, *pki.Material, error) {
 	mc := memberConfig(m)
 	cfg := RenderConfig(NodeConfig{ClusterName: cl.Name, RaftNodeID: mc.RaftNodeID, Advertise: m.AdvertiseAddr,
 		APIPort: cl.Settings.APIPort, ClusterPort: cl.Settings.ClusterPort, TLS: cl.TLSEnabled, Generation: gen, Peers: peers,
@@ -227,15 +227,19 @@ func (s *Service) buildGeneration(cl *cluster, m *db.ClusterNode, n *db.Node, pe
 	files := []GenerationFile{{Name: "config.hcl", Content: []byte(cfg), Mode: "0640"}}
 	var leaf *pki.Material
 	if cl.TLSEnabled {
-		now := time.Now()
-		sans := sansFor(cl, m, n)
-		var err error
-		leaf, err = ca.Issue(pki.Request{CommonName: mc.RaftNodeID + "." + cl.Name + ".vault", Hosts: sans}, now)
-		if err != nil {
-			return nil, nil, err
-		}
-		if err := pki.Verify(leaf.CertPEM, leaf.KeyPEM, caBundle, sans, now, 24*time.Hour); err != nil {
-			return nil, nil, fmt.Errorf("issued certificate failed verification: %w", err)
+		if current != nil {
+			leaf = current
+		} else {
+			now := time.Now()
+			sans := sansFor(cl, m, n)
+			var err error
+			leaf, err = ca.Issue(pki.Request{CommonName: mc.RaftNodeID + "." + cl.Name + ".vault", Hosts: sans}, now)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := pki.Verify(leaf.CertPEM, leaf.KeyPEM, caBundle, sans, now, 24*time.Hour); err != nil {
+				return nil, nil, fmt.Errorf("issued certificate failed verification: %w", err)
+			}
 		}
 		files = append(files,
 			GenerationFile{Name: "tls/ca.crt", Content: []byte(caBundle), Mode: "0640"},
@@ -533,9 +537,30 @@ func (s *Service) deployNode(ctx context.Context, t *ops.Task, cl *cluster, memb
 // applyGeneration renders, ships and activates the next config generation
 // of a node and records it (with the certificate expiry) on the member.
 func (s *Service) applyGeneration(ctx context.Context, nc *nodeCtx, cl *cluster, members []*db.ClusterNode, ca *pki.CA, caBundle string) error {
+	return s.applyGenerationOpts(ctx, nc, cl, members, ca, caBundle, false)
+}
+
+func (s *Service) applyGenerationOpts(ctx context.Context, nc *nodeCtx, cl *cluster, members []*db.ClusterNode, ca *pki.CA, caBundle string, reuseLeaf bool) error {
 	mc := memberConfig(nc.m)
 	gen := mc.ConfigGeneration + 1
-	files, leaf, err := s.buildGeneration(cl, nc.m, nc.node, peersOf(members, nc.m), gen, ca, caBundle)
+	var current *pki.Material
+	if reuseLeaf && cl.TLSEnabled && mc.ConfigGeneration > 0 {
+		dir := GenerationDir(mc.ConfigGeneration)
+		cert, err := s.run(ctx, nc, "cat "+sshx.Quote(dir+"/tls/server.crt"))
+		if err != nil {
+			return fmt.Errorf("read current certificate: %w", err)
+		}
+		key, err := s.run(ctx, nc, "cat "+sshx.Quote(dir+"/tls/server.key"))
+		if err != nil {
+			return fmt.Errorf("read current key: %w", err)
+		}
+		exp, err := pki.NotAfter(cert)
+		if err != nil {
+			return err
+		}
+		current = &pki.Material{CertPEM: cert, KeyPEM: key, NotAfter: exp}
+	}
+	files, leaf, err := s.buildGeneration(cl, nc.m, nc.node, peersOf(members, nc.m), gen, ca, caBundle, current)
 	if err != nil {
 		return err
 	}

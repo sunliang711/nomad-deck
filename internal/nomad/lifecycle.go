@@ -307,6 +307,7 @@ func (s *Service) NodeJoin(ctx context.Context, actor audit.Actor, clusterID, no
 			return err
 		}})
 	if err != nil {
+		_ = db.DeleteClusterNode(ctx, s.DB.Writer, m.ID)
 		return nil, err
 	}
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.node_join", ResourceType: "cluster", ResourceID: clusterID,
@@ -401,7 +402,19 @@ func (s *Service) NodeRemove(ctx context.Context, actor audit.Actor, clusterID, 
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.node_remove", TargetType: "cluster", TargetID: clusterID,
 		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID, "role": m.Role},
 		Run: func(ctx context.Context, t *ops.Task) error {
-			return s.runRemove(ctx, t, cl, m)
+			freshCl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			freshMembers, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			freshM, err := memberByNode(freshMembers, nodeID)
+			if err != nil {
+				return err
+			}
+			return s.runRemove(ctx, t, freshCl, freshM)
 		}})
 	if err != nil {
 		return nil, err
@@ -561,8 +574,23 @@ func (s *Service) removeServer(ctx context.Context, cl *nomadCluster, nc *cluste
 		return err
 	}
 	if inRaft {
-		if err := api.RemovePeer(ctx, sv.ID); err != nil && StatusOf(err) < 400 {
-			return fmt.Errorf("remove-peer: %w", err)
+		if err := api.RemovePeer(ctx, sv.ID); err != nil {
+			if StatusOf(err) != 404 {
+				rc, rcErr := api.RaftConfiguration(ctx)
+				stillPresent := rcErr != nil
+				if rcErr == nil {
+					stillPresent = false
+					for _, p := range rc {
+						if p.ID == sv.ID {
+							stillPresent = true
+							break
+						}
+					}
+				}
+				if stillPresent {
+					return fmt.Errorf("remove-peer: %w", err)
+				}
+			}
 		}
 		nc.Step.Logf("已从 Raft 成员中移除 %s", sv.Node)
 	}
@@ -613,6 +641,18 @@ func (s *Service) NodeService(ctx context.Context, actor audit.Actor, clusterID,
 		Locks:       []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}, {Key: ops.HostLock(nodeID, "nomad"), Mode: ops.Exclusive}},
 		TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID, "action": action, "confirm_single": confirmSingle},
 		Run: func(ctx context.Context, t *ops.Task) (err error) {
+			cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			m, err := memberByNode(members, nodeID)
+			if err != nil {
+				return err
+			}
 			nc, err := s.remote().Open(ctx, t, m.NodeID, action)
 			if err != nil {
 				return err
@@ -706,6 +746,21 @@ func (s *Service) UpdateNodeConfig(ctx context.Context, actor audit.Actor, clust
 		Locks:       []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}, {Key: ops.HostLock(nodeID, "nomad"), Mode: ops.Exclusive}},
 		TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID},
 		Run: func(ctx context.Context, t *ops.Task) (err error) {
+			cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			if err := s.requireOperable(cl); err != nil {
+				return err
+			}
+			members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			m, err := memberByNode(members, nodeID)
+			if err != nil {
+				return err
+			}
 			var arts *artifacts
 			setMemberConfig(m, next)
 			defer func() {
@@ -832,6 +887,10 @@ func (s *Service) UpdateSettings(ctx context.Context, actor audit.Actor, cluster
 			if err != nil {
 				return err
 			}
+			members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
 			gi, err := s.genInput(ctx, cl, members)
 			if err != nil {
 				return err
@@ -867,6 +926,21 @@ func (s *Service) RollbackGeneration(ctx context.Context, actor audit.Actor, clu
 		Locks:       []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}, {Key: ops.HostLock(nodeID, "nomad"), Mode: ops.Exclusive}},
 		TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID},
 		Run: func(ctx context.Context, t *ops.Task) (err error) {
+			cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			if err := s.requireOperable(cl); err != nil {
+				return err
+			}
+			members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			m, err := memberByNode(members, nodeID)
+			if err != nil {
+				return err
+			}
 			nc, err := s.remote().Open(ctx, t, m.NodeID, "切回上一配置代际")
 			if err != nil {
 				return err

@@ -84,6 +84,7 @@ type preview struct {
 	sessionID  string
 	expires    time.Time
 	report     *Report
+	timer      *time.Timer
 }
 
 // scan holds what a preview learns from the bundle.
@@ -99,14 +100,47 @@ type scan struct {
 	customCron int
 }
 
+// CleanupTempImports removes leftover uploaded bundle files from previous runs.
+func (s *Service) CleanupTempImports() {
+	if s.DataDir == "" {
+		return
+	}
+	dir := filepath.Join(s.DataDir, "tmp", "imports")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+
 func (s *Service) gcPreviews() {
 	now := time.Now()
 	for k, p := range s.previews {
 		if now.After(p.expires) {
+			if p.timer != nil {
+				p.timer.Stop()
+			}
 			_ = os.Remove(p.path)
+			p.passphrase = ""
 			delete(s.previews, k)
 		}
 	}
+}
+
+func (s *Service) expirePreview(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.previews[token]
+	if p == nil {
+		return
+	}
+	_ = os.Remove(p.path)
+	p.passphrase = ""
+	delete(s.previews, token)
 }
 
 // Preview stores an uploaded bundle, decrypts and analyses it, and returns
@@ -162,8 +196,11 @@ func (s *Service) Preview(ctx context.Context, sessionID, adminID string, src io
 		s.previews = map[string]*preview{}
 	}
 	s.gcPreviews()
-	s.previews[rep.PreviewToken] = &preview{token: rep.PreviewToken, path: f.Name(), sha: sum, strategy: strategy, digest: digest,
+	tokStr := rep.PreviewToken
+	pv := &preview{token: tokStr, path: f.Name(), sha: sum, strategy: strategy, digest: digest,
 		passphrase: passphrase, adminID: adminID, sessionID: sessionID, expires: rep.ExpiresAt, report: rep}
+	pv.timer = time.AfterFunc(PreviewTTL, func() { s.expirePreview(tokStr) })
+	s.previews[tokStr] = pv
 	s.mu.Unlock()
 	keep = true
 	return rep, nil
@@ -437,14 +474,19 @@ func (s *Service) takePreview(token, sessionID, adminID string) (*preview, error
 	defer s.mu.Unlock()
 	p := s.previews[token]
 	delete(s.previews, token)
+	if p != nil && p.timer != nil {
+		p.timer.Stop()
+	}
 	switch {
 	case p == nil:
 		return nil, conflict("preview_invalid", "预检凭证无效或已使用，请重新上传迁移包预检")
 	case time.Now().After(p.expires):
 		_ = os.Remove(p.path)
+		p.passphrase = ""
 		return nil, conflict("preview_expired", "预检凭证已过期，请重新预检")
 	case p.sessionID != sessionID || p.adminID != adminID:
 		_ = os.Remove(p.path)
+		p.passphrase = ""
 		return nil, conflict("preview_invalid", "预检凭证不属于当前会话")
 	}
 	return p, nil
@@ -468,11 +510,14 @@ func (s *Service) Apply(ctx context.Context, actor audit.Actor, sessionID, admin
 	if sum, err := fileSHA(p.path); err != nil || sum != p.sha {
 		return nil, conflict("preview_stale", "迁移包文件在预检后发生变化，请重新预检")
 	}
-	if s.Ops.Barrier() != "" {
+	releaseBarrier, ok := s.Ops.TryAcquireBarrier("迁移导入")
+	if !ok {
 		return nil, conflict("maintenance_active", "控制面已处于全局维护状态")
 	}
-	s.Ops.SetBarrier("迁移导入")
-	defer s.Ops.SetBarrier("")
+	defer releaseBarrier()
+	if s.ExtraBusy != nil && s.ExtraBusy() {
+		return nil, conflict("rotation_running", "正在执行主密钥轮换，请等待其结束后再导入")
+	}
 	if n := s.Ops.Active(); n > 0 {
 		return nil, conflict("tasks_running", "仍有 %d 个运维任务在执行，请等待其结束后再导入", n)
 	}
@@ -739,11 +784,10 @@ func (r *replacer) row(ctx context.Context, table string, row map[string]any) (b
 	}
 	if table == "operation_task_steps" {
 		if lp := db.RowString(row, "log_path"); lp != "" {
-			dst, err := r.s.logTarget(lp)
-			if err != nil {
+			if _, err := r.s.logTarget(lp); err != nil {
 				return false, err
 			}
-			row["log_path"] = dst
+			row["log_path"] = filepath.Clean(filepath.FromSlash(lp))
 		}
 	}
 	if err := r.s.sealSecrets(row, db.SecretsOf(table)); err != nil {
@@ -950,5 +994,10 @@ func (s *Service) Activate(ctx context.Context, actor audit.Actor) (int, error) 
 		return s.Audit.Record(ctx, tx, audit.Event{Actor: actor, Action: "migration.activate", ResourceType: "control_plane",
 			Summary: map[string]any{"released_clusters": n}})
 	})
+	if err == nil {
+		for _, f := range s.AfterActivate {
+			f()
+		}
+	}
 	return int(n), err
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -61,11 +62,13 @@ func (a *API) allocFileContent(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(b)
 	case "download":
 		name := p[strings.LastIndex(p, "/")+1:]
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", strings.ReplaceAll(name, `"`, "_")))
-		w.Header().Set("Cache-Control", "no-store")
-		if err := a.Workbench.DownloadFile(r.Context(), a.actor(r), clusterID, allocID, p, w); err != nil {
-			a.writeErr(w, r, err)
+		dw := &deferredDownloadWriter{w: w, contentType: "application/octet-stream", filename: name}
+		if err := a.Workbench.DownloadFile(r.Context(), a.actor(r), clusterID, allocID, p, dw); err != nil {
+			if !dw.wrote {
+				a.writeErr(w, r, err)
+				return
+			}
+			a.Log.Error("alloc file download failed", "err", err)
 		}
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "不支持的操作")
@@ -127,13 +130,19 @@ func (a *API) allocLogStream(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return true
 	}
+	streamCtx, cancelStream := context.WithCancel(r.Context())
+	defer cancelStream()
 	lines := make(chan string, 256)
 	go func() {
 		defer close(lines)
 		sc := bufio.NewScanner(body)
 		sc.Buffer(make([]byte, 64<<10), 1<<20)
 		for sc.Scan() {
-			lines <- sc.Text()
+			select {
+			case lines <- sc.Text():
+			case <-streamCtx.Done():
+				return
+			}
 		}
 	}()
 	heartbeat := time.NewTicker(15 * time.Second)

@@ -57,12 +57,20 @@ export function JobCenterPage() {
   const [notice, setNotice] = useState('');
 
   const loadClusters = useCallback(async () => {
-    const [cRes, tRes] = await Promise.all([apiGet('/api/v1/clusters?type=nomad'), apiGet('/api/v1/job-templates')]);
-    const list = cRes.clusters || [];
-    setClusters(list);
-    setTemplates(tRes.templates || []);
-    if (!clusterId && list.length > 0) setClusterId(list[0].id);
-  }, [clusterId]);
+    setErr('');
+    try {
+      const [cRes, tRes] = await Promise.all([
+        apiGet('/api/v1/clusters?type=nomad'),
+        isAdmin ? apiGet('/api/v1/job-templates') : Promise.resolve({ templates: [] }),
+      ]);
+      const list = cRes.clusters || [];
+      setClusters(list);
+      setTemplates(tRes.templates || []);
+      if (list.length > 0) setClusterId((prev) => prev || list[0].id);
+    } catch (ex: any) {
+      setErr(ex?.message || '加载集群或模板列表失败');
+    }
+  }, [isAdmin]);
 
   const loadJobs = useCallback(async () => {
     if (!clusterId) return;
@@ -88,26 +96,27 @@ export function JobCenterPage() {
     setErr('');
     try {
       const spec = {
-        id: visual.id,
-        name: visual.id,
-        namespace: visual.namespace,
-        type: visual.type,
-        datacenters: visual.datacenters.split(',').map((s) => s.trim()).filter(Boolean),
-        groups: [
-          {
-            name: visual.group,
-            count: Number(visual.count),
-            tasks: [
-              {
-                name: visual.task,
-                driver: 'docker',
-                docker: { image: visual.image },
-                resources: { cpu: Number(visual.cpu), memory: Number(visual.memory) },
-              },
-            ],
-          },
-        ],
-        extra_hcl: visual.extra_hcl,
+        job: {
+          id: visual.id,
+          namespace: visual.namespace,
+          type: visual.type,
+          datacenters: visual.datacenters.split(',').map((s) => s.trim()).filter(Boolean),
+          groups: [
+            {
+              name: visual.group,
+              count: String(visual.count),
+              tasks: [
+                {
+                  name: visual.task,
+                  driver: 'docker',
+                  config: { image: visual.image },
+                  resources: { cpu: String(visual.cpu), memory: String(visual.memory) },
+                },
+              ],
+            },
+          ],
+          extra_hcl: visual.extra_hcl,
+        },
       };
       const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/render`, spec);
       if (res.hcl) setHcl(res.hcl);
@@ -147,12 +156,12 @@ export function JobCenterPage() {
   };
 
   const loadJobForEdit = async (j: any) => {
-    const ns = j.Namespace || namespace;
-    setSelectedJobId(j.ID);
+    const ns = j.namespace || namespace;
+    setSelectedJobId(j.id);
     try {
       const [src, rev] = await Promise.all([
-        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${encodeURIComponent(j.ID)}/edit-source`),
-        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${encodeURIComponent(j.ID)}/revisions`),
+        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${encodeURIComponent(j.id)}/edit-source`),
+        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${encodeURIComponent(j.id)}/revisions`),
       ]);
       if (src.source?.hcl) setHcl(src.source.hcl);
       setRevisions(rev.revisions || []);
@@ -175,7 +184,10 @@ export function JobCenterPage() {
           {isAdmin && clusterId && (
             <Button
               size="sm"
-              onClick={() => void apiDownload(`/api/v1/nomad/${clusterId}/job-ops/export`, { namespace }, 'nomad-jobs.zip')}
+              onClick={() =>
+                void apiDownload(`/api/v1/nomad/${clusterId}/job-ops/export`, { namespace }, 'nomad-jobs.zip')
+                  .catch((ex) => setErr(ex.message))
+              }
             >
               <Download className="h-3.5 w-3.5" /> 批量导出 HCL
             </Button>
@@ -193,22 +205,54 @@ export function JobCenterPage() {
               {jobs.length === 0 ? (
                 <EmptyState text="暂无 Job" />
               ) : (
-                jobs.map((j) => (
-                  <div key={`${j.Namespace}:${j.ID}`} className="flex items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
-                    <div>
-                      <div className="font-mono font-semibold">{j.ID}</div>
-                      <Badge tone={statusTone(j.Status)}>{j.Status}</Badge>
-                    </div>
-                    {isAdmin && (
-                      <div className="flex gap-1">
-                        <Button size="sm" onClick={() => void loadJobForEdit(j)}>编辑</Button>
-                        <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(j.Namespace)}/jobs/${encodeURIComponent(j.ID)}/start`, {}).then(() => loadJobs())}><Play className="h-3 w-3" /></Button>
-                        <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(j.Namespace)}/jobs/${encodeURIComponent(j.ID)}/stop`, {}).then(() => loadJobs())}><Square className="h-3 w-3" /></Button>
-                        <Button size="sm" variant="danger" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(j.Namespace)}/jobs/${encodeURIComponent(j.ID)}/purge`, {}).then(() => loadJobs())}><Trash2 className="h-3 w-3" /></Button>
+                jobs.map((j) => {
+                  const jobNs = j.namespace || namespace;
+                  return (
+                    <div key={`${jobNs}:${j.id}`} className="flex items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
+                      <div>
+                        <div className="font-mono font-semibold">{j.id}</div>
+                        <Badge tone={statusTone(j.status)}>{j.status}</Badge>
                       </div>
-                    )}
-                  </div>
-                ))
+                      {isAdmin && (
+                        <div className="flex gap-1">
+                          <Button size="sm" onClick={() => void loadJobForEdit(j)}>编辑</Button>
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/start`, {})
+                                .then(() => loadJobs())
+                                .catch((ex) => setErr(ex.message))
+                            }
+                          >
+                            <Play className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/stop`, {})
+                                .then(() => loadJobs())
+                                .catch((ex) => setErr(ex.message))
+                            }
+                          >
+                            <Square className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={() => {
+                              if (!window.confirm(`确认清理并彻底删除 Job "${j.id}"（Namespace: ${jobNs}）？`)) return;
+                              void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/purge`, { confirm_job_id: j.id })
+                                .then(() => loadJobs())
+                                .catch((ex) => setErr(ex.message));
+                            }}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
 
@@ -219,8 +263,20 @@ export function JobCenterPage() {
                   <div key={t.id} className="flex items-center justify-between rounded border border-slate-200 p-1.5 dark:border-slate-800">
                     <span>{t.name}</span>
                     <div className="flex gap-1">
-                      <Button size="sm" onClick={() => setHcl(t.hcl_content || '')}>载入</Button>
-                      {isAdmin && <Button size="sm" variant="danger" onClick={() => void apiDelete(`/api/v1/job-templates/${t.id}`).then(() => loadClusters())}>删</Button>}
+                      <Button size="sm" onClick={() => setHcl(t.hcl || '')}>载入</Button>
+                      {isAdmin && (
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() =>
+                            void apiDelete(`/api/v1/job-templates/${t.id}`)
+                              .then(() => loadClusters())
+                              .catch((ex) => setErr(ex.message))
+                          }
+                        >
+                          删
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -290,7 +346,7 @@ export function JobCenterPage() {
                   size="sm"
                   onClick={() =>
                     tplName &&
-                    void apiPost('/api/v1/job-templates', { name: tplName, edit_mode: 'hcl', hcl_content: hcl })
+                    void apiPost('/api/v1/job-templates', { name: tplName, edit_mode: 'hcl', hcl })
                       .then(() => { setTplName(''); setNotice('模板已保存'); return loadClusters(); })
                       .catch((ex) => setErr(ex.message))
                   }
@@ -319,13 +375,13 @@ export function JobCenterPage() {
                   {revisions.slice(0, 8).map((rv) => (
                     <div key={rv.id} className="flex items-center justify-between rounded border border-slate-200 p-1.5 dark:border-slate-800">
                       <span>v{rv.revision_no} · {rv.source} · {rv.submit_status} · {fmtTime(rv.created_at)}</span>
-                      {isAdmin && (
+                      {isAdmin && rv.remote_job_version != null && (
                         <Button
                           size="sm"
                           onClick={() =>
                             void apiPost(
                               `/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(namespace)}/jobs/${encodeURIComponent(selectedJobId)}/revert`,
-                              { version: rv.nomad_version },
+                              { version: rv.remote_job_version },
                             ).then(() => setNotice('已回滚 Job 版本')).catch((ex) => setErr(ex.message))
                           }
                         >

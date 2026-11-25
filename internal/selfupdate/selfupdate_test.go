@@ -49,6 +49,9 @@ func TestSemverParseAndCompare(t *testing.T) {
 		{"v1.0.0", "v1.0.1", -1},
 		{"v1.1.0-rc1", "v1.1.0", -1},
 		{"v1.1.0", "v1.1.0-rc1", 1},
+		{"v1.0.0-rc.2", "v1.0.0-rc.10", -1},
+		{"v1.0.0-rc.10", "v1.0.0-rc.2", 1},
+		{"v1.0.0-alpha.1", "v1.0.0-alpha.beta", -1},
 		{"1.2.3", "v1.2.3", 0},
 		{"v2.0.0", "v1.9.9", 1},
 	}
@@ -473,5 +476,26 @@ func TestScheduledUpgradeAndProxyEnforcement(t *testing.T) {
 	// Cancel while upgrading must fail.
 	if _, err := svc.CancelSchedule(ctx, audit.Actor{Name: "root"}); err == nil {
 		t.Fatal("cancel while upgrading must fail")
+	}
+}
+
+func TestResolveReleaseFiltersPrereleaseOnStable(t *testing.T) {
+	releases := []GitHubRelease{
+		{
+			TagName:    "v1.2.0-rc.1",
+			Prerelease: false, // Even if GitHub flag is false, semver prerelease must be filtered on stable.
+			Assets: []ReleaseAsset{
+				{Name: "nomad-deck_1.2.0-rc.1_linux_amd64.tar.gz", BrowserDownloadURL: "https://example.invalid/rc.tar.gz", Size: 123},
+				{Name: "SHA256SUMS", BrowserDownloadURL: "https://example.invalid/SHA256SUMS", Size: 64},
+				{Name: "SHA256SUMS.sig", BrowserDownloadURL: "https://example.invalid/SHA256SUMS.sig", Size: 64},
+			},
+		},
+	}
+	if _, err := ResolveRelease(releases, "latest", ChannelStable, "linux", "amd64"); err == nil {
+		t.Fatal("expected stable channel to reject semver prerelease tag even when Prerelease=false")
+	}
+	info, err := ResolveRelease(releases, "latest", ChannelPrerelease, "linux", "amd64")
+	if err != nil || info.Version != "v1.2.0-rc.1" {
+		t.Fatalf("prerelease channel resolve: %+v err=%v", info, err)
 	}
 }

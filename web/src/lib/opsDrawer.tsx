@@ -67,6 +67,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
             if (data.error) {
               setLogs((prev) => prev + `\n[完成: ${data.status}] ${data.error}\n`);
             }
+            stop?.();
           }
         },
       });
@@ -77,8 +78,11 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
           onEvent: (ev, data) => {
             if (ev === 'log' && data?.data) {
               setLogs((prev) => prev + data.data);
-            } else if (ev === 'done' && data?.error) {
-              setLogs((prev) => prev + `\n[流结束] ${data.error}\n`);
+            } else if (ev === 'done') {
+              if (data?.error) {
+                setLogs((prev) => prev + `\n[流结束] ${data.error}\n`);
+              }
+              stop?.();
             }
           },
           onError: () => {

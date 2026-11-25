@@ -16,7 +16,7 @@ type EncryptedField struct {
 
 // EncryptedFields is the registry of encrypted database locations.
 var EncryptedFields = []EncryptedField{
-	{Name: "system_settings.value", Query: `SELECT key, value FROM system_settings WHERE is_secret = 1`},
+	{Name: "system_settings.value", Query: `SELECT key, value FROM system_settings WHERE is_secret = 1 AND value != ''`},
 	{Name: "ssh_keys.private_key_encrypted", Query: `SELECT id, private_key_encrypted FROM ssh_keys`},
 }
 

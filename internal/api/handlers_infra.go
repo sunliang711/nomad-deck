@@ -123,6 +123,11 @@ type nodeView struct {
 	HostKeyFingerprint string            `json:"host_key_fingerprint"`
 	OSInfo             string            `json:"os_info"`
 	Arch               string            `json:"arch"`
+	CPUCores           int               `json:"cpu_cores"`
+	CPUPercent         float64           `json:"cpu_percent"`
+	MemTotalBytes      int64             `json:"mem_total_bytes"`
+	MemUsedBytes       int64             `json:"mem_used_bytes"`
+	MemPercent         float64           `json:"mem_percent"`
 	Status             string            `json:"status"`
 	LastCheckedAt      any               `json:"last_checked_at"`
 	Labels             map[string]string `json:"labels"`
@@ -137,6 +142,7 @@ func nodeOf(n *db.Node) nodeView {
 		OSFamily: n.OSFamily, OSCodename: n.OSCodename, PackageManager: n.PackageManager, DockerMode: n.DockerMode,
 		DockerStatus: n.DockerStatus, DockerVersion: n.DockerVersion, MachineID: n.MachineID, TimeSync: n.TimeSync,
 		ClockSkewMS: n.ClockSkewMS, HostKeyFingerprint: n.HostKeyFingerprint, OSInfo: n.OSInfo, Arch: n.Arch,
+		CPUCores: n.CPUCores, CPUPercent: n.CPUPercent, MemTotalBytes: n.MemTotalBytes, MemUsedBytes: n.MemUsedBytes, MemPercent: n.MemPercent,
 		Status: n.Status, LastCheckedAt: fmtTime(n.LastCheckedAt), Notes: n.Notes,
 		CreatedAt: fmtTime(n.CreatedAt), UpdatedAt: fmtTime(n.UpdatedAt)}
 	_ = json.Unmarshal([]byte(n.AddressAliasesJSON), &v.AddressAliases)
@@ -248,6 +254,33 @@ func (a *API) testNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"node": nodeOf(res.Node), "probe": res.Probe, "warnings": res.Warnings})
+}
+
+func (a *API) refreshNodeMetrics(w http.ResponseWriter, r *http.Request) {
+	n, err := a.Hosts.RefreshNodeMetrics(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"node": nodeOf(n)})
+}
+
+func (a *API) refreshAllNodeMetrics(w http.ResponseWriter, r *http.Request) {
+	okCount, failCount, err := a.Hosts.RefreshAllMetrics(r.Context())
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	nodes, err := db.ListNodes(r.Context(), a.DB.Reader)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	out := make([]nodeView, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, nodeOf(n))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"nodes": out, "ok": okCount, "failed": failCount})
 }
 
 func (a *API) resetNodeFingerprint(w http.ResponseWriter, r *http.Request) {

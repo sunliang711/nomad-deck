@@ -170,15 +170,9 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 }
 
 func (s *Service) runBackup(ctx context.Context, trigger, triggeredBy string, cr *cron.Run) (*RunView, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
 		return nil, err
-	}
-	if len(cfg.Passphrase) < vaultbackup.MinPassphrase {
-		return nil, badRequest("未配置有效的备份口令（至少 %d 个字符）", vaultbackup.MinPassphrase)
 	}
 	var enabledTargets []Target
 	for _, t := range cfg.Targets {
@@ -186,8 +180,18 @@ func (s *Service) runBackup(ctx context.Context, trigger, triggeredBy string, cr
 			enabledTargets = append(enabledTargets, t)
 		}
 	}
-	if len(enabledTargets) == 0 {
-		return nil, badRequest("未配置已启用的备份目标")
+	return s.runBackupForTargets(ctx, cfg, enabledTargets, trigger, triggeredBy, cr)
+}
+
+func (s *Service) runBackupForTargets(ctx context.Context, cfg *storedConfig, targets []Target, trigger, triggeredBy string, cr *cron.Run) (*RunView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(cfg.Passphrase) < vaultbackup.MinPassphrase {
+		return nil, badRequest("未配置有效的备份口令（至少 %d 个字符）", vaultbackup.MinPassphrase)
+	}
+	if len(targets) == 0 {
+		return nil, badRequest("未配置可用的备份目标")
 	}
 
 	tmpDir := filepath.Join(s.DataDir, "tmp", "backups")
@@ -237,7 +241,7 @@ func (s *Service) runBackup(ctx context.Context, trigger, triggeredBy string, cr
 			Status: "failed", ObjectName: objName, ErrorMessage: err.Error(), StartedAt: now}), err
 	}
 
-	results, uploadErr := s.uploadToTargets(ctx, enabledTargets, "control-plane", "nomad-deck-backup-", objName, tmpPath, sha, sizeBytes, false, cr)
+	results, uploadErr := s.uploadToTargets(ctx, targets, "control-plane", "nomad-deck-backup-", objName, tmpPath, sha, sizeBytes, false, cr)
 	rj, _ := json.Marshal(results)
 	status := "success"
 	errMsg := ""
@@ -274,6 +278,10 @@ func (s *Service) OffsiteSnapshot(ctx context.Context, r *cron.Run, snap *db.Sna
 	if len(enabledTargets) == 0 {
 		return nil
 	}
+	return s.offsiteToTargets(ctx, cfg, enabledTargets, r, snap, clusterName)
+}
+
+func (s *Service) offsiteToTargets(ctx context.Context, cfg *storedConfig, targets []Target, r *cron.Run, snap *db.Snapshot, clusterName string) error {
 	drv := s.Drivers[snap.ClusterType]
 	if drv == nil {
 		return fmt.Errorf("未注册集群驱动 %s", snap.ClusterType)
@@ -319,7 +327,7 @@ func (s *Service) OffsiteSnapshot(ctx context.Context, r *cron.Run, snap *db.Sna
 
 	subdir := "snapshots/" + snap.ClusterID
 	prefix := "snapshot-" + snap.ClusterID + "-"
-	results, uploadErr := s.uploadToTargets(ctx, enabledTargets, subdir, prefix, objName, tmpPath, sha, sizeBytes, true, r)
+	results, uploadErr := s.uploadToTargets(ctx, targets, subdir, prefix, objName, tmpPath, sha, sizeBytes, true, r)
 	rj, _ := json.Marshal(results)
 	status := "success"
 	errMsg := ""
@@ -503,6 +511,117 @@ func (s *Service) findTarget(ctx context.Context, targetID string) (Target, erro
 		}
 	}
 	return Target{}, &auth.Error{Status: 404, Code: "not_found", Message: "备份目标不存在"}
+}
+
+// ValidateTarget verifies that targetID exists in the backup configuration.
+func (s *Service) ValidateTarget(ctx context.Context, targetID string) error {
+	_, err := s.findTarget(ctx, targetID)
+	return err
+}
+
+// RevealSecret returns a stored backup secret (passphrase or target secret) for
+// an authenticated admin UI reveal request, recording an audit event.
+func (s *Service) RevealSecret(ctx context.Context, actor audit.Actor, kind, targetID string) (string, error) {
+	cfg, err := s.loadConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	var secret string
+	switch kind {
+	case "passphrase":
+		secret = cfg.Passphrase
+	case "target_secret":
+		if targetID == "" {
+			return "", badRequest("target_id 必填")
+		}
+		found := false
+		for _, t := range cfg.Targets {
+			if t.ID == targetID {
+				found = true
+				switch t.Type {
+				case TargetS3:
+					secret = t.SecretAccessKey
+				case TargetSafeKeep:
+					secret = t.SafeKeepAPIKey
+				default:
+					return "", badRequest("该备份目标类型不含密钥字段")
+				}
+				break
+			}
+		}
+		if !found {
+			return "", &auth.Error{Status: 404, Code: "not_found", Message: "备份目标不存在"}
+		}
+	default:
+		return "", badRequest("kind 需为 passphrase 或 target_secret")
+	}
+	_ = s.Audit.Record(ctx, nil, audit.Event{
+		Actor:        actor,
+		Action:       "backup.secret_reveal",
+		ResourceType: "settings",
+		ResourceName: "backup",
+		Summary:      map[string]any{"kind": kind, "target_id": targetID},
+	})
+	return secret, nil
+}
+
+// CronBackupTarget runs a scheduled backup of the control plane (when clusterID
+// is empty) or a cluster Raft snapshot to targetID (or all enabled safekeep
+// targets when targetID is empty).
+func (s *Service) CronBackupTarget(ctx context.Context, r *cron.Run, targetID, clusterID string) (string, error) {
+	cfg, err := s.loadConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(cfg.Passphrase) < vaultbackup.MinPassphrase {
+		return "", badRequest("未配置有效的备份口令（至少 %d 个字符）", vaultbackup.MinPassphrase)
+	}
+	var targets []Target
+	if targetID != "" {
+		t, err := s.findTarget(ctx, targetID)
+		if err != nil {
+			return "", err
+		}
+		targets = []Target{t}
+	} else {
+		for _, t := range cfg.Targets {
+			if t.Enabled && t.Type == TargetSafeKeep {
+				targets = append(targets, t)
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return "", cron.Skip("未配置可用的 SafeKeep 灾备目标")
+	}
+	if clusterID == "" {
+		rv, err := s.runBackupForTargets(ctx, cfg, targets, "scheduled", audit.ActorCron.Name, r)
+		if rv != nil && rv.Status == "success" {
+			return fmt.Sprintf("灾备包 %s（%d 字节）已上传到 %s 并校验通过", rv.ObjectName, rv.SizeBytes, targets[0].Name), nil
+		}
+		if err != nil {
+			return "上传灾备包失败", err
+		}
+		return "", nil
+	}
+	cl, err := db.GetCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return "", err
+	}
+	if cl.InitState != db.InitInitialized || cl.MaintenanceMode {
+		return "", cron.Skip("集群 %s 未初始化或处于维护态", cl.Name)
+	}
+	drv := s.Drivers[cl.Type]
+	if drv == nil {
+		return "", fmt.Errorf("未注册集群驱动 %s", cl.Type)
+	}
+	snap, err := drv.TakeSnapshot(ctx, cl.ID, "scheduled", audit.ActorCron.Name)
+	if err != nil {
+		return "", err
+	}
+	if err := s.offsiteToTargets(ctx, cfg, targets, r, snap, cl.Name); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("集群 %s 快照 %s 已加密并上传到 %s", cl.Name, snap.ID, targets[0].Name), nil
 }
 
 // AlertSummary returns backup status and alert indicators for the dashboard.

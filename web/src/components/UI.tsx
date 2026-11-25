@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { X, AlertCircle } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { X, AlertCircle, Eye, EyeOff, Info, ExternalLink, Copy, Check } from 'lucide-react';
 
 export function Card({
   title,
@@ -109,12 +110,94 @@ export function Button({
   );
 }
 
+export function InfoTip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number; below: boolean }>({ top: 0, left: 0, below: false });
+  const ref = useRef<HTMLSpanElement>(null);
+
+  const show = () => {
+    if (!ref.current) return;
+    const rect = ref.current.getBoundingClientRect();
+    const below = rect.top < 110;
+    const left = Math.min(Math.max(rect.left + rect.width / 2, 136), window.innerWidth - 136);
+    setPos({
+      top: below ? rect.bottom + 6 : rect.top - 6,
+      left,
+      below,
+    });
+    setOpen(true);
+  };
+
+  return (
+    <>
+      <span
+        ref={ref}
+        tabIndex={0}
+        role="note"
+        aria-label={text}
+        onMouseEnter={show}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={show}
+        onBlur={() => setOpen(false)}
+        onClick={(e) => e.stopPropagation()}
+        className="ml-0.5 inline-flex -translate-y-0.5 cursor-help items-center align-super text-slate-400 transition hover:text-emerald-600 focus:outline-none dark:text-slate-500 dark:hover:text-emerald-400"
+      >
+        <Info className="h-3 w-3" />
+      </span>
+      {open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            style={{
+              position: 'fixed',
+              top: pos.top,
+              left: pos.left,
+              transform: pos.below ? 'translate(-50%, 0)' : 'translate(-50%, -100%)',
+            }}
+            className="pointer-events-none z-50 w-64 rounded-md border border-slate-700 bg-slate-900 px-2.5 py-2 text-[11px] font-normal leading-relaxed text-slate-100 shadow-lg dark:border-slate-600 dark:bg-slate-800"
+          >
+            {text}
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+export function TermLabel({ term, tip }: { term: React.ReactNode; tip: string }) {
+  return (
+    <span className="inline-flex items-baseline">
+      <span>{term}</span>
+      <InfoTip text={tip} />
+    </span>
+  );
+}
+
+export function ExternalUrlLink({ url, empty = '-' }: { url?: string; empty?: string }) {
+  const val = (url || '').trim();
+  if (!val) return <span className="font-mono text-slate-500">{empty}</span>;
+  if (/^https?:\/\//i.test(val)) {
+    return (
+      <a
+        href={val}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 font-mono text-emerald-600 hover:underline dark:text-emerald-400"
+      >
+        <span>{val}</span>
+        <ExternalLink className="h-3 w-3 shrink-0" />
+      </a>
+    );
+  }
+  return <span className="font-mono text-slate-500">{val}</span>;
+}
+
 export function Input({
   label,
   hint,
   className = '',
   ...rest
-}: React.InputHTMLAttributes<HTMLInputElement> & { label?: string; hint?: string }) {
+}: React.InputHTMLAttributes<HTMLInputElement> & { label?: React.ReactNode; hint?: string }) {
   return (
     <label className="block space-y-1">
       {label && <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">{label}</span>}
@@ -127,12 +210,140 @@ export function Input({
   );
 }
 
+const STORED_MASK = '********';
+
+export function SecretInput({
+  label,
+  hint,
+  value,
+  onChangeValue,
+  hasStoredValue = false,
+  onRevealStored,
+  resetKey,
+  className = '',
+  disabled,
+  required,
+  ...rest
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type' | 'value' | 'onChange'> & {
+  label?: React.ReactNode;
+  hint?: string;
+  value: string;
+  onChangeValue: (val: string) => void;
+  hasStoredValue?: boolean;
+  onRevealStored?: () => Promise<string>;
+  resetKey?: string | number | boolean;
+}) {
+  const [showPlain, setShowPlain] = useState(false);
+  const [touched, setTouched] = useState(false);
+  const [revealedText, setRevealedText] = useState<string | null>(null);
+  const [revealing, setRevealing] = useState(false);
+
+  useEffect(() => {
+    setTouched(false);
+    setRevealedText(null);
+    setShowPlain(false);
+  }, [hasStoredValue, resetKey]);
+
+  const showingStoredMask = hasStoredValue && !touched && value === '' && revealedText === null;
+  const showingRevealed = hasStoredValue && !touched && value === '' && revealedText !== null;
+  const displayValue = showingStoredMask ? STORED_MASK : showingRevealed ? revealedText : value;
+
+  const toggleShow = async () => {
+    if (showPlain) {
+      setShowPlain(false);
+      return;
+    }
+    if (showingStoredMask && onRevealStored) {
+      setRevealing(true);
+      try {
+        const pt = await onRevealStored();
+        setRevealedText(pt);
+        setShowPlain(true);
+      } finally {
+        setRevealing(false);
+      }
+      return;
+    }
+    setShowPlain(true);
+  };
+
+  return (
+    <label className="block space-y-1">
+      {label && <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">{label}</span>}
+      <div className="relative">
+        <input
+          {...rest}
+          disabled={disabled}
+          required={required && !hasStoredValue}
+          type={showPlain ? 'text' : 'password'}
+          value={displayValue}
+          onFocus={(e) => {
+            if (showingStoredMask) {
+              e.currentTarget.select();
+            }
+            rest.onFocus?.(e);
+          }}
+          onChange={(e) => {
+            let next = e.target.value;
+            if (showingStoredMask && next.startsWith(STORED_MASK) && next.length > STORED_MASK.length) {
+              next = next.slice(STORED_MASK.length);
+            }
+            setTouched(true);
+            setRevealedText(null);
+            onChangeValue(next);
+          }}
+          className={`w-full rounded-md border border-slate-300 bg-white py-1.5 pl-3 pr-9 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 ${className}`}
+        />
+        <button
+          type="button"
+          disabled={revealing}
+          onClick={() => void toggleShow()}
+          title={showPlain ? '隐藏明文' : '显示明文'}
+          aria-label={showPlain ? '隐藏明文' : '显示明文'}
+          className="absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-400 hover:text-slate-700 disabled:opacity-50 dark:text-slate-500 dark:hover:text-slate-200"
+        >
+          {showPlain ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </button>
+      </div>
+      {hint && <span className="block text-xs text-slate-500">{hint}</span>}
+    </label>
+  );
+}
+
+export function MaskedSecret({ value, label }: { value: string; label?: React.ReactNode }) {
+  const [show, setShow] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    void navigator.clipboard.writeText(value);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {label && <span className="text-slate-600 dark:text-slate-300">{label}</span>}
+      <code className="rounded bg-slate-900 px-2 py-1 font-mono text-xs text-emerald-300 dark:bg-slate-950">
+        {show ? value : '****************'}
+      </code>
+      <Button type="button" size="sm" onClick={() => setShow((v) => !v)}>
+        {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+        <span>{show ? '隐藏明文' : '显示明文'}</span>
+      </Button>
+      <Button type="button" size="sm" onClick={copy}>
+        {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+        <span>{copied ? '已复制' : '复制'}</span>
+      </Button>
+    </div>
+  );
+}
+
 export function Select({
   label,
   children,
   className = '',
   ...rest
-}: React.SelectHTMLAttributes<HTMLSelectElement> & { label?: string }) {
+}: React.SelectHTMLAttributes<HTMLSelectElement> & { label?: React.ReactNode }) {
   return (
     <label className="block space-y-1">
       {label && <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">{label}</span>}
@@ -175,7 +386,7 @@ export function Modal({
   wide = false,
 }: {
   open: boolean;
-  title: string;
+  title: React.ReactNode;
   onClose: () => void;
   children: React.ReactNode;
   wide?: boolean;
@@ -237,12 +448,12 @@ export function PasswordConfirmModal({
       <form onSubmit={submit} className="space-y-4">
         {description && <p className="text-sm text-slate-600 dark:text-slate-300">{description}</p>}
         <ErrorAlert message={err} />
-        <Input
+        <SecretInput
           label="当前管理员密码（二次验证）"
-          type="password"
           required
           value={pw}
-          onChange={(e) => setPw(e.target.value)}
+          onChangeValue={setPw}
+          resetKey={open}
         />
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>
@@ -262,7 +473,7 @@ export function SectionTabs({
   active,
   onChange,
 }: {
-  tabs: Array<{ id: string; label: string }>;
+  tabs: Array<{ id: string; label: React.ReactNode; tip?: string }>;
   active: string;
   onChange: (id: string) => void;
 }) {
@@ -273,13 +484,14 @@ export function SectionTabs({
           key={t.id}
           type="button"
           onClick={() => onChange(t.id)}
-          className={`border-b-2 px-3.5 py-2 text-sm font-medium transition ${
+          className={`inline-flex items-center border-b-2 px-3.5 py-2 text-sm font-medium transition ${
             active === t.id
               ? 'border-emerald-600 text-emerald-600 dark:border-emerald-400 dark:text-emerald-400'
               : 'border-transparent text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
           }`}
         >
-          {t.label}
+          <span>{t.label}</span>
+          {t.tip && <InfoTip text={t.tip} />}
         </button>
       ))}
     </div>

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
 import { apiDelete, apiGet, apiPost, apiPut, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, PasswordConfirmModal, Select } from '../components/UI';
+import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, PasswordConfirmModal, SecretInput, Select } from '../components/UI';
 
 export function AccountsPage() {
   const { isAdmin, user } = useAuth();
@@ -63,8 +63,8 @@ export function AccountsPage() {
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <Card title={`修改当前账号密码 (${user?.username})`}>
           <form onSubmit={changeOwnPassword} className="space-y-3">
-            <Input label="当前密码" type="password" required value={curPw} onChange={(e) => setCurPw(e.target.value)} />
-            <Input label="新密码" type="password" required value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+            <SecretInput label="当前密码" required value={curPw} onChangeValue={setCurPw} />
+            <SecretInput label="新密码" required value={newPw} onChangeValue={setNewPw} />
             <Button type="submit" variant="primary">修改密码</Button>
           </form>
         </Card>
@@ -206,7 +206,7 @@ export function AccountsPage() {
           className="space-y-3"
         >
           <Input label="用户名" required value={newAdmin.username} onChange={(e) => setNewAdmin({ ...newAdmin, username: e.target.value })} />
-          <Input label="初始密码" type="password" required value={newAdmin.password} onChange={(e) => setNewAdmin({ ...newAdmin, password: e.target.value })} />
+          <SecretInput label="初始密码" required value={newAdmin.password} onChangeValue={(v) => setNewAdmin({ ...newAdmin, password: v })} />
           <Select label="角色" value={newAdmin.role} onChange={(e) => setNewAdmin({ ...newAdmin, role: e.target.value })}>
             <option value="viewer">viewer（只读运维）</option>
             <option value="admin">admin（完全控制）</option>
@@ -238,12 +238,11 @@ export function AccountsPage() {
             }}
             className="space-y-3"
           >
-            <Input
+            <SecretInput
               label="新密码"
-              type="password"
               required
               value={resetTarget.password}
-              onChange={(e) => setResetTarget({ ...resetTarget, password: e.target.value })}
+              onChangeValue={(v) => setResetTarget({ ...resetTarget, password: v })}
             />
             <div className="flex justify-end gap-2">
               <Button type="button" onClick={() => setResetTarget(null)}>取消</Button>

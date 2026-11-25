@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Copy, KeyRound, Plus, RefreshCw, Server as ServerIcon, Trash2 } from 'lucide-react';
-import { apiDelete, apiGet, apiPost, apiPut, fmtTime } from '../lib/api';
+import { Activity, Copy, KeyRound, Plus, RefreshCw, Server as ServerIcon, Trash2 } from 'lucide-react';
+import { apiDelete, apiGet, apiPost, apiPut, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, PasswordConfirmModal, SectionTabs, Select, statusTone } from '../components/UI';
+import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, PasswordConfirmModal, SecretInput, SectionTabs, Select, TermLabel, statusTone } from '../components/UI';
 
 export function InfraPage() {
   const { isAdmin } = useAuth();
@@ -13,6 +13,7 @@ export function InfraPage() {
   const [nodes, setNodes] = useState<any[]>([]);
   const [err, setErr] = useState('');
   const [notice, setNotice] = useState('');
+  const [metricsBusy, setMetricsBusy] = useState(false);
 
   // Key modals
   const [showGenKey, setShowGenKey] = useState(false);
@@ -230,13 +231,40 @@ export function InfraPage() {
     setNotice(msg);
   };
 
+  const refreshAllMetrics = async () => {
+    setMetricsBusy(true);
+    setErr('');
+    try {
+      const res = await apiPost('/api/v1/nodes/metrics/refresh', {});
+      if (Array.isArray(res.nodes)) setNodes(res.nodes);
+      setNotice(`主机实时负载采集完成：成功 ${res.ok ?? 0}，失败 ${res.failed ?? 0}`);
+    } catch (ex: any) {
+      setErr(ex?.message || '采集主机负载失败');
+    } finally {
+      setMetricsBusy(false);
+    }
+  };
+
+  const refreshNodeMetrics = async (node: any) => {
+    setErr('');
+    try {
+      const res = await apiPost(`/api/v1/nodes/${node.id}/metrics`, {});
+      if (res.node) {
+        setNodes((prev) => prev.map((x) => (x.id === node.id ? res.node : x)));
+      }
+      setNotice(`已刷新 ${node.name} CPU/内存利用率`);
+    } catch (ex: any) {
+      setErr(ex?.message || `采集 ${node.name} 负载失败`);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SectionTabs
           tabs={[
             { id: 'nodes', label: `主机节点 (${nodes.length})` },
-            { id: 'keys', label: `SSH 密钥库 (${keys.length})` },
+            { id: 'keys', label: `SSH 密钥库 (${keys.length})`, tip: '控制面使用 Ed25519 私钥免密登录目标主机（首次连接支持 TOFU 主机指纹信任）。' },
           ]}
           active={tab}
           onChange={setTab}
@@ -247,10 +275,16 @@ export function InfraPage() {
             <span>刷新</span>
           </Button>
           {isAdmin && tab === 'nodes' && (
-            <Button size="sm" variant="primary" onClick={openAddNode}>
-              <Plus className="h-3.5 w-3.5" />
-              <span>新增主机</span>
-            </Button>
+            <>
+              <Button size="sm" disabled={metricsBusy} onClick={() => void refreshAllMetrics()}>
+                <Activity className="h-3.5 w-3.5" />
+                <span>{metricsBusy ? '采集中...' : '采集实时负载'}</span>
+              </Button>
+              <Button size="sm" variant="primary" onClick={openAddNode}>
+                <Plus className="h-3.5 w-3.5" />
+                <span>新增主机</span>
+              </Button>
+            </>
           )}
           {isAdmin && tab === 'keys' && (
             <>
@@ -304,15 +338,19 @@ export function InfraPage() {
                   <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
                     <th className="py-2 pr-3">名称 / 地址</th>
                     <th className="py-2 pr-3">状态</th>
+                    <th className="py-2 pr-3">CPU / 内存利用率</th>
                     <th className="py-2 pr-3">系统 / 架构</th>
                     <th className="py-2 pr-3">Docker</th>
-                    <th className="py-2 pr-3">时间同步</th>
-                    <th className="py-2 pr-3">Machine ID</th>
+                    <th className="py-2 pr-3"><TermLabel term="时间同步" tip="Raft 一致性依赖各节点系统时间同步（chrony / systemd-timesyncd），偏差过大会导致选举抖动或 TLS 校验异常。" /></th>
+                    <th className="py-2 pr-3"><TermLabel term="Machine ID" tip="/etc/machine-id，用于探测克隆虚拟机导致的节点身份冲突。" /></th>
                     {isAdmin && <th className="py-2 text-right">操作</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {nodes.map((n) => (
+                  {nodes.map((n) => {
+                    const cpuPct = typeof n.cpu_percent === 'number' && n.cpu_percent >= 0 ? n.cpu_percent : null;
+                    const memPct = typeof n.mem_percent === 'number' && n.mem_percent >= 0 ? n.mem_percent : null;
+                    return (
                     <tr key={n.id}>
                       <td className="py-2.5 pr-3">
                         <div className="flex items-center gap-1.5 font-medium">
@@ -325,6 +363,36 @@ export function InfraPage() {
                       </td>
                       <td className="py-2.5 pr-3">
                         <Badge tone={statusTone(n.status)}>{n.status || 'unknown'}</Badge>
+                      </td>
+                      <td className="py-2.5 pr-3 min-w-[160px]">
+                        <div className="space-y-1.5 text-[11px]">
+                          <div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">CPU{n.cpu_cores > 0 ? ` (${n.cpu_cores}C)` : ''}</span>
+                              <span className="font-mono">{cpuPct !== null ? `${cpuPct.toFixed(1)}%` : '-'}</span>
+                            </div>
+                            <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded bg-slate-200 dark:bg-slate-800">
+                              <div
+                                className={`h-full ${cpuPct !== null && cpuPct >= 85 ? 'bg-rose-500' : cpuPct !== null && cpuPct >= 65 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                                style={{ width: `${Math.min(100, Math.max(0, cpuPct ?? 0))}%` }}
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-500">
+                                内存{n.mem_total_bytes > 0 ? ` (${fmtBytes(n.mem_used_bytes)}/${fmtBytes(n.mem_total_bytes)})` : ''}
+                              </span>
+                              <span className="font-mono">{memPct !== null ? `${memPct.toFixed(1)}%` : '-'}</span>
+                            </div>
+                            <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded bg-slate-200 dark:bg-slate-800">
+                              <div
+                                className={`h-full ${memPct !== null && memPct >= 85 ? 'bg-rose-500' : memPct !== null && memPct >= 65 ? 'bg-amber-500' : 'bg-sky-500'}`}
+                                style={{ width: `${Math.min(100, Math.max(0, memPct ?? 0))}%` }}
+                              />
+                            </div>
+                          </div>
+                        </div>
                       </td>
                       <td className="py-2.5 pr-3">
                         <div>{n.os_info || '-'}</div>
@@ -344,6 +412,9 @@ export function InfraPage() {
                       {isAdmin && (
                         <td className="py-2.5 text-right">
                           <div className="flex flex-wrap justify-end gap-1">
+                            <Button size="sm" onClick={() => void refreshNodeMetrics(n)}>
+                              负载
+                            </Button>
                             <Button size="sm" onClick={() => void testNode(n)}>
                               探测
                             </Button>
@@ -377,7 +448,8 @@ export function InfraPage() {
                         </td>
                       )}
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -536,7 +608,7 @@ export function InfraPage() {
       <Modal open={Boolean(pushNode)} title={`推送公钥到 ${pushNode?.name}`} onClose={() => setPushNode(null)}>
         <form onSubmit={doPushKey} className="space-y-4">
           <p className="text-xs text-slate-500">使用一次性 SSH 密码将关联公钥幂等写入目标主机 authorized_keys，密码仅在内存使用，不入库、不记审计。</p>
-          <Input label="目标主机 SSH 密码" type="password" required value={pushPassword} onChange={(e) => setPushPassword(e.target.value)} />
+          <SecretInput label="目标主机 SSH 密码" required value={pushPassword} onChangeValue={setPushPassword} />
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setPushNode(null)}>取消</Button>
             <Button type="submit" variant="primary">推送公钥</Button>

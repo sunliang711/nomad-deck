@@ -129,3 +129,24 @@ func (a *API) importTargetSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"snapshot_id": snap.ID})
 }
+
+func (a *API) revealBackupSecret(w http.ResponseWriter, r *http.Request) {
+	if a.Backup == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "灾备服务未启用")
+		return
+	}
+	var in struct {
+		Kind     string `json:"kind"`
+		TargetID string `json:"target_id"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	secret, err := a.Backup.RevealSecret(r.Context(), a.actor(r), in.Kind, in.TargetID)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"secret": secret})
+}

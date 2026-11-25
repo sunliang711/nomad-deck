@@ -29,6 +29,7 @@ type CustomPayload struct {
 	ClusterID     string `json:"cluster_id,omitempty"`
 	NodeID        string `json:"node_id,omitempty"`
 	IntegrationID string `json:"integration_id,omitempty"`
+	TargetID      string `json:"target_id,omitempty"`
 	Namespace     string `json:"namespace,omitempty"`
 	Keep          int    `json:"keep,omitempty"`
 }
@@ -217,6 +218,33 @@ func (p *Platform) installCustom(s *Scheduler) {
 			return "静态 JWKS 公钥已同步", nil
 		},
 	}
+	s.customs["safekeep_backup"] = customType{
+		validate: func(ctx context.Context, raw json.RawMessage) (any, error) {
+			pl, err := decodePayload(raw)
+			if err != nil {
+				return nil, err
+			}
+			if pl.ClusterID != "" {
+				if _, err := clusterOf(ctx, pl.ClusterID, "nomad", "vault"); err != nil {
+					return nil, err
+				}
+			}
+			if pl.TargetID != "" && p.ValidateBackupTarget != nil {
+				if err := p.ValidateBackupTarget(ctx, pl.TargetID); err != nil {
+					return nil, badRequest("备份目标不存在")
+				}
+			}
+			return CustomPayload{Type: pl.Type, TargetID: pl.TargetID, ClusterID: pl.ClusterID}, nil
+		},
+		run: func(ctx context.Context, r *Run) (string, error) {
+			var pl CustomPayload
+			_ = r.Payload(&pl)
+			if p.BackupTarget == nil {
+				return "", Skip("灾备服务不可用")
+			}
+			return p.BackupTarget(ctx, r, pl.TargetID, pl.ClusterID)
+		},
+	}
 	s.mu.Unlock()
 }
 
@@ -271,7 +299,7 @@ func (in *JobInput) apply(s *Scheduler, ctx context.Context, j *db.CronJob) erro
 		ct, ok := s.customs[head.Type]
 		s.mu.Unlock()
 		if !ok {
-			return badRequest("不支持的任务类型 %q（可选 cluster_snapshot、doctor、nomad_job_export、static_jwks_sync）", head.Type)
+			return badRequest("不支持的任务类型 %q（可选 cluster_snapshot、doctor、nomad_job_export、static_jwks_sync、safekeep_backup）", head.Type)
 		}
 		norm, err := ct.validate(ctx, in.Payload)
 		if err != nil {

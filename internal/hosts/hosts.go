@@ -501,6 +501,8 @@ func applyProbe(n *db.Node, p *sshx.ProbeResult) {
 	n.DockerMode, n.DockerStatus, n.DockerVersion = p.DockerMode, p.DockerStatus, p.DockerVersion
 	n.MachineID, n.TimeSync, n.ClockSkewMS = p.MachineID, p.TimeSync, p.ClockSkewMS
 	n.OSInfo, n.Arch, n.Status = p.OSInfo, p.Arch, "online"
+	n.CPUCores, n.CPUPercent = p.CPUCores, p.CPUPercent
+	n.MemTotalBytes, n.MemUsedBytes, n.MemPercent = p.MemTotalBytes, p.MemUsedBytes, p.MemPercent
 	b, _ := json.Marshal(p)
 	n.ProbeJSON = string(b)
 }
@@ -577,26 +579,56 @@ func (s *Service) InstallArtifact(ctx context.Context, c *sshx.Client, opID stri
 		SHA256: a.PayloadSHA256, Dest: dest, Mode: mode, RateLimit: rateLimit})
 }
 
-// Ping checks SSH reachability (connect and run a no-op) and records the
-// node's status as online or offline.
+// Ping checks SSH reachability, collects CPU/memory utilization, and records
+// the node's status as online or offline.
 func (s *Service) Ping(ctx context.Context, n *db.Node) error {
 	pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	c, err := s.Connect(pctx, n)
+	var metrics *sshx.NodeMetrics
 	if err == nil {
-		var res *sshx.Result
-		res, err = c.Run(pctx, "true", sshx.RunOptions{})
-		if err == nil && res.ExitCode != 0 {
-			err = fmt.Errorf("exit code %d", res.ExitCode)
-		}
+		metrics, err = sshx.CollectMetrics(pctx, c)
 		if err != nil {
 			s.Pool.DropPrefix(n.ID)
 		}
 	}
-	status := "online"
 	if err != nil {
-		status = "offline"
+		_ = db.UpdateNodeStatus(ctx, s.DB.Writer, n.ID, "offline", s.DB.Now())
+		return err
 	}
-	_ = db.UpdateNodeStatus(ctx, s.DB.Writer, n.ID, status, s.DB.Now())
-	return err
+	_ = db.UpdateNodeMetrics(ctx, s.DB.Writer, n.ID, "online",
+		metrics.CPUCores, metrics.CPUPercent, metrics.MemTotalBytes, metrics.MemUsedBytes, metrics.MemPercent, s.DB.Now())
+	return nil
+}
+
+// RefreshNodeMetrics collects live CPU and memory metrics for a single host.
+func (s *Service) RefreshNodeMetrics(ctx context.Context, id string) (*db.Node, error) {
+	n, err := db.GetNode(ctx, s.DB.Reader, id)
+	if errors.Is(err, db.ErrNotFound) {
+		return nil, errNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Ping(ctx, n); err != nil {
+		return nil, &auth.Error{Status: 502, Code: "ssh_failed", Message: "采集主机负载失败：" + err.Error()}
+	}
+	return db.GetNode(ctx, s.DB.Reader, id)
+}
+
+// RefreshAllMetrics refreshes CPU and memory metrics across all registered hosts.
+func (s *Service) RefreshAllMetrics(ctx context.Context) (int, int, error) {
+	nodes, err := db.ListNodes(ctx, s.DB.Reader)
+	if err != nil {
+		return 0, 0, err
+	}
+	var okCount, failCount int
+	for _, n := range nodes {
+		if err := s.Ping(ctx, n); err != nil {
+			failCount++
+		} else {
+			okCount++
+		}
+	}
+	return okCount, failCount, nil
 }

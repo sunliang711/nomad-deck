@@ -8,6 +8,7 @@ import (
 
 	"nomad-deck/internal/auth"
 	"nomad-deck/internal/db"
+	"nomad-deck/internal/version"
 )
 
 type userView struct {
@@ -24,7 +25,7 @@ func (a *API) authStatus(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, r, err)
 		return
 	}
-	resp := map[string]any{"needs_setup": needs, "authenticated": false}
+	resp := map[string]any{"needs_setup": needs, "authenticated": false, "version": version.Version}
 	if p := principalFrom(r.Context()); p != nil {
 		c, _ := r.Cookie(SessionCookie)
 		resp["authenticated"] = true

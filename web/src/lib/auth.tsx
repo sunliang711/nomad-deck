@@ -11,6 +11,7 @@ interface AuthState {
   loading: boolean;
   needsSetup: boolean;
   authenticated: boolean;
+  version: string;
   user: AuthUser | null;
   isAdmin: boolean;
   refresh: () => Promise<void>;
@@ -21,6 +22,7 @@ const AuthContext = createContext<AuthState>({
   loading: true,
   needsSetup: false,
   authenticated: false,
+  version: '',
   user: null,
   isAdmin: false,
   refresh: async () => {},
@@ -31,6 +33,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
+  const [version, setVersion] = useState('');
   const [user, setUser] = useState<AuthUser | null>(null);
 
   const refresh = useCallback(async () => {
@@ -38,11 +41,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await apiGet<{
         needs_setup: boolean;
         authenticated: boolean;
+        version?: string;
         user?: AuthUser;
         csrf_token?: string;
       }>('/api/v1/auth/status');
       setNeedsSetup(Boolean(data.needs_setup));
       setAuthenticated(Boolean(data.authenticated));
+      setVersion(data.version || '');
       setUser(data.user || null);
       setCSRFToken(data.csrf_token || '');
     } catch {
@@ -80,6 +85,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         needsSetup,
         authenticated,
+        version,
         user,
         isAdmin: user?.role === 'admin',
         refresh,

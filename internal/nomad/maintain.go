@@ -355,9 +355,11 @@ func (s *Service) PlanUpgrade(ctx context.Context, clusterID, version string) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := validVersion(version); err != nil {
+	resolved, err := s.resolveVersion(ctx, nil, version)
+	if err != nil {
 		return nil, err
 	}
+	version = resolved
 	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return nil, err
@@ -388,6 +390,15 @@ func (s *Service) Upgrade(ctx context.Context, actor audit.Actor, clusterID stri
 	if err := s.requireOperable(cl); err != nil {
 		return nil, err
 	}
+	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := s.resolveVersion(ctx, hc, in.Version)
+	if err != nil {
+		return nil, err
+	}
+	in.Version = resolved
 	plan, err := s.PlanUpgrade(ctx, clusterID, in.Version)
 	if err != nil {
 		return nil, err
@@ -407,10 +418,6 @@ func (s *Service) Upgrade(ctx context.Context, actor audit.Actor, clusterID stri
 	}
 	if in.ClientBatch <= 0 {
 		in.ClientBatch = 1
-	}
-	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
-	if err != nil {
-		return nil, err
 	}
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.upgrade", TargetType: "cluster", TargetID: clusterID,
 		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name,

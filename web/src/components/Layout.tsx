@@ -40,7 +40,7 @@ const navItems = [
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { user, isAdmin, logout } = useAuth();
+  const { user, isAdmin, version, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const loc = useLocation();
@@ -49,11 +49,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const navContent = (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3.5 dark:border-slate-800">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-600 font-bold text-xs text-white">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-emerald-600 font-bold text-xs text-white">
           ND
         </div>
-        <div>
-          <div className="font-bold text-sm tracking-tight">NomadDeck</div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="font-bold text-sm tracking-tight">NomadDeck</span>
+            {version && (
+              <NavLink
+                to="/version"
+                title={`当前版本 ${version}（点击查看版本与升级）`}
+                className="truncate rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-medium text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-emerald-950/70 dark:hover:text-emerald-300"
+              >
+                {version}
+              </NavLink>
+            )}
+          </div>
           <div className="text-[11px] text-slate-500">集群运维控制面</div>
         </div>
       </div>

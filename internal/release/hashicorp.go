@@ -117,6 +117,18 @@ func (h *HashiCorp) Versions(ctx context.Context, client *http.Client, product s
 	return out, nil
 }
 
+// LatestVersion returns the newest stable version at or above MinVersions.
+func (h *HashiCorp) LatestVersion(ctx context.Context, client *http.Client, product string) (string, error) {
+	versions, err := h.Versions(ctx, client, product)
+	if err != nil {
+		return "", err
+	}
+	if len(versions) == 0 {
+		return "", fmt.Errorf("no stable %s releases found", product)
+	}
+	return versions[0], nil
+}
+
 // Fetch returns a verified artifact, downloading it when not cached.
 func (h *HashiCorp) Fetch(ctx context.Context, client *http.Client, product, version, goos, arch string, log io.Writer) (*Artifact, error) {
 	if _, ok := MinVersions[product]; !ok {

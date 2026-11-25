@@ -346,12 +346,34 @@ func (s *Service) httpClient(ctx context.Context, useProxy *bool) (*httpClientRe
 
 func validVersion(v string) error {
 	if err := sshx.ValidVersion(v); err != nil || IsEnterprise(v) || strings.ContainsAny(v, "+-") {
-		return badRequest("版本号 %q 无效（只支持 Community 正式版）", v)
+		return badRequest("版本号 %q 无效（只支持 Community 正式版或 latest）", v)
 	}
 	if release.CompareVersions(v, release.MinVersions["vault"]) < 0 {
 		return badRequest("Vault 版本需不低于 %s", release.MinVersions["vault"])
 	}
 	return nil
+}
+
+func (s *Service) resolveVersion(ctx context.Context, hc *httpClientResult, raw string) (string, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" || strings.EqualFold(v, "latest") {
+		if hc == nil {
+			var err error
+			hc, err = s.httpClient(ctx, nil)
+			if err != nil {
+				return "", err
+			}
+		}
+		latest, err := s.Releases.HashiCorp(ctx).LatestVersion(ctx, hc.client, "vault")
+		if err != nil {
+			return "", fmt.Errorf("获取 Vault 最新版本失败：%w", err)
+		}
+		return latest, nil
+	}
+	if err := validVersion(v); err != nil {
+		return "", err
+	}
+	return v, nil
 }
 
 // fetchArtifacts downloads and verifies the release for every architecture in use.
@@ -419,9 +441,15 @@ func (s *Service) Deploy(ctx context.Context, actor audit.Actor, clusterID strin
 	if cl.MaintenanceMode {
 		return nil, conflict("maintenance", "集群处于维护模式（%s）", cl.MaintenanceReason)
 	}
-	if err := validVersion(in.Version); err != nil {
+	hc, err := s.httpClient(ctx, in.UseProxy)
+	if err != nil {
 		return nil, err
 	}
+	version, err := s.resolveVersion(ctx, hc, in.Version)
+	if err != nil {
+		return nil, err
+	}
+	in.Version = version
 	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return nil, err
@@ -434,10 +462,6 @@ func (s *Service) Deploy(ctx context.Context, actor audit.Actor, clusterID strin
 		return nil, err
 	}
 	if err := blocking(issues); err != nil {
-		return nil, err
-	}
-	hc, err := s.httpClient(ctx, in.UseProxy)
-	if err != nil {
 		return nil, err
 	}
 	members = sortedMembers(members)

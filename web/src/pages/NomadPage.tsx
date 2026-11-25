@@ -1,14 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, RefreshCw, Terminal } from 'lucide-react';
+import { Plus, RefreshCw } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import {
-  Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, PasswordConfirmModal, SectionTabs, Select, statusTone,
+  Badge, Button, Card, EmptyState, ErrorAlert, Input, MaskedSecret, Modal, PasswordConfirmModal, SecretInput, SectionTabs, Select, statusTone,
 } from '../components/UI';
 import { NomadWorkbench } from '../components/NomadWorkbench';
 import { CodeEditor } from '../components/CodeEditor';
+import { ClusterOpsSection } from '../components/ClusterOpsSection';
 
 export function NomadPage() {
   const { isAdmin } = useAuth();
@@ -18,7 +19,7 @@ export function NomadPage() {
   const [clusters, setClusters] = useState<any[]>([]);
   const [nodes, setNodes] = useState<any[]>([]);
   const [selectedId, setSelectedId] = useState('');
-  const [tab, setTab] = useState('workbench');
+  const [tab, setTab] = useState('status');
   const [status, setStatus] = useState<any>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
   const [namespaces, setNamespaces] = useState<any[]>([]);
@@ -35,12 +36,14 @@ export function NomadPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [cForm, setCForm] = useState({ name: '', mode: 'cluster', region: 'global', datacenter: 'dc1', public_api_url: '', members: [] as Array<{ node_id: string; role: string; advertise_addr: string }> });
-  const [deployVer, setDeployVer] = useState('1.11.1');
+  const [deployVer, setDeployVer] = useState('latest');
   const [upVer, setUpVer] = useState('');
   const [showJoin, setShowJoin] = useState(false);
   const [joinNodeId, setJoinNodeId] = useState('');
   const [joinRole, setJoinRole] = useState('server_client');
   const [useProxy, setUseProxy] = useState(false);
+  const [drainClients, setDrainClients] = useState(true);
+  const [gateView, setGateView] = useState<any>(null);
   const [snapPass, setSnapPass] = useState('');
   const [snapFile, setSnapFile] = useState<File | null>(null);
   const [pwAction, setPwAction] = useState<{ title: string; run: (pw: string) => Promise<void> } | null>(null);
@@ -106,14 +109,18 @@ export function NomadPage() {
 
   useEffect(() => {
     void apiGet('/api/v1/settings').then((r) => {
-      setDeployVer(r.settings?.['defaults.nomad_version'] || '');
+      setDeployVer(r.settings?.['defaults.nomad_version'] || 'latest');
       setUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
     }).catch((ex) => setErr(ex.message));
   }, []);
 
   useEffect(() => {
-    if (selectedId && (tab === 'nodes' || tab === 'snapshots')) void loadOpsTab();
+    setGateView(null);
+    if (selectedId && (tab === 'status' || tab === 'snapshots')) void loadOpsTab();
     if (selectedId && tab === 'governance') void loadGovernance();
+    if (!selectedId || tab !== 'status') return;
+    const t = setInterval(() => void loadOpsTab(), 30000);
+    return () => clearInterval(t);
   }, [selectedId, tab, loadOpsTab]);
 
   const cluster = clusters.find((c) => c.id === selectedId);
@@ -139,7 +146,7 @@ export function NomadPage() {
           ))}
         </div>
         <div className="flex gap-2">
-          <Button size="sm" onClick={() => { void loadList(); if (tab === 'nodes' || tab === 'snapshots') void loadOpsTab(); if (tab === 'governance') void loadGovernance(); }}><RefreshCw className="h-3.5 w-3.5" /> 刷新</Button>
+          <Button size="sm" onClick={() => { void loadList(); if (tab === 'status' || tab === 'snapshots') void loadOpsTab(); if (tab === 'governance') void loadGovernance(); }}><RefreshCw className="h-3.5 w-3.5" /> 刷新</Button>
           {isAdmin && (
             <Button size="sm" variant="primary" onClick={() => setShowCreate(true)}>
               <Plus className="h-3.5 w-3.5" /> 新建 Nomad 集群
@@ -150,11 +157,7 @@ export function NomadPage() {
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
       {notice && <div className="rounded bg-emerald-50 px-3.5 py-2 text-xs text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">{notice}</div>}
-      {newToken && (
-        <div className="rounded border border-emerald-300 bg-emerald-50 p-3 text-xs dark:border-emerald-800 dark:bg-emerald-950/60">
-          新签发 ACL Token Secret（仅展示一次）：<code className="font-mono font-bold">{newToken}</code>
-        </div>
-      )}
+      {newToken && <MaskedSecret value={newToken} label="新签发 ACL Token Secret（仅展示一次）：" />}
 
       {!cluster ? (
         <Card><EmptyState text="暂无 Nomad 集群" /></Card>
@@ -162,109 +165,106 @@ export function NomadPage() {
         <div className="space-y-4">
           <SectionTabs
             tabs={[
-              { id: 'workbench', label: '运行态工作台' },
-              { id: 'nodes', label: '节点与集群运维' },
-              { id: 'snapshots', label: `Raft 快照 (${snapshots.length})` },
-              { id: 'governance', label: '治理 (Namespace / Pool / ACL)' },
+              { id: 'status', label: '集群状态详情' },
+              { id: 'workbench', label: '运行态工作台', tip: '实时查看与管理 Nomad Clients、Servers、Allocations、Deployments、CSI 存储与 Variables。' },
+              { id: 'snapshots', label: `Raft 快照 (${snapshots.length})`, tip: '保存与恢复 Nomad Server Raft 状态机中的任务、变量与 ACL 快照。' },
+              { id: 'governance', label: '治理 (Namespace / Pool / ACL)', tip: '配置多租户命名空间（Namespace）、节点资源池（Node Pool）与访问控制（ACL Policy / Role / Token）。' },
             ]}
             active={tab}
             onChange={setTab}
           />
 
-          {tab === 'workbench' && <NomadWorkbench key={selectedId} clusterId={selectedId} />}
-
-          {tab === 'nodes' && (
+          {tab === 'status' && (
             <div className="space-y-4">
-              {isAdmin && (
-                <Card title="集群部署、升级与证书维护">
-                  <div className="flex flex-wrap items-center gap-3 text-xs">
-                    <div className="flex items-center gap-1.5">
-                      <Input placeholder="版本" value={deployVer} onChange={(e) => setDeployVer(e.target.value)} />
-                      <Button variant="primary" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer, use_proxy: useProxy }).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>一键部署</Button>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <Input placeholder="升级版本" value={upVer} onChange={(e) => setUpVer(e.target.value)} />
-                      <Button onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer, use_proxy: useProxy, confirm: true }).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>滚动升级</Button>
-                    </div>
-                    <label className="flex items-center gap-1.5">
-                      <input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} /> 使用系统代理
-                    </label>
-                    <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>续期证书</Button>
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        setPwAction({
-                          title: '确认轮换 Nomad 集群 CA',
-                          run: async (pw) => {
-                            const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
-                            if (r.task?.id) openTask(r.task.id, '轮换 Nomad CA');
-                          },
-                        })
-                      }
-                    >
-                      轮换 CA
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        setPwAction({
-                          title: '确认轮换 Nomad Gossip 密钥',
-                          run: async (pw) => {
-                            const r = await apiPost(`/api/v1/clusters/${selectedId}/gossip/rotate`, { current_password: pw });
-                            if (r.task?.id) openTask(r.task.id, '轮换 Gossip 密钥');
-                          },
-                        })
-                      }
-                    >
-                      轮换 Gossip
-                    </Button>
-                    <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/doctor`, {}).then((r) => setNotice(r.report?.summary || 'Doctor 完成')).catch((ex) => setErr(ex.message))}>Doctor 体检</Button>
-                    <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {}).then((r) => setNotice(r.report?.message || '已核对')).catch((ex) => setErr(ex.message))}>核对解锁</Button>
+              <ClusterOpsSection
+                product="nomad"
+                cluster={cluster}
+                status={status}
+                clusterNodes={clusterNodes}
+                isAdmin={isAdmin}
+                deployVer={deployVer}
+                setDeployVer={setDeployVer}
+                upVer={upVer}
+                setUpVer={setUpVer}
+                useProxy={useProxy}
+                setUseProxy={setUseProxy}
+                drainClients={drainClients}
+                setDrainClients={setDrainClients}
+                onDeploy={() =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', use_proxy: useProxy })
+                    .then((r) => r.task?.id && openTask(r.task.id, '部署 Nomad'))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onUpgrade={() =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', use_proxy: useProxy, drain_clients: drainClients, confirm: true })
+                    .then((r) => r.task?.id && openTask(r.task.id, '滚动升级 Nomad'))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onRenewCerts={() =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
+                    .then((r) => r.task?.id && openTask(r.task.id))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onRotateCA={() =>
+                  setPwAction({
+                    title: '确认轮换 Nomad 集群 CA',
+                    run: async (pw) => {
+                      const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
+                      if (r.task?.id) openTask(r.task.id, '轮换 Nomad CA');
+                    },
+                  })
+                }
+                onRotateGossip={() =>
+                  setPwAction({
+                    title: '确认轮换 Nomad Gossip 密钥',
+                    run: async (pw) => {
+                      const r = await apiPost(`/api/v1/clusters/${selectedId}/gossip/rotate`, { current_password: pw });
+                      if (r.task?.id) openTask(r.task.id, '轮换 Gossip 密钥');
+                    },
+                  })
+                }
+                onDoctor={() =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
+                    .then((r) => setNotice(r.report?.summary || 'Doctor 完成'))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onReconcile={() =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
+                    .then((r) => setNotice(r.report?.message || '已核对'))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onOpenJoin={() => { setJoinNodeId(''); setShowJoin(true); }}
+                onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Nomad 日志: ${n.name}`)}
+                onCheckGate={(n) =>
+                  void apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
+                    .then((r) => setGateView(r.gate))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onRestartNode={(n) =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
+                    .then((r) => r.task?.id && openTask(r.task.id))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onRemoveNode={(n) =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {})
+                    .then((r) => r.task?.id && openTask(r.task.id))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onError={setErr}
+              />
+
+              {gateView && (
+                <Card title="仲裁门禁预览" actions={<Button size="sm" onClick={() => setGateView(null)}>关闭</Button>}>
+                  <div className="text-xs">
+                    结果：<Badge tone={gateView.allowed ? 'green' : 'red'}>{gateView.allowed ? '允许' : '拦截'}</Badge>{' '}
+                    <span className="ml-2">{gateView.reason}</span>
                   </div>
                 </Card>
               )}
-
-              <Card title="集群成员节点" actions={isAdmin && <Button size="sm" onClick={() => { setJoinNodeId(''); setShowJoin(true); }}>扩容节点</Button>}>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
-                        <th className="py-2 pr-3">节点 / 角色</th>
-                        <th className="py-2 pr-3">地址 / 版本</th>
-                        <th className="py-2 pr-3">服务 / Raft</th>
-                        <th className="py-2 text-right">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {clusterNodes.map((n: any) => (
-                        <tr key={n.node_id}>
-                          <td className="py-2 pr-3">
-                            <div className="font-medium">{n.name}</div>
-                            <Badge>{n.role}</Badge>
-                          </td>
-                          <td className="py-2 pr-3 font-mono">{n.api_addr} · {n.installed_version || '-'}</td>
-                          <td className="py-2 pr-3">{n.service_status} · {n.raft_role}</td>
-                          <td className="py-2 text-right">
-                            <div className="flex flex-wrap justify-end gap-1">
-                              <Button size="sm" onClick={() => openNodeLogs(selectedId, n.node_id, `Nomad 日志: ${n.name}`)}>
-                                <Terminal className="h-3 w-3" /> 日志
-                              </Button>
-                              {isAdmin && (
-                                <>
-                                  <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>重启</Button>
-                                  <Button size="sm" variant="danger" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>缩容</Button>
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
             </div>
           )}
+
+          {tab === 'workbench' && <NomadWorkbench key={selectedId} clusterId={selectedId} />}
 
           {tab === 'snapshots' && (
             <Card
@@ -282,7 +282,7 @@ export function NomadPage() {
                   }}
                   className="mb-4 flex flex-wrap items-end gap-2 border-b border-slate-200 pb-3 text-xs dark:border-slate-800"
                 >
-                  <Input label="归档口令" type="password" value={snapPass} onChange={(e) => setSnapPass(e.target.value)} />
+                  <SecretInput label="归档口令" value={snapPass} onChangeValue={setSnapPass} />
                   <input type="file" onChange={(e) => setSnapFile(e.target.files?.[0] || null)} />
                   <Button type="submit">上传登记</Button>
                 </form>
@@ -557,8 +557,8 @@ export function NomadPage() {
           className="space-y-3 text-xs"
         >
           <ErrorAlert message={dlErr} />
-          <Input label="当前管理员登录密码" type="password" required value={dlPw} onChange={(e) => setDlPw(e.target.value)} />
-          <Input label="归档加密口令（至少 12 位）" type="password" required minLength={12} value={dlPass} onChange={(e) => setDlPass(e.target.value)} />
+          <SecretInput label="当前管理员登录密码" required value={dlPw} onChangeValue={setDlPw} />
+          <SecretInput label="归档加密口令（至少 12 位）" required minLength={12} value={dlPass} onChangeValue={setDlPass} />
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setDlModal(null)}>取消</Button>
             <Button type="submit" variant="primary" disabled={dlBusy}>{dlBusy ? '导出中...' : '确认导出'}</Button>

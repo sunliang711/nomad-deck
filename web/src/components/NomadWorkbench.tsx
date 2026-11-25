@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, Search, Terminal } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, fmtBytes, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Sparkline, statusTone } from './UI';
+import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Sparkline, TermLabel, statusTone } from './UI';
 import { TerminalModal } from './TerminalModal';
 import { CodeEditor } from './CodeEditor';
 
@@ -229,13 +229,13 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SectionTabs
           tabs={[
-            { id: 'jobs', label: 'Jobs' },
-            { id: 'clients', label: 'Clients' },
-            { id: 'servers', label: 'Servers' },
-            { id: 'topology', label: '拓扑容量' },
-            { id: 'storage', label: '存储 / CSI' },
-            { id: 'variables', label: 'Variables' },
-            { id: 'evaluations', label: 'Evaluations' },
+            { id: 'jobs', label: 'Jobs', tip: 'Nomad 调度编排的工作负载单元（包含 service/batch/system 等类型）。' },
+            { id: 'clients', label: 'Clients', tip: '运行任务容器/Allocations 的计算工作节点，可执行调度启用/禁用与 Drain 排空。' },
+            { id: 'servers', label: 'Servers', tip: '通过 Raft 共识维护集群状态和执行调度决策的控制面节点。' },
+            { id: 'topology', label: '拓扑容量', tip: '按数据中心与节点汇总的 CPU/内存分配率与剩余调度容量视图。' },
+            { id: 'storage', label: '存储 / CSI', tip: 'Container Storage Interface 持久化卷及对应存储插件（如 Ceph/NFS/EBS）。' },
+            { id: 'variables', label: 'Variables', tip: 'Nomad 内置键值密钥/配置存储，支持带 CAS（乐观锁版本号）的原子更新。' },
+            { id: 'evaluations', label: 'Evaluations', tip: '每次 Job 变更、节点故障或周期触发产生的调度计算请求，用于决定 Allocation 迁移。' },
           ]}
           active={subTab}
           onChange={setSubTab}
@@ -381,7 +381,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
 
                 {jobDeps.length > 0 && (
                   <div>
-                    <div className="mb-1 font-semibold">Deployments</div>
+                    <div className="mb-1 font-semibold"><TermLabel term="Deployments" tip="滚动发布与金丝雀升级控制器，支持 Promote（放行全量）、Pause、Resume 与 Fail 回滚。" /></div>
                     {jobDeps.map((d) => (
                       <div key={d.ID} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
                         <span>{d.ID.slice(0, 8)} · <Badge tone={statusTone(d.Status)}>{d.Status}</Badge> {d.StatusDescription}</span>
@@ -399,7 +399,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                 )}
 
                 <div>
-                  <div className="mb-1 font-semibold">Allocations ({jobAllocs.length})</div>
+                  <div className="mb-1 font-semibold"><TermLabel term={`Allocations (${jobAllocs.length})`} tip="Task Group 在具体 Client 节点上的实例化副本，可查看实时 CPU/内存、日志与进入 Web 终端。" /></div>
                   <div className="space-y-1.5">
                     {jobAllocs.map((a) => (
                       <div key={a.ID} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
@@ -556,7 +556,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
       )}
 
       {subTab === 'clients' && (
-        <Card title="Nomad Client 节点">
+        <Card title={<TermLabel term="Nomad Client 节点" tip="工作负载执行节点；Drain 操作会平滑驱逐节点上的运行实例并阻止新调度。" />}>
           <div className="space-y-2 text-xs">
             {clients.map((c) => (
               <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2.5 dark:border-slate-800">
@@ -615,7 +615,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
       )}
 
       {subTab === 'storage' && (
-        <Card title="CSI 卷与存储插件">
+        <Card title={<TermLabel term="CSI 卷与存储插件" tip="通过 Container Storage Interface (CSI) 对接外部持久化块/文件存储。" />}>
           <div className="space-y-3 text-xs">
             <div>CSI 卷数量：{volumes.length} · 插件数量：{plugins.length}</div>
             {volumes.map((v) => {
@@ -646,7 +646,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
 
       {subTab === 'variables' && (
         <Card
-          title="Nomad Variables"
+          title={<TermLabel term="Nomad Variables" tip="路径隔离的机密变量（按 CAS ModifyIndex 控制并发写冲突），可在 Job template 中注入。" />}
           actions={
             isAdmin && (
               <Button

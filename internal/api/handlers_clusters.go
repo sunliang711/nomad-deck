@@ -854,6 +854,42 @@ func (a *API) vaultRecoverToken(w http.ResponseWriter, r *http.Request) {
 	taskResponse(w, t)
 }
 
+func (a *API) vaultGenerateRootToken(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		CurrentPassword string `json:"current_password"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if _, ok := a.vaultCluster(w, r); !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
+		return
+	}
+	tok, err := a.Vault.GenerateRootToken(r.Context(), a.actor(r), chi.URLParam(r, "id"))
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"root_token": tok})
+}
+
+func (a *API) vaultRevokeRootToken(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Token string `json:"token"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if _, ok := a.vaultCluster(w, r); !ok {
+		return
+	}
+	if err := a.Vault.RevokeToken(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.Token); err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *API) vaultRekey(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		vault.RekeyInput

@@ -83,6 +83,11 @@ type Platform struct {
 	// Backup produces the control-plane disaster-recovery bundle
 	// (control_plane_backup). Nil means backups are not available.
 	Backup Handler
+	// BackupTarget backs up the control plane or a cluster snapshot to a
+	// specific backup target (e.g. SafeKeep).
+	BackupTarget func(ctx context.Context, r *Run, targetID, clusterID string) (string, error)
+	// ValidateBackupTarget verifies that targetID exists.
+	ValidateBackupTarget func(ctx context.Context, targetID string) error
 	// Offsite copies a fresh snapshot to the backup targets.
 	Offsite func(ctx context.Context, r *Run, snap *db.Snapshot, clusterName string) error
 	// SelfUpdateCheck queries the latest release.

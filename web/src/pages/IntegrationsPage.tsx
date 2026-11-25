@@ -3,7 +3,7 @@ import { Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, Select, statusTone } from '../components/UI';
+import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, Select, TermLabel, statusTone } from '../components/UI';
 import { CodeEditor } from '../components/CodeEditor';
 
 export function IntegrationsPage() {
@@ -147,7 +147,7 @@ export function IntegrationsPage() {
               isAdmin && (
                 <div className="flex flex-wrap gap-1.5">
                   <Button size="sm" onClick={() => void apiPost(`/api/v1/integrations/${selected.id}/plan`, {}).then((r) => setPlan(r.plan)).catch((ex) => setErr(ex.message))}>
-                    Plan 预览
+                    <TermLabel term="Plan 预览" tip="对比 Nomad JWKS、Vault JWT Auth 挂载、Role 与 Policy 期望状态与当前线上状态的差异。" />
                   </Button>
                   <Button
                     size="sm"
@@ -161,7 +161,7 @@ export function IntegrationsPage() {
                     一键 Apply
                   </Button>
                   <Button size="sm" onClick={() => void apiPost(`/api/v1/integrations/${selected.id}/doctor`, {}).then((r) => setDoctor(r.report)).catch((ex) => setErr(ex.message))}>
-                    四段式体检
+                    <TermLabel term="四段式体检" tip="依次检验 Nomad JWKS 公钥可达性、Vault JWT Auth 配置、工作负载 Role 绑定和签名签发链路。" />
                   </Button>
                   <Button
                     size="sm"
@@ -179,7 +179,10 @@ export function IntegrationsPage() {
             }
           >
             <div className="mb-3 flex flex-wrap gap-3 text-xs text-slate-600 dark:text-slate-300">
-              <span>Auth Mount: <code className="font-mono">{selected.auth_path}</code></span>
+              <span>
+                <TermLabel term="Auth Mount" tip="Vault 中启用 JWT 认证引擎的挂载路径，用于校验 Nomad 签发给工作负载的身份 JWT（OIDC / JWKS）。" />:{' '}
+                <code className="font-mono">{selected.auth_path}</code>
+              </span>
               <span>状态: <Badge tone={statusTone(selected.status)}>{selected.status}</Badge></span>
             </div>
 

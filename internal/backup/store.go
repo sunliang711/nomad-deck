@@ -60,6 +60,8 @@ func (s *Service) newStore(t Target) (Store, error) {
 		return &sftpStore{svc: s, target: t}, nil
 	case TargetS3:
 		return newS3Store(t)
+	case TargetSafeKeep:
+		return newSafeKeepStore(t), nil
 	default:
 		return nil, fmt.Errorf("不支持的备份目标类型：%s", t.Type)
 	}

@@ -68,8 +68,12 @@ func optProductVersion(raw json.RawMessage) (any, error) {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return nil, errors.New("需为字符串")
 	}
+	v = strings.TrimSpace(v)
 	if v == "" {
 		return v, nil
+	}
+	if strings.EqualFold(v, "latest") {
+		return "latest", nil
 	}
 	if err := sshx.ValidVersion(v); err != nil {
 		return nil, err
@@ -365,6 +369,20 @@ func (a *API) testProxy(w http.ResponseWriter, r *http.Request) {
 	_ = a.Auth.Audit.Record(r.Context(), nil, audit.Event{Actor: a.actor(r), Action: "settings.proxy_test",
 		ResourceType: "settings", ResourceName: "proxy", Summary: map[string]any{"address": cfg.Address(), "exit_ip": rep.ExitIP}})
 	writeJSON(w, http.StatusOK, map[string]any{"report": rep})
+}
+
+func (a *API) revealProxyPassword(w http.ResponseWriter, r *http.Request) {
+	_, password, err := a.Proxy.Load(r.Context())
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	_ = a.Auth.Audit.Record(r.Context(), nil, audit.Event{
+		Actor: a.actor(r), Action: "settings.proxy_password_reveal",
+		ResourceType: "settings", ResourceName: "proxy",
+	})
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"password": password})
 }
 
 // ---- Releases ----

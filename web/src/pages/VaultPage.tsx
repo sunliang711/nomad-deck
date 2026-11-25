@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Lock, Plus, RefreshCw, Terminal, Unlock } from 'lucide-react';
+import { Lock, Plus, RefreshCw, Unlock } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import {
-  Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, PasswordConfirmModal, SectionTabs, Select, statusTone,
+  Badge, Button, Card, EmptyState, ErrorAlert, Input, MaskedSecret, Modal, PasswordConfirmModal, SecretInput, SectionTabs, Select, TermLabel, statusTone,
 } from '../components/UI';
+import { ClusterOpsSection } from '../components/ClusterOpsSection';
 import { CodeEditor } from '../components/CodeEditor';
 
 export function VaultPage() {
@@ -37,11 +38,12 @@ export function VaultPage() {
   const [gateView, setGateView] = useState<any>(null);
   const [err, setErr] = useState('');
   const [notice, setNotice] = useState('');
+  const [rootToken, setRootToken] = useState('');
 
   // Create wizard
   const [showCreate, setShowCreate] = useState(false);
   const [cForm, setCForm] = useState({ name: '', mode: 'cluster', public_api_url: '', node_ids: [] as string[] });
-  const [deployVer, setDeployVer] = useState('1.18.3');
+  const [deployVer, setDeployVer] = useState('latest');
   const [useProxy, setUseProxy] = useState(false);
   const [deployConfirmSwap, setDeployConfirmSwap] = useState(false);
   const [upVer, setUpVer] = useState('');
@@ -122,12 +124,13 @@ export function VaultPage() {
 
   useEffect(() => {
     void apiGet('/api/v1/settings').then((r) => {
-      setDeployVer(r.settings?.['defaults.vault_version'] || '');
+      setDeployVer(r.settings?.['defaults.vault_version'] || 'latest');
       setUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
     }).catch((ex) => setErr(ex.message));
   }, []);
 
   useEffect(() => {
+    setRootToken('');
     setPolicyEdit({ name: '', rules: '' });
     setKvItem(null);
     setKvKeys([]);
@@ -207,9 +210,9 @@ export function VaultPage() {
           <SectionTabs
             tabs={[
               { id: 'status', label: '集群状态详情' },
-              { id: 'custody', label: '初始化与密钥托管' },
-              { id: 'snapshots', label: `Raft 快照 (${snapshots.length})` },
-              { id: 'manage', label: 'Auth / Policy / KV' },
+              { id: 'custody', label: '初始化与密钥托管', tip: '控制面托管 Vault Unseal Key（Shamir 门限分片）与短时效运维 Token，支持自动解封、Rekey 轮换及签发临时 Root Token。' },
+              { id: 'snapshots', label: `Raft 快照 (${snapshots.length})`, tip: '对 Vault Integrated Storage (Raft) 后端状态执行一致性快照备份与在线恢复。' },
+              { id: 'manage', label: 'Auth / Policy / KV', tip: '管理 Vault 认证挂载（Userpass/JWT/AppRole）、HCL 权限策略（Policy）以及 KV v2 密钥引擎。' },
             ]}
             active={tab}
             onChange={(t) => {
@@ -220,142 +223,73 @@ export function VaultPage() {
 
           {tab === 'status' && (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                <Card title="集群概要">
-                  <div className="space-y-1.5 text-xs">
-                    <div>健康状态：<Badge tone={statusTone(cluster.health_status)}>{cluster.health_status}</Badge></div>
-                    <div>初始化状态：<span className="font-mono">{cluster.init_state}</span></div>
-                    <div>维护模式：{cluster.maintenance_mode ? `是 (${cluster.maintenance_reason})` : '否'}</div>
-                    <div>Active 节点：<span className="font-mono">{status?.active_node || '-'}</span></div>
-                    <div>CA 到期：{fmtTime(cluster.ca_expires_at)}</div>
-                    <div>统一入口：<span className="font-mono">{cluster.public_api_url || '-'}</span></div>
-                  </div>
-                </Card>
-
-                <Card title="Raft 仲裁概览">
-                  <div className="space-y-1.5 text-xs">
-                    <div>投票成员：{status?.voters ?? '-'}（健康 {status?.healthy_voters ?? '-'}）</div>
-                    <div>可容忍故障数：<b>{status?.failure_tolerance ?? '-'}</b></div>
-                    {status?.failure_tolerance === 0 && (
-                      <div className="rounded bg-rose-50 p-2 text-rose-800 dark:bg-rose-950/60 dark:text-rose-200">
-                        注意：可容忍故障数为 0，再有一台节点下线将失去多数派！
-                      </div>
-                    )}
-                  </div>
-                </Card>
-
-                {isAdmin && (
-                  <Card title="部署与集群运维">
-                    <div className="space-y-2 text-xs">
-                      <div className="flex gap-2">
-                        <Input placeholder="Vault 版本" value={deployVer} onChange={(e) => setDeployVer(e.target.value)} />
-                        <Button
-                          variant="primary"
-                          onClick={() =>
-                            void apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer, use_proxy: useProxy, confirm_swap: deployConfirmSwap })
-                              .then((r) => r.task?.id && openTask(r.task.id, '部署 Vault'))
-                              .catch((ex) => setErr(ex.message))
-                          }
-                        >
-                          部署
-                        </Button>
-                      </div>
-                      <div className="flex gap-2">
-                        <Input placeholder="升级目标版本" value={upVer} onChange={(e) => setUpVer(e.target.value)} />
-                        <Button
-                          onClick={() =>
-                            void apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer, use_proxy: useProxy, confirm: true })
-                              .then((r) => r.task?.id && openTask(r.task.id, '滚动升级 Vault'))
-                              .catch((ex) => setErr(ex.message))
-                          }
-                        >
-                          升级
-                        </Button>
-                      </div>
-                      <label className="flex items-center gap-1.5">
-                        <input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} /> 使用系统代理
-                      </label>
-                      <label className="flex items-center gap-1.5">
-                        <input type="checkbox" checked={deployConfirmSwap} onChange={(e) => setDeployConfirmSwap(e.target.checked)} /> 部署确认未加密 Swap 风险
-                      </label>
-                      <div className="flex flex-wrap gap-1.5">
-                        <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>续期证书</Button>
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            setPwAction({
-                              title: '确认轮换 Vault 集群 CA',
-                              run: async (pw) => {
-                                const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
-                                if (r.task?.id) openTask(r.task.id, '轮换 Vault CA');
-                              },
-                            })
-                          }
-                        >
-                          轮换 CA
-                        </Button>
-                        <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/doctor`, {}).then((r) => setNotice(r.report?.summary || 'Doctor 完成')).catch((ex) => setErr(ex.message))}>Doctor 体检</Button>
-                        <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {}).then((r) => setNotice(r.report?.message || '已核对')).catch((ex) => setErr(ex.message))}>核对解锁</Button>
-                      </div>
-                    </div>
-                  </Card>
-                )}
-              </div>
-
-              <Card title="节点成员状态" actions={isAdmin && <Button size="sm" onClick={() => { setJoinNodeId(''); setConfirmSwap(false); setShowJoin(true); }}>扩容节点</Button>}>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
-                        <th className="py-2 pr-3">节点 / API 地址</th>
-                        <th className="py-2 pr-3">密封 / 初始化</th>
-                        <th className="py-2 pr-3">Raft 角色</th>
-                        <th className="py-2 pr-3">版本 / 证书</th>
-                        <th className="py-2 text-right">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {clusterNodes.map((n: any) => (
-                        <tr key={n.node_id}>
-                          <td className="py-2 pr-3">
-                            <div className="font-medium">{n.name}</div>
-                            <div className="font-mono text-slate-500">{n.api_addr || n.advertise_addr}</div>
-                          </td>
-                          <td className="py-2 pr-3">
-                            <Badge tone={n.sealed == null ? 'neutral' : n.sealed ? 'red' : 'green'}>{n.sealed == null ? 'Unknown' : n.sealed ? 'Sealed' : 'Unsealed'}</Badge>
-                            <span className="ml-1.5 text-slate-500">{n.service_status}</span>
-                          </td>
-                          <td className="py-2 pr-3">{n.raft_role} {n.is_voter ? '(voter)' : ''}</td>
-                          <td className="py-2 pr-3 font-mono">{n.installed_version || '-'}</td>
-                          <td className="py-2 text-right">
-                            <div className="flex flex-wrap justify-end gap-1">
-                              <Button size="sm" onClick={() => openNodeLogs(selectedId, n.node_id, `Vault 日志: ${n.name}`)}>
-                                <Terminal className="h-3 w-3" /> 日志
-                              </Button>
-                              <Button
-                                size="sm"
-                                onClick={() => void apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`).then((r) => setGateView(r.gate)).catch((ex) => setErr(ex.message))}
-                              >
-                                门禁
-                              </Button>
-                              {isAdmin && (
-                                <>
-                                  <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>
-                                    重启
-                                  </Button>
-                                  <Button size="sm" variant="danger" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>
-                                    缩容
-                                  </Button>
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
+              <ClusterOpsSection
+                product="vault"
+                cluster={cluster}
+                status={status}
+                clusterNodes={clusterNodes}
+                isAdmin={isAdmin}
+                deployVer={deployVer}
+                setDeployVer={setDeployVer}
+                upVer={upVer}
+                setUpVer={setUpVer}
+                useProxy={useProxy}
+                setUseProxy={setUseProxy}
+                confirmSwap={deployConfirmSwap}
+                setConfirmSwap={setDeployConfirmSwap}
+                onDeploy={() =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', use_proxy: useProxy, confirm_swap: deployConfirmSwap })
+                    .then((r) => r.task?.id && openTask(r.task.id, '部署 Vault'))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onUpgrade={() =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', use_proxy: useProxy, confirm: true })
+                    .then((r) => r.task?.id && openTask(r.task.id, '滚动升级 Vault'))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onRenewCerts={() =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
+                    .then((r) => r.task?.id && openTask(r.task.id))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onRotateCA={() =>
+                  setPwAction({
+                    title: '确认轮换 Vault 集群 CA',
+                    run: async (pw) => {
+                      const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
+                      if (r.task?.id) openTask(r.task.id, '轮换 Vault CA');
+                    },
+                  })
+                }
+                onDoctor={() =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
+                    .then((r) => setNotice(r.report?.summary || 'Doctor 完成'))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onReconcile={() =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
+                    .then((r) => setNotice(r.report?.message || '已核对'))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onOpenJoin={() => { setJoinNodeId(''); setConfirmSwap(false); setShowJoin(true); }}
+                onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Vault 日志: ${n.name}`)}
+                onCheckGate={(n) =>
+                  void apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
+                    .then((r) => setGateView(r.gate))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onRestartNode={(n) =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
+                    .then((r) => r.task?.id && openTask(r.task.id))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onRemoveNode={(n) =>
+                  void apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {})
+                    .then((r) => r.task?.id && openTask(r.task.id))
+                    .catch((ex) => setErr(ex.message))
+                }
+                onError={setErr}
+              />
 
               {gateView && (
                 <Card title="仲裁门禁预览" actions={<Button size="sm" onClick={() => setGateView(null)}>关闭</Button>}>
@@ -372,8 +306,11 @@ export function VaultPage() {
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <Card title="托管状态与控制">
                 <div className="space-y-3 text-xs">
-                  <div>当前代际：{custody.seal_generation ?? '-'}</div>
-                  <div>自动解封：<Badge tone={custody.auto_unseal_by_deck ? 'green' : 'amber'}>{custody.auto_unseal_by_deck ? '开启' : '关闭'}</Badge></div>
+                  <div><TermLabel term="当前代际" tip="每次执行 Rekey 会生成新的密钥代际（Generation），旧代际历史仅保留审计轨迹。" />：{custody.seal_generation ?? '-'}</div>
+                  <div>
+                    <TermLabel term="自动解封" tip="开启后控制面在巡检发现 Vault 节点被密封时自动下发托管分片完成 Unseal。" />：
+                    <Badge tone={custody.auto_unseal_by_deck ? 'green' : 'amber'}>{custody.auto_unseal_by_deck ? '开启' : '关闭'}</Badge>
+                  </div>
                   {isAdmin && <Button size="sm" onClick={() => void apiPut(`/api/v1/vault/${selectedId}/custody`, { auto_unseal_by_deck: !custody.auto_unseal_by_deck }).then(() => loadDetail()).catch((ex) => setErr(ex.message))}>{custody.auto_unseal_by_deck ? '关闭自动解封' : '开启自动解封'}</Button>}
                   {custody.unseal_suppressed_reason && (
                     <div className="rounded bg-amber-50 p-2 text-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
@@ -381,7 +318,7 @@ export function VaultPage() {
                       {isAdmin && <Button size="sm" onClick={() => setPwAction({ title: '解除自动解封抑制', run: async (pw) => { await apiPut(`/api/v1/vault/${selectedId}/custody`, { clear_suppression: true, current_password: pw }); await loadDetail(); } })}>解除抑制</Button>}
                     </div>
                   )}
-                  <div>运维 Token 到期：{fmtTime(custody.admin_token_expires_at)}</div>
+                  <div><TermLabel term="运维 Token 到期" tip="控制面持有的定期续期管理员 Token（非永久 Root Token），用于日常策略/KV 管理。" />：{fmtTime(custody.admin_token_expires_at)}</div>
                   {isAdmin && (
                     <div className="flex flex-wrap gap-2 pt-2">
                       <Button variant="primary" onClick={() => void apiPost(`/api/v1/vault/${selectedId}/init`, { key_shares: 5, key_threshold: 3 }).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>
@@ -420,6 +357,20 @@ export function VaultPage() {
                         应急重签运维 Token
                       </Button>
                       <Button
+                        onClick={() =>
+                          setPwAction({
+                            title: '签发临时 Root Token（使用托管解封密钥重建）',
+                            run: async (pw) => {
+                              const r = await apiPost(`/api/v1/vault/${selectedId}/root-token`, { current_password: pw });
+                              setRootToken(r.root_token || '');
+                              setNotice('已签发临时 Root Token，使用完毕后请及时点击“吊销 Root Token”。');
+                            },
+                          })
+                        }
+                      >
+                        签发临时 Root Token
+                      </Button>
+                      <Button
                         onClick={() => {
                           setDlPw('');
                           setDlPass('');
@@ -434,6 +385,34 @@ export function VaultPage() {
                       >
                         导出离线备份
                       </Button>
+                    </div>
+                  )}
+
+                  {rootToken && (
+                    <div className="space-y-2 pt-2">
+                      <MaskedSecret
+                        value={rootToken}
+                        label={<TermLabel term="临时 Root Token（控制面不落盘保存，请用后及时吊销）" tip="通过 Vault sys/generate-root 与托管 Unseal Key 动态重建的 Root Token，可用于登录 Vault 原生 Web UI 或执行高危恢复操作。" />}
+                      />
+                      {isAdmin && (
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={() =>
+                              void apiPost(`/api/v1/vault/${selectedId}/root-token/revoke`, { token: rootToken })
+                                .then(() => {
+                                  setRootToken('');
+                                  setNotice('临时 Root Token 已向 Vault 吊销');
+                                })
+                                .catch((ex) => setErr(ex.message))
+                            }
+                          >
+                            吊销 Root Token
+                          </Button>
+                          <Button size="sm" onClick={() => setRootToken('')}>隐藏卡片</Button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -478,7 +457,7 @@ export function VaultPage() {
                   }}
                   className="mb-4 flex flex-wrap items-end gap-2 border-b border-slate-200 pb-3 text-xs dark:border-slate-800"
                 >
-                  <Input label="归档口令" type="password" value={snapPass} onChange={(e) => setSnapPass(e.target.value)} />
+                  <SecretInput label="归档口令" value={snapPass} onChangeValue={setSnapPass} />
                   <input type="file" onChange={(e) => setSnapFile(e.target.files?.[0] || null)} />
                   <Button type="submit">上传登记归档</Button>
                 </form>
@@ -808,8 +787,8 @@ export function VaultPage() {
           className="space-y-3 text-xs"
         >
           <ErrorAlert message={dlErr} />
-          <Input label="当前管理员登录密码" type="password" required value={dlPw} onChange={(e) => setDlPw(e.target.value)} />
-          <Input label="归档加密口令（至少 12 位）" type="password" required minLength={12} value={dlPass} onChange={(e) => setDlPass(e.target.value)} />
+          <SecretInput label="当前管理员登录密码" required value={dlPw} onChangeValue={setDlPw} />
+          <SecretInput label="归档加密口令（至少 12 位）" required minLength={12} value={dlPass} onChangeValue={setDlPass} />
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setDlModal(null)}>取消</Button>
             <Button type="submit" variant="primary" disabled={dlBusy}>{dlBusy ? '导出中...' : '确认导出'}</Button>

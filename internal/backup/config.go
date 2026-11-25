@@ -35,9 +35,10 @@ const (
 
 // Target types.
 const (
-	TargetLocal = "local"
-	TargetSFTP  = "sftp"
-	TargetS3    = "s3"
+	TargetLocal    = "local"
+	TargetSFTP     = "sftp"
+	TargetS3       = "s3"
+	TargetSafeKeep = "safekeep"
 )
 
 // Default retention limits.
@@ -76,6 +77,14 @@ type Target struct {
 	SecretAccessKey string `json:"secret_access_key,omitempty"`
 	UseSSL          bool   `json:"use_ssl,omitempty"`
 	PathStyle       bool   `json:"path_style,omitempty"`
+
+	// SafeKeep API target.
+	SafeKeepURL         string `json:"safekeep_url,omitempty"`
+	SafeKeepAPIKey      string `json:"safekeep_api_key,omitempty"`
+	SafeKeepTargets     string `json:"safekeep_targets,omitempty"`
+	SafeKeepSubpath     string `json:"safekeep_subpath,omitempty"`
+	SafeKeepMode        string `json:"safekeep_mode,omitempty"`
+	SafeKeepInsecureTLS bool   `json:"safekeep_insecure_tls,omitempty"`
 }
 
 // TargetView is the API representation of a Target without plaintext secrets.
@@ -101,6 +110,12 @@ type TargetView struct {
 	SecretAccessKeySet     bool   `json:"secret_access_key_set"`
 	UseSSL                 bool   `json:"use_ssl,omitempty"`
 	PathStyle              bool   `json:"path_style,omitempty"`
+	SafeKeepURL            string `json:"safekeep_url,omitempty"`
+	SafeKeepAPIKeySet      bool   `json:"safekeep_api_key_set"`
+	SafeKeepTargets        string `json:"safekeep_targets,omitempty"`
+	SafeKeepSubpath        string `json:"safekeep_subpath,omitempty"`
+	SafeKeepMode           string `json:"safekeep_mode,omitempty"`
+	SafeKeepInsecureTLS    bool   `json:"safekeep_insecure_tls,omitempty"`
 }
 
 // TargetInput is the API write payload for a backup target.
@@ -126,6 +141,12 @@ type TargetInput struct {
 	SecretAccessKey        *string `json:"secret_access_key"`
 	UseSSL                 bool    `json:"use_ssl"`
 	PathStyle              bool    `json:"path_style"`
+	SafeKeepURL            string  `json:"safekeep_url"`
+	SafeKeepAPIKey         *string `json:"safekeep_api_key"`
+	SafeKeepTargets        string  `json:"safekeep_targets"`
+	SafeKeepSubpath        string  `json:"safekeep_subpath"`
+	SafeKeepMode           string  `json:"safekeep_mode"`
+	SafeKeepInsecureTLS    bool    `json:"safekeep_insecure_tls"`
 }
 
 // ConfigView is the API representation of backup configuration.
@@ -173,11 +194,14 @@ func (t Target) view() TargetView {
 		Endpoint: t.Endpoint, Region: t.Region, Bucket: t.Bucket, Prefix: t.Prefix,
 		AccessKeyID: t.AccessKeyID, SecretAccessKeySet: t.SecretAccessKey != "",
 		UseSSL: t.UseSSL, PathStyle: t.PathStyle,
+		SafeKeepURL: t.SafeKeepURL, SafeKeepAPIKeySet: t.SafeKeepAPIKey != "",
+		SafeKeepTargets: t.SafeKeepTargets, SafeKeepSubpath: t.SafeKeepSubpath,
+		SafeKeepMode: t.SafeKeepMode, SafeKeepInsecureTLS: t.SafeKeepInsecureTLS,
 	}
 }
 
 func (t Target) isOffsite() bool {
-	return t.Enabled && (t.Type == TargetSFTP || t.Type == TargetS3)
+	return t.Enabled && (t.Type == TargetSFTP || t.Type == TargetS3 || t.Type == TargetSafeKeep)
 }
 
 func (s *Service) defaultLocalDir() string {
@@ -495,6 +519,38 @@ func (s *Service) resolveTargetInput(ctx context.Context, ti TargetInput, prevBy
 		} else if strings.HasPrefix(strings.ToLower(ep), "http://") {
 			t.UseSSL = false
 		}
+	case TargetSafeKeep:
+		rawURL := strings.TrimSpace(ti.SafeKeepURL)
+		u, err := url.Parse(rawURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return Target{}, badRequest("SafeKeep 目标 %s 服务地址需为合法的 http(s) URL", name)
+		}
+		apiKey := ""
+		if ti.SafeKeepAPIKey != nil {
+			apiKey = strings.TrimSpace(*ti.SafeKeepAPIKey)
+		} else if prev, ok := prevByID[id]; ok {
+			apiKey = prev.SafeKeepAPIKey
+		}
+		if apiKey == "" {
+			return Target{}, badRequest("SafeKeep 目标 %s 需提供 API Key", name)
+		}
+		mode := strings.ToLower(strings.TrimSpace(ti.SafeKeepMode))
+		if mode == "" {
+			mode = "sync"
+		}
+		if mode != "sync" && mode != "async" {
+			return Target{}, badRequest("SafeKeep 目标 %s 上传模式需为 sync 或 async", name)
+		}
+		subpath := strings.Trim(path.Clean("/"+strings.TrimSpace(ti.SafeKeepSubpath)), "/")
+		if subpath == "." {
+			subpath = ""
+		}
+		t.SafeKeepURL = strings.TrimRight(rawURL, "/")
+		t.SafeKeepAPIKey = apiKey
+		t.SafeKeepTargets = strings.TrimSpace(ti.SafeKeepTargets)
+		t.SafeKeepSubpath = subpath
+		t.SafeKeepMode = mode
+		t.SafeKeepInsecureTLS = ti.SafeKeepInsecureTLS
 	default:
 		return Target{}, badRequest("不支持的备份目标类型：%s", ti.Type)
 	}

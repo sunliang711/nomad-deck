@@ -179,7 +179,8 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 	}
 	selfUpdateSvc.PrepareBarrierOnOpen(ctx)
 	sched.Install(&cron.Platform{Hosts: hostSvc, Drivers: drivers, Vault: vaultSvc, Integrations: integrations, Jobs: jobSvc,
-		DataDir: cfg.DataDir, Backup: backupSvc.CronBackup, Offsite: backupSvc.OffsiteSnapshot, SelfUpdateCheck: selfUpdateSvc.CronCheck})
+		DataDir: cfg.DataDir, Backup: backupSvc.CronBackup, BackupTarget: backupSvc.CronBackupTarget,
+		ValidateBackupTarget: backupSvc.ValidateTarget, Offsite: backupSvc.OffsiteSnapshot, SelfUpdateCheck: selfUpdateSvc.CronCheck})
 	app := &App{Config: cfg, Log: log, Keys: keys, DB: d, Audit: rec, Auth: authSvc, Hosts: hostSvc, Ops: engine, Pool: pool,
 		Vault: vaultSvc, Nomad: nomadSvc, Cron: sched, Backup: backupSvc, Rotation: rotSvc, SelfUpdate: selfUpdateSvc}
 	origins, err := AllowedOrigins(cfg)

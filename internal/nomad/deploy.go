@@ -70,12 +70,34 @@ func (s *Service) Preflight(ctx context.Context, clusterID string, _ bool) ([]cl
 
 func validVersion(v string) error {
 	if err := sshx.ValidVersion(v); err != nil || strings.ContainsAny(v, "+-") {
-		return badRequest("版本号 %q 无效（只支持 Community 正式版）", v)
+		return badRequest("版本号 %q 无效（只支持 Community 正式版或 latest）", v)
 	}
 	if release.CompareVersions(v, release.MinVersions["nomad"]) < 0 {
 		return badRequest("Nomad 版本需不低于 %s", release.MinVersions["nomad"])
 	}
 	return nil
+}
+
+func (s *Service) resolveVersion(ctx context.Context, hc *cluster.HTTPClient, raw string) (string, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" || strings.EqualFold(v, "latest") {
+		if hc == nil {
+			var err error
+			hc, err = cluster.NewHTTPClient(ctx, s.Proxy, nil)
+			if err != nil {
+				return "", err
+			}
+		}
+		latest, err := s.Releases.HashiCorp(ctx).LatestVersion(ctx, hc.Client, "nomad")
+		if err != nil {
+			return "", fmt.Errorf("获取 Nomad 最新版本失败：%w", err)
+		}
+		return latest, nil
+	}
+	if err := validVersion(v); err != nil {
+		return "", err
+	}
+	return v, nil
 }
 
 // ---- Config generations ----
@@ -515,9 +537,15 @@ func (s *Service) Deploy(ctx context.Context, actor audit.Actor, clusterID strin
 	if cl.MaintenanceMode {
 		return nil, conflict("maintenance", "集群处于维护模式（%s）", cl.MaintenanceReason)
 	}
-	if err := validVersion(in.Version); err != nil {
+	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
+	if err != nil {
 		return nil, err
 	}
+	version, err := s.resolveVersion(ctx, hc, in.Version)
+	if err != nil {
+		return nil, err
+	}
+	in.Version = version
 	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return nil, err
@@ -530,10 +558,6 @@ func (s *Service) Deploy(ctx context.Context, actor audit.Actor, clusterID strin
 		return nil, err
 	}
 	if err := cluster.Blocking(issues); err != nil {
-		return nil, err
-	}
-	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
-	if err != nil {
 		return nil, err
 	}
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.deploy", TargetType: "cluster", TargetID: cl.ID,

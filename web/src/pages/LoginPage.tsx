@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { apiPost } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Button, Card, ErrorAlert, Input } from '../components/UI';
+import { Button, Card, ErrorAlert, Input, SecretInput } from '../components/UI';
 
 export function LoginPage() {
   const { needsSetup, refresh } = useAuth();
@@ -84,13 +84,12 @@ export function LoginPage() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />
-            <Input
+            <SecretInput
               label="密码"
-              type="password"
               required
               autoComplete={needsSetup ? 'new-password' : 'current-password'}
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChangeValue={setPassword}
             />
             <Button type="submit" variant="primary" className="w-full" disabled={busy}>
               {busy ? '处理中...' : needsSetup ? '完成初始化并登录' : '登录'}

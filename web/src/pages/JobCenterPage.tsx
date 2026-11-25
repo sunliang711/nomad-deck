@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, fmtTime, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Select, statusTone } from '../components/UI';
+import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Select, TermLabel, statusTone } from '../components/UI';
 import { CodeEditor } from '../components/CodeEditor';
 
 const sampleHCL = `job "hello" {
@@ -330,16 +330,16 @@ export function JobCenterPage() {
 
         <Card
           className="xl:col-span-2"
-          title="双模式 Job 编排工作台"
+          title={<TermLabel term="双模式 Job 编排工作台" tip="支持编写 Nomad HCL（HashiCorp Configuration Language）、表单可视化编排或 JSON 定义，提交前可做语法校验和变更比对。" />}
           actions={
             isAdmin && (
               <div className="flex flex-wrap gap-1.5">
                 <Button size="sm" onClick={() => setShowCompose(true)}>Compose 导入</Button>
                 <Button size="sm" onClick={() => void validateJob()}>
-                  Validate
+                  <TermLabel term="Validate" tip="调用 Nomad API 校验 HCL/JSON 语法、驱动字段与参数合法性，不改动运行状态。" />
                 </Button>
                 <Button size="sm" variant="primary" onClick={() => void runPlan()}>
-                  Plan Diff
+                  <TermLabel term="Plan Diff" tip="预演调度变更与滚动影响范围（Plan Dry-Run），确认无误后再提交部署。" />
                 </Button>
               </div>
             )
@@ -348,7 +348,7 @@ export function JobCenterPage() {
           <div className="space-y-3 text-xs">
             <SectionTabs
               tabs={[
-                { id: 'hcl', label: '原生 HCL 编辑器' },
+                { id: 'hcl', label: '原生 HCL 编辑器', tip: 'Nomad 原生 HashiCorp Configuration Language 声明式任务定义。' },
                 { id: 'visual', label: '可视化编排' },
                 { id: 'json', label: 'JSON 定义' },
               ]}

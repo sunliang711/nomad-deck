@@ -56,7 +56,56 @@ else
 fi
 if [ -d /opt/nomad-deck ]; then d=/opt/nomad-deck; else d=/opt; fi
 if [ "$SUDO" != "false" ] && $SUDO test -w "$d" 2>/dev/null; then emit opt_writable 1; else emit opt_writable 0; fi
+if [ -r /proc/cpuinfo ]; then
+  emit cpu_cores "$( (nproc || grep -c '^processor' /proc/cpuinfo) 2>/dev/null )"
+fi
+if [ -r /proc/meminfo ]; then
+  awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} /^MemFree:/{f=$2} /^Buffers:/{b=$2} /^Cached:/{c=$2} END{
+    if (t>0) {
+      if (a=="" || a==0) a=f+b+c;
+      printf "mem_total_kb=%s\nmem_avail_kb=%s\n", t, a
+    }
+  }' /proc/meminfo
+fi
+if [ -r /proc/stat ]; then
+  s1="$(head -n1 /proc/stat 2>/dev/null)"
+  (sleep 0.25 2>/dev/null || sleep 1)
+  s2="$(head -n1 /proc/stat 2>/dev/null)"
+  emit cpu_stat_1 "$s1"
+  emit cpu_stat_2 "$s2"
+fi
 `
+
+const metricsScript = `set +e
+emit() { printf '%s=%s\n' "$1" "$(printf '%s' "$2" | tr '\n' ' ')"; }
+if [ -r /proc/cpuinfo ]; then
+  emit cpu_cores "$( (nproc || grep -c '^processor' /proc/cpuinfo) 2>/dev/null )"
+fi
+if [ -r /proc/meminfo ]; then
+  awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} /^MemFree:/{f=$2} /^Buffers:/{b=$2} /^Cached:/{c=$2} END{
+    if (t>0) {
+      if (a=="" || a==0) a=f+b+c;
+      printf "mem_total_kb=%s\nmem_avail_kb=%s\n", t, a
+    }
+  }' /proc/meminfo
+fi
+if [ -r /proc/stat ]; then
+  s1="$(head -n1 /proc/stat 2>/dev/null)"
+  (sleep 0.25 2>/dev/null || sleep 1)
+  s2="$(head -n1 /proc/stat 2>/dev/null)"
+  emit cpu_stat_1 "$s1"
+  emit cpu_stat_2 "$s2"
+fi
+`
+
+// NodeMetrics holds CPU and memory utilization collected from a host.
+type NodeMetrics struct {
+	CPUCores      int     `json:"cpu_cores"`
+	CPUPercent    float64 `json:"cpu_percent"`
+	MemTotalBytes int64   `json:"mem_total_bytes"`
+	MemUsedBytes  int64   `json:"mem_used_bytes"`
+	MemPercent    float64 `json:"mem_percent"`
+}
 
 // ProbeResult holds parsed host facts.
 type ProbeResult struct {
@@ -79,8 +128,100 @@ type ProbeResult struct {
 	DockerStatus   string            `json:"docker_status"`
 	DockerVersion  string            `json:"docker_version"`
 	OptWritable    bool              `json:"opt_writable"`
+	CPUCores       int               `json:"cpu_cores"`
+	CPUPercent     float64           `json:"cpu_percent"`
+	MemTotalBytes  int64             `json:"mem_total_bytes"`
+	MemUsedBytes   int64             `json:"mem_used_bytes"`
+	MemPercent     float64           `json:"mem_percent"`
 	Tools          map[string]bool   `json:"tools"`
 	Missing        []string          `json:"missing_tools"`
+}
+
+// CollectMetrics gathers lightweight CPU and memory utilization from c.
+func CollectMetrics(ctx context.Context, c *Client) (*NodeMetrics, error) {
+	res, err := c.Run(ctx, metricsScript, RunOptions{})
+	if err != nil {
+		return nil, err
+	}
+	raw := parseKV(string(res.Stdout))
+	m := parseMetrics(raw)
+	return &m, nil
+}
+
+func parseKV(out string) map[string]string {
+	raw := map[string]string{}
+	sc := bufio.NewScanner(strings.NewReader(out))
+	for sc.Scan() {
+		k, v, ok := strings.Cut(sc.Text(), "=")
+		if ok {
+			raw[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	return raw
+}
+
+func parseMetrics(raw map[string]string) NodeMetrics {
+	m := NodeMetrics{CPUPercent: -1, MemPercent: -1}
+	if c, err := strconv.Atoi(raw["cpu_cores"]); err == nil && c > 0 {
+		m.CPUCores = c
+	}
+	if totalKB, err := strconv.ParseInt(raw["mem_total_kb"], 10, 64); err == nil && totalKB > 0 {
+		availKB, _ := strconv.ParseInt(raw["mem_avail_kb"], 10, 64)
+		if availKB < 0 {
+			availKB = 0
+		}
+		if availKB > totalKB {
+			availKB = totalKB
+		}
+		m.MemTotalBytes = totalKB * 1024
+		m.MemUsedBytes = (totalKB - availKB) * 1024
+		m.MemPercent = float64(totalKB-availKB) * 100.0 / float64(totalKB)
+	}
+	if pct, ok := cpuPercentFromProcStat(raw["cpu_stat_1"], raw["cpu_stat_2"]); ok {
+		m.CPUPercent = pct
+	}
+	return m
+}
+
+func cpuPercentFromProcStat(s1, s2 string) (float64, bool) {
+	parseLine := func(line string) (total, idle uint64, ok bool) {
+		fields := strings.Fields(line)
+		if len(fields) < 5 || fields[0] != "cpu" {
+			return 0, 0, false
+		}
+		var nums []uint64
+		for _, f := range fields[1:] {
+			v, err := strconv.ParseUint(f, 10, 64)
+			if err != nil {
+				return 0, 0, false
+			}
+			nums = append(nums, v)
+			total += v
+		}
+		idle = nums[3]
+		if len(nums) > 4 {
+			idle += nums[4] // iowait
+		}
+		return total, idle, true
+	}
+	t1, i1, ok1 := parseLine(s1)
+	t2, i2, ok2 := parseLine(s2)
+	if !ok1 || !ok2 || t2 <= t1 {
+		return 0, false
+	}
+	dt := float64(t2 - t1)
+	di := float64(0)
+	if i2 > i1 {
+		di = float64(i2 - i1)
+	}
+	pct := (dt - di) * 100.0 / dt
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	return pct, true
 }
 
 // Probe runs the probe script and parses the result. The clock skew is the
@@ -97,15 +238,13 @@ func Probe(ctx context.Context, c *Client) (*ProbeResult, error) {
 
 // ParseProbe converts probe output into a ProbeResult.
 func ParseProbe(out string, localMid time.Time) *ProbeResult {
-	raw := map[string]string{}
-	sc := bufio.NewScanner(strings.NewReader(out))
-	for sc.Scan() {
-		k, v, ok := strings.Cut(sc.Text(), "=")
-		if ok {
-			raw[strings.TrimSpace(k)] = strings.TrimSpace(v)
-		}
+	raw := parseKV(out)
+	m := parseMetrics(raw)
+	p := &ProbeResult{
+		Raw: raw, Tools: map[string]bool{},
+		CPUCores: m.CPUCores, CPUPercent: m.CPUPercent,
+		MemTotalBytes: m.MemTotalBytes, MemUsedBytes: m.MemUsedBytes, MemPercent: m.MemPercent,
 	}
-	p := &ProbeResult{Raw: raw, Tools: map[string]bool{}}
 	p.Arch = normalizeArch(raw["arch"])
 	p.Kernel = raw["kernel"]
 	p.OSInfo = strings.TrimSpace(raw["os_pretty"] + " / " + raw["kernel"])

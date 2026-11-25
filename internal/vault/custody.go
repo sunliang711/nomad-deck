@@ -929,6 +929,80 @@ func (s *Service) reissueAdminToken(ctx context.Context, cl *cluster, c *Client,
 	return issueErr
 }
 
+// GenerateRootToken derives a temporary Vault Root Token using the custodied
+// active Unseal Keys so an operator can perform emergency or UI root login.
+func (s *Service) GenerateRootToken(ctx context.Context, actor audit.Actor, clusterID string) (string, error) {
+	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return "", err
+	}
+	if cl.InitState != db.InitInitialized {
+		return "", conflict("not_initialized", "集群尚未完成初始化")
+	}
+	if cl.MaintenanceMode {
+		return "", conflict("maintenance", "集群处于维护模式（%s）", cl.MaintenanceReason)
+	}
+	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return "", err
+	}
+	am, err := s.activeMember(ctx, cl, members)
+	if err != nil {
+		return "", err
+	}
+	c, err := s.client(cl, am, "")
+	if err != nil {
+		return "", err
+	}
+	keys, gen, err := s.activeKeys(ctx, clusterID)
+	if err != nil {
+		return "", err
+	}
+	root, err := generateRoot(ctx, c, keys)
+	if err != nil {
+		_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "vault.root_token_generate", ResourceType: "cluster",
+			ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"generation": gen}, Err: err})
+		return "", fmt.Errorf("签发临时 Root Token 失败：%w", err)
+	}
+	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "vault.root_token_generate", ResourceType: "cluster",
+		ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"generation": gen, "node": am.NodeName}})
+	return root, nil
+}
+
+// RevokeToken revokes a caller-supplied Vault token against the active node.
+func (s *Service) RevokeToken(ctx context.Context, actor audit.Actor, clusterID, token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return badRequest("token 不能为空")
+	}
+	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return err
+	}
+	if cl.InitState != db.InitInitialized {
+		return conflict("not_initialized", "集群尚未完成初始化")
+	}
+	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return err
+	}
+	am, err := s.activeMember(ctx, cl, members)
+	if err != nil {
+		return err
+	}
+	c, err := s.client(cl, am, token)
+	if err != nil {
+		return err
+	}
+	err = c.RevokeSelf(ctx)
+	if err != nil && StatusOf(err) == http.StatusForbidden {
+		err = nil
+	}
+	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "vault.root_token_revoke_manual", ResourceType: "cluster",
+		ResourceID: clusterID, ResourceName: cl.Name, Err: err})
+	return err
+}
+
 // RecoverToken is the emergency path when the admin token no longer works.
 func (s *Service) RecoverToken(ctx context.Context, actor audit.Actor, clusterID string) (*db.OperationTask, error) {
 	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)

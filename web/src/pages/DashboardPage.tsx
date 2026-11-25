@@ -89,45 +89,98 @@ export function DashboardPage() {
 
       {/* KPI cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Card title="托管主机">
+        <Card
+          title="托管主机"
+          actions={
+            <Link to="/infra" className="inline-flex items-center gap-0.5 text-xs text-emerald-600 hover:underline dark:text-emerald-400">
+              进入 <ArrowUpRight className="h-3 w-3" />
+            </Link>
+          }
+        >
           <div className="flex items-baseline justify-between">
-            <span className="text-2xl font-bold">{nodes.total ?? 0}</span>
+            <Link to="/infra" className="text-2xl font-bold hover:text-emerald-600 dark:hover:text-emerald-400">
+              {nodes.total ?? 0}
+            </Link>
             <div className="flex gap-1.5 text-xs">
-              <Badge tone="green">在线 {nodes.online ?? 0}</Badge>
-              <Badge tone={nodes.offline > 0 ? 'red' : 'neutral'}>离线 {nodes.offline ?? 0}</Badge>
+              <Link to="/infra"><Badge tone="green">在线 {nodes.online ?? 0}</Badge></Link>
+              <Link to="/infra"><Badge tone={nodes.offline > 0 ? 'red' : 'neutral'}>离线 {nodes.offline ?? 0}</Badge></Link>
             </div>
           </div>
         </Card>
-        <Card title="纳管集群">
+        <Card
+          title="纳管集群"
+          actions={
+            <div className="flex items-center gap-2 text-xs">
+              <Link to="/nomad" className="text-emerald-600 hover:underline dark:text-emerald-400">Nomad</Link>
+              <Link to="/vault" className="text-emerald-600 hover:underline dark:text-emerald-400">Vault</Link>
+            </div>
+          }
+        >
           <div className="flex items-baseline justify-between">
-            <span className="text-2xl font-bold">{clusters.total ?? 0}</span>
+            <Link to="/nomad" className="text-2xl font-bold hover:text-emerald-600 dark:hover:text-emerald-400">
+              {clusters.total ?? 0}
+            </Link>
             <div className="flex gap-1.5 text-xs">
-              <Badge tone="blue">Nomad {clusters.nomad ?? 0}</Badge>
-              <Badge tone="neutral">Vault {clusters.vault ?? 0}</Badge>
+              <Link to="/nomad"><Badge tone="blue">Nomad {clusters.nomad ?? 0}</Badge></Link>
+              <Link to="/vault"><Badge tone="neutral">Vault {clusters.vault ?? 0}</Badge></Link>
             </div>
           </div>
         </Card>
-        <Card title="证书临期预警">
+        <Card
+          title="证书临期预警"
+          actions={
+            <Link to="/vault" className="inline-flex items-center gap-0.5 text-xs text-emerald-600 hover:underline dark:text-emerald-400">
+              管理 <ArrowUpRight className="h-3 w-3" />
+            </Link>
+          }
+        >
           <div className="flex items-baseline justify-between">
-            <span className="text-2xl font-bold">{(data?.cert_alerts || []).length}</span>
-            <Badge tone={(data?.cert_alerts || []).length > 0 ? 'amber' : 'green'}>
-              {(data?.cert_alerts || []).length > 0 ? '需关注' : '正常'}
-            </Badge>
+            <Link to="/vault" className="text-2xl font-bold hover:text-emerald-600 dark:hover:text-emerald-400">
+              {(data?.cert_alerts || []).length}
+            </Link>
+            <Link to="/vault">
+              <Badge tone={(data?.cert_alerts || []).length > 0 ? 'amber' : 'green'}>
+                {(data?.cert_alerts || []).length > 0 ? '需关注' : '正常'}
+              </Badge>
+            </Link>
           </div>
         </Card>
-        <Card title="待核对异常任务">
+        <Card
+          title="待核对异常任务"
+          actions={
+            <Link to="/operations" className="inline-flex items-center gap-0.5 text-xs text-emerald-600 hover:underline dark:text-emerald-400">
+              排查 <ArrowUpRight className="h-3 w-3" />
+            </Link>
+          }
+        >
           <div className="flex items-baseline justify-between">
-            <span className="text-2xl font-bold">{(data?.pending_reconcile_tasks || []).length}</span>
-            <Badge tone={(data?.pending_reconcile_tasks || []).length > 0 ? 'red' : 'green'}>
-              {(data?.pending_reconcile_tasks || []).length > 0 ? '需人工核对' : '无异常'}
-            </Badge>
+            <Link to="/operations" className="text-2xl font-bold hover:text-emerald-600 dark:hover:text-emerald-400">
+              {(data?.pending_reconcile_tasks || []).length}
+            </Link>
+            <Link to="/operations">
+              <Badge tone={(data?.pending_reconcile_tasks || []).length > 0 ? 'red' : 'green'}>
+                {(data?.pending_reconcile_tasks || []).length > 0 ? '需人工核对' : '无异常'}
+              </Badge>
+            </Link>
           </div>
         </Card>
       </div>
 
       {/* Clusters + Alerts */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <Card title="集群状态">
+        <Card
+          title="集群状态"
+          actions={
+            <div className="flex items-center gap-3 text-xs">
+              <Link to="/nomad" className="inline-flex items-center gap-0.5 text-emerald-600 hover:underline dark:text-emerald-400">
+                Nomad <ArrowUpRight className="h-3 w-3" />
+              </Link>
+              <Link to="/vault" className="inline-flex items-center gap-0.5 text-emerald-600 hover:underline dark:text-emerald-400">
+                Vault <ArrowUpRight className="h-3 w-3" />
+              </Link>
+            </div>
+          }
+        >
           {(clusters.items || []).length === 0 ? (
             <EmptyState text="暂无集群" />
           ) : (
@@ -155,32 +208,63 @@ export function DashboardPage() {
           )}
         </Card>
 
-        <Card title="Vault 与时钟告警">
+        <Card
+          title="Vault 与时钟告警"
+          actions={
+            <div className="flex items-center gap-3 text-xs">
+              <Link to="/infra" className="inline-flex items-center gap-0.5 text-emerald-600 hover:underline dark:text-emerald-400">
+                主机 <ArrowUpRight className="h-3 w-3" />
+              </Link>
+              <Link to="/cron" className="inline-flex items-center gap-0.5 text-emerald-600 hover:underline dark:text-emerald-400">
+                定时任务 <ArrowUpRight className="h-3 w-3" />
+              </Link>
+              <Link to="/migration-backup" className="inline-flex items-center gap-0.5 text-emerald-600 hover:underline dark:text-emerald-400">
+                灾备 <ArrowUpRight className="h-3 w-3" />
+              </Link>
+            </div>
+          }
+        >
           <div className="space-y-3 text-sm">
             {(data?.vault_alerts || []).map((a: any, i: number) => (
-              <div key={i} className="flex items-center justify-between rounded bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+              <Link
+                key={i}
+                to={a.cluster_id ? `/vault?id=${a.cluster_id}` : '/vault'}
+                className="flex items-center justify-between rounded bg-amber-50 px-3 py-2 text-xs text-amber-900 hover:bg-amber-100 dark:bg-amber-950/60 dark:text-amber-200 dark:hover:bg-amber-950"
+              >
                 <span>
                   <b>{a.cluster_name}</b>：{a.message}
                 </span>
                 <Badge tone="amber">{a.kind}</Badge>
-              </div>
+              </Link>
             ))}
             {(nodes.clock_skew_alerts || []).map((n: any) => (
-              <div key={n.node_id} className="flex items-center justify-between rounded bg-rose-50 px-3 py-2 text-xs text-rose-900 dark:bg-rose-950/60 dark:text-rose-200">
+              <Link
+                key={n.node_id}
+                to="/infra"
+                className="flex items-center justify-between rounded bg-rose-50 px-3 py-2 text-xs text-rose-900 hover:bg-rose-100 dark:bg-rose-950/60 dark:text-rose-200 dark:hover:bg-rose-950"
+              >
                 <span>
                   节点 <b>{n.node_name}</b> ({n.host}) 时钟同步异常：{n.time_sync}，偏差 {n.clock_skew_ms} ms
                 </span>
                 <Badge tone="red">时钟告警</Badge>
-              </div>
+              </Link>
             ))}
-            {(data?.cert_alerts || []).map((ca: any, i: number) => (
-              <div key={i} className="flex items-center justify-between rounded bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-                <span>
-                  <b>{ca.cluster_name}</b> {ca.node ? `/ ${ca.node}` : ''} {ca.kind} 证书剩余 {ca.days_left} 天
-                </span>
-                <Badge tone="amber">临期</Badge>
-              </div>
-            ))}
+            {(data?.cert_alerts || []).map((ca: any, i: number) => {
+              const targetCluster = (clusters.items || []).find((c: any) => c.id === ca.cluster_id);
+              const certHref = targetCluster?.type === 'nomad' ? `/nomad?id=${ca.cluster_id}` : `/vault?id=${ca.cluster_id || ''}`;
+              return (
+                <Link
+                  key={i}
+                  to={certHref}
+                  className="flex items-center justify-between rounded bg-amber-50 px-3 py-2 text-xs text-amber-900 hover:bg-amber-100 dark:bg-amber-950/60 dark:text-amber-200 dark:hover:bg-amber-950"
+                >
+                  <span>
+                    <b>{ca.cluster_name}</b> {ca.node ? `/ ${ca.node}` : ''} {ca.kind} 证书剩余 {ca.days_left} 天
+                  </span>
+                  <Badge tone="amber">临期</Badge>
+                </Link>
+              );
+            })}
             {(data?.vault_alerts || []).length === 0 &&
               (nodes.clock_skew_alerts || []).length === 0 &&
               (data?.cert_alerts || []).length === 0 && <EmptyState text="暂无告警" />}
@@ -190,7 +274,14 @@ export function DashboardPage() {
 
       {/* Recent Operations + Audit */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <Card title="最近运维任务">
+        <Card
+          title="最近运维任务"
+          actions={
+            <Link to="/operations" className="inline-flex items-center gap-0.5 text-xs text-emerald-600 hover:underline dark:text-emerald-400">
+              全部任务 <ArrowUpRight className="h-3 w-3" />
+            </Link>
+          }
+        >
           {(data?.recent_operations || []).length === 0 ? (
             <EmptyState text="暂无运维任务" />
           ) : (
@@ -216,7 +307,14 @@ export function DashboardPage() {
           )}
         </Card>
 
-        <Card title="最近审计动态">
+        <Card
+          title="最近审计动态"
+          actions={
+            <Link to="/audit" className="inline-flex items-center gap-0.5 text-xs text-emerald-600 hover:underline dark:text-emerald-400">
+              全部日志 <ArrowUpRight className="h-3 w-3" />
+            </Link>
+          }
+        >
           {(data?.recent_audit_logs || []).length === 0 ? (
             <EmptyState text="暂无审计日志" />
           ) : (

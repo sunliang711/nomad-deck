@@ -34,6 +34,11 @@ type Node struct {
 	HostKeyFingerprint string
 	OSInfo             string
 	Arch               string
+	CPUCores           int
+	CPUPercent         float64
+	MemTotalBytes      int64
+	MemUsedBytes       int64
+	MemPercent         float64
 	ProbeJSON          string
 	Status             string
 	LastCheckedAt      time.Time
@@ -46,6 +51,7 @@ type Node struct {
 const nodeCols = `id, name, host, ssh_port, ssh_user, ssh_key_id, use_sudo, sudo_ready, selinux_mode, swap_enabled,
 	os_family, os_codename, package_manager, docker_mode, docker_status, docker_version, docker_config_json,
 	COALESCE(machine_id, ''), address_aliases_json, time_sync, clock_skew_ms, host_key_fingerprint, os_info, arch,
+	cpu_cores, cpu_percent, mem_total_bytes, mem_used_bytes, mem_percent,
 	probe_json, status, COALESCE(last_checked_at, ''), labels_json, notes, created_at, updated_at`
 
 func scanNode(row interface{ Scan(...any) error }) (*Node, error) {
@@ -55,6 +61,7 @@ func scanNode(row interface{ Scan(...any) error }) (*Node, error) {
 	err := row.Scan(&n.ID, &n.Name, &n.Host, &n.SSHPort, &n.SSHUser, &n.SSHKeyID, &useSudo, &sudoReady, &n.SELinuxMode, &swap,
 		&n.OSFamily, &n.OSCodename, &n.PackageManager, &n.DockerMode, &n.DockerStatus, &n.DockerVersion, &n.DockerConfigJSON,
 		&n.MachineID, &n.AddressAliasesJSON, &n.TimeSync, &n.ClockSkewMS, &n.HostKeyFingerprint, &n.OSInfo, &n.Arch,
+		&n.CPUCores, &n.CPUPercent, &n.MemTotalBytes, &n.MemUsedBytes, &n.MemPercent,
 		&n.ProbeJSON, &n.Status, &checked, &n.LabelsJSON, &n.Notes, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -130,10 +137,12 @@ func UpdateNodeProbe(ctx context.Context, q Querier, n *Node, now time.Time) err
 	}
 	res, err := q.ExecContext(ctx, `UPDATE nodes SET sudo_ready = ?, selinux_mode = ?, swap_enabled = ?, os_family = ?,
 		os_codename = ?, package_manager = ?, docker_mode = ?, docker_status = ?, docker_version = ?, machine_id = ?,
-		time_sync = ?, clock_skew_ms = ?, os_info = ?, arch = ?, probe_json = ?, status = ?, last_checked_at = ?,
+		time_sync = ?, clock_skew_ms = ?, os_info = ?, arch = ?, cpu_cores = ?, cpu_percent = ?, mem_total_bytes = ?,
+		mem_used_bytes = ?, mem_percent = ?, probe_json = ?, status = ?, last_checked_at = ?,
 		updated_at = ? WHERE id = ?`,
 		boolInt(n.SudoReady), n.SELinuxMode, boolInt(n.SwapEnabled), n.OSFamily, n.OSCodename, n.PackageManager,
-		n.DockerMode, n.DockerStatus, n.DockerVersion, mid, n.TimeSync, n.ClockSkewMS, n.OSInfo, n.Arch, n.ProbeJSON,
+		n.DockerMode, n.DockerStatus, n.DockerVersion, mid, n.TimeSync, n.ClockSkewMS, n.OSInfo, n.Arch,
+		n.CPUCores, n.CPUPercent, n.MemTotalBytes, n.MemUsedBytes, n.MemPercent, n.ProbeJSON,
 		n.Status, FormatTime(now), FormatTime(now), n.ID)
 	if err != nil {
 		return mapUnique(err)
@@ -145,6 +154,13 @@ func UpdateNodeProbe(ctx context.Context, q Querier, n *Node, now time.Time) err
 func UpdateNodeStatus(ctx context.Context, q Querier, id, status string, now time.Time) error {
 	_, err := q.ExecContext(ctx, `UPDATE nodes SET status = ?, last_checked_at = ?, updated_at = ? WHERE id = ?`,
 		status, FormatTime(now), FormatTime(now), id)
+	return err
+}
+
+// UpdateNodeMetrics records reachability and latest CPU/memory utilization.
+func UpdateNodeMetrics(ctx context.Context, q Querier, id, status string, cpuCores int, cpuPct float64, memTotal, memUsed int64, memPct float64, now time.Time) error {
+	_, err := q.ExecContext(ctx, `UPDATE nodes SET status = ?, cpu_cores = ?, cpu_percent = ?, mem_total_bytes = ?, mem_used_bytes = ?, mem_percent = ?, last_checked_at = ?, updated_at = ? WHERE id = ?`,
+		status, cpuCores, cpuPct, memTotal, memUsed, memPct, FormatTime(now), FormatTime(now), id)
 	return err
 }
 

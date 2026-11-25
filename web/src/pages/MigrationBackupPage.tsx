@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Download, Plus, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, PasswordConfirmModal, SectionTabs, Select, statusTone } from '../components/UI';
+import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, PasswordConfirmModal, SecretInput, SectionTabs, Select, TermLabel, statusTone } from '../components/UI';
 
 const optionalTables = [
   { id: 'admins', label: 'admins（管理员账号，迁移可选）' },
@@ -61,6 +61,13 @@ export function MigrationBackupPage() {
     secret_access_key: '',
     use_ssl: true,
     path_style: false,
+    safekeep_url: '',
+    safekeep_api_key: '',
+    safekeep_api_key_set: false,
+    safekeep_targets: '',
+    safekeep_subpath: 'nomad-deck',
+    safekeep_mode: 'sync',
+    safekeep_insecure_tls: false,
   });
 
   const [pwAction, setPwAction] = useState<{ title: string; description?: string; run: (pw: string) => Promise<void> } | null>(null);
@@ -148,9 +155,17 @@ export function MigrationBackupPage() {
       access_key_id: t.access_key_id,
       use_ssl: Boolean(t.use_ssl),
       path_style: Boolean(t.path_style),
+      safekeep_url: t.safekeep_url || '',
+      safekeep_targets: t.safekeep_targets || '',
+      safekeep_subpath: t.safekeep_subpath || '',
+      safekeep_mode: t.safekeep_mode || 'sync',
+      safekeep_insecure_tls: Boolean(t.safekeep_insecure_tls),
     };
     if (t.type === 's3' && t.secret_access_key) {
       out.secret_access_key = t.secret_access_key;
+    }
+    if (t.type === 'safekeep' && t.safekeep_api_key) {
+      out.safekeep_api_key = t.safekeep_api_key;
     }
     return out;
   };
@@ -242,11 +257,16 @@ export function MigrationBackupPage() {
                   <input type="checkbox" checked={bkEnabled} onChange={(e) => setBkEnabled(e.target.checked)} />
                   <span>启用定时灾备（control_plane_backup）与异地 Raft 快照同步</span>
                 </label>
-                <Input
-                  label={backupCfg?.passphrase_set ? '备份口令（已设置，留空保持不变）' : '备份口令（至少 12 位）'}
-                  type="password"
+                <SecretInput
+                  label={<TermLabel term="备份口令（至少 12 位）" tip="用于加密 .ndbundle 灾备归档包（AES-256-GCM + Argon2id），异地恢复时必须提供同一口令。" />}
                   value={bkPass}
-                  onChange={(e) => setBkPass(e.target.value)}
+                  hasStoredValue={Boolean(backupCfg?.passphrase_set)}
+                  resetKey={backupCfg?.passphrase_set}
+                  onChangeValue={setBkPass}
+                  onRevealStored={async () => {
+                    const r = await apiPost('/api/v1/backup/secrets/reveal', { kind: 'passphrase' });
+                    return r.secret || '';
+                  }}
                 />
               </div>
 
@@ -300,6 +320,13 @@ export function MigrationBackupPage() {
                         secret_access_key: '',
                         use_ssl: true,
                         path_style: false,
+                        safekeep_url: '',
+                        safekeep_api_key: '',
+                        safekeep_api_key_set: false,
+                        safekeep_targets: '',
+                        safekeep_subpath: 'nomad-deck',
+                        safekeep_mode: 'sync',
+                        safekeep_insecure_tls: false,
                       });
                       setShowTargetModal(true);
                     }}
@@ -321,7 +348,13 @@ export function MigrationBackupPage() {
                           </div>
                           <div className="text-slate-500">
                             灾备保留 {t.retention_count} 份 · 快照保留 {t.snapshot_retention_count} 份 ·{' '}
-                            {t.type === 'local' ? t.path || '默认目录' : t.type === 'sftp' ? `${t.username}@${t.host}:${t.remote_dir}` : `s3://${t.bucket}/${t.prefix || ''}`}
+                            {t.type === 'local'
+                              ? t.path || '默认目录'
+                              : t.type === 'sftp'
+                                ? `${t.username}@${t.host}:${t.remote_dir}`
+                                : t.type === 'safekeep'
+                                  ? `${t.safekeep_url || '-'}${t.safekeep_subpath ? ` (${t.safekeep_subpath})` : ''}`
+                                  : `s3://${t.bucket}/${t.prefix || ''}`}
                           </div>
                         </div>
                         <div className="flex gap-1">
@@ -445,7 +478,7 @@ export function MigrationBackupPage() {
                   </label>
                 ))}
               </div>
-              <Input label="临时迁移口令（至少 12 位）" type="password" value={expPass} onChange={(e) => setExpPass(e.target.value)} />
+              <SecretInput label="临时迁移口令（至少 12 位）" value={expPass} onChangeValue={setExpPass} />
               <Button
                 variant="primary"
                 onClick={() =>
@@ -492,7 +525,7 @@ export function MigrationBackupPage() {
                 <option value="replace">replace（整库灾难恢复，推荐）</option>
                 <option value="merge">merge（增量合并）</option>
               </Select>
-              <Input label="迁移/备份口令" type="password" required value={impPass} onChange={(e) => setImpPass(e.target.value)} />
+              <SecretInput label="迁移/备份口令" required value={impPass} onChangeValue={setImpPass} />
               <label className="block space-y-1">
                 <span className="block font-medium">选择 .ndbundle 文件</span>
                 <input
@@ -549,6 +582,7 @@ export function MigrationBackupPage() {
             <option value="local">本机目录 (local)</option>
             <option value="sftp">SFTP</option>
             <option value="s3">S3 兼容对象存储</option>
+            <option value="safekeep">SafeKeep API 灾备网关</option>
           </Select>
           <div className="grid grid-cols-2 gap-2">
             <Input label="灾备包保留份数" type="number" value={tForm.retention_count} onChange={(e) => setTForm({ ...tForm, retention_count: Number(e.target.value) })} />
@@ -581,10 +615,82 @@ export function MigrationBackupPage() {
               </div>
               <Input label="Prefix（可选）" value={tForm.prefix} onChange={(e) => setTForm({ ...tForm, prefix: e.target.value })} />
               <Input label="Access Key ID" required value={tForm.access_key_id} onChange={(e) => setTForm({ ...tForm, access_key_id: e.target.value })} />
-              <Input label="Secret Access Key（留空保留原值）" type="password" value={tForm.secret_access_key} onChange={(e) => setTForm({ ...tForm, secret_access_key: e.target.value })} />
+              <SecretInput
+                label="Secret Access Key"
+                value={tForm.secret_access_key || ''}
+                hasStoredValue={Boolean(tForm.secret_access_key_set)}
+                resetKey={tForm.id}
+                onChangeValue={(v) => setTForm({ ...tForm, secret_access_key: v })}
+                onRevealStored={
+                  tForm.id && tForm.secret_access_key_set
+                    ? async () => {
+                        const r = await apiPost('/api/v1/backup/secrets/reveal', { kind: 'target_secret', target_id: tForm.id });
+                        return r.secret || '';
+                      }
+                    : undefined
+                }
+              />
               <div className="flex gap-4">
                 <label className="flex items-center gap-1.5"><input type="checkbox" checked={tForm.use_ssl} onChange={(e) => setTForm({ ...tForm, use_ssl: e.target.checked })} /> HTTPS/TLS</label>
                 <label className="flex items-center gap-1.5"><input type="checkbox" checked={tForm.path_style} onChange={(e) => setTForm({ ...tForm, path_style: e.target.checked })} /> Path Style</label>
+              </div>
+            </>
+          )}
+          {tForm.type === 'safekeep' && (
+            <>
+              <Input
+                label={<TermLabel term="SafeKeep 服务地址" tip="SafeKeep Client API 根地址，例如 https://safekeep.example.com:8080，将调用 /api/v1/backups 与 /api/v1/upstreams。" />}
+                required
+                placeholder="https://safekeep.example.com:8080"
+                value={tForm.safekeep_url || ''}
+                onChange={(e) => setTForm({ ...tForm, safekeep_url: e.target.value })}
+              />
+              <SecretInput
+                label="SafeKeep X-API-Key"
+                value={tForm.safekeep_api_key || ''}
+                hasStoredValue={Boolean(tForm.safekeep_api_key_set)}
+                resetKey={tForm.id}
+                onChangeValue={(v) => setTForm({ ...tForm, safekeep_api_key: v })}
+                onRevealStored={
+                  tForm.id && tForm.safekeep_api_key_set
+                    ? async () => {
+                        const r = await apiPost('/api/v1/backup/secrets/reveal', { kind: 'target_secret', target_id: tForm.id });
+                        return r.secret || '';
+                      }
+                    : undefined
+                }
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  label="远端子路径 (X-Backup-Path)"
+                  placeholder="nomad-deck"
+                  value={tForm.safekeep_subpath || ''}
+                  onChange={(e) => setTForm({ ...tForm, safekeep_subpath: e.target.value })}
+                />
+                <Input
+                  label="上游存储目标 (X-Backup-Targets，逗号分隔，留空默认)"
+                  placeholder="local,s3-dr"
+                  value={tForm.safekeep_targets || ''}
+                  onChange={(e) => setTForm({ ...tForm, safekeep_targets: e.target.value })}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2 items-center">
+                <Select
+                  label="上传模式 (X-Backup-Mode)"
+                  value={tForm.safekeep_mode || 'sync'}
+                  onChange={(e) => setTForm({ ...tForm, safekeep_mode: e.target.value })}
+                >
+                  <option value="sync">sync（等待 SafeKeep 落盘完成）</option>
+                  <option value="async">async（异步入队）</option>
+                </Select>
+                <label className="flex items-center gap-1.5 pt-4">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(tForm.safekeep_insecure_tls)}
+                    onChange={(e) => setTForm({ ...tForm, safekeep_insecure_tls: e.target.checked })}
+                  />
+                  <span>跳过 TLS 证书校验（自签环境）</span>
+                </label>
               </div>
             </>
           )}
@@ -618,11 +724,10 @@ export function MigrationBackupPage() {
           <Select label="目标集群" value={importSnapForm.clusterId} onChange={(e) => setImportSnapForm({ ...importSnapForm, clusterId: e.target.value })}>
             {clusters.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.type})</option>)}
           </Select>
-          <Input
+          <SecretInput
             label="归档口令（留空使用当前配置的备份口令）"
-            type="password"
             value={importSnapForm.passphrase}
-            onChange={(e) => setImportSnapForm({ ...importSnapForm, passphrase: e.target.value })}
+            onChangeValue={(v) => setImportSnapForm({ ...importSnapForm, passphrase: v })}
           />
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setImportSnapForm({ targetId: '', object: '', clusterId: '', passphrase: '' })}>取消</Button>

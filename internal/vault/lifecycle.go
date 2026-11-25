@@ -661,9 +661,11 @@ func (s *Service) PlanUpgrade(ctx context.Context, clusterID, version string) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := validVersion(version); err != nil {
+	resolved, err := s.resolveVersion(ctx, nil, version)
+	if err != nil {
 		return nil, err
 	}
+	version = resolved
 	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return nil, err
@@ -687,6 +689,15 @@ func (s *Service) Upgrade(ctx context.Context, actor audit.Actor, clusterID stri
 	if err := s.requireOperable(cl); err != nil {
 		return nil, err
 	}
+	hc, err := s.httpClient(ctx, in.UseProxy)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := s.resolveVersion(ctx, hc, in.Version)
+	if err != nil {
+		return nil, err
+	}
+	in.Version = resolved
 	plan, err := s.PlanUpgrade(ctx, clusterID, in.Version)
 	if err != nil {
 		return nil, err
@@ -703,10 +714,6 @@ func (s *Service) Upgrade(ctx context.Context, actor audit.Actor, clusterID stri
 	}
 	if len(members) == 1 && !in.ConfirmSingle {
 		return nil, conflict("confirm_single_node", "单节点集群升级会中断服务，需显式确认")
-	}
-	hc, err := s.httpClient(ctx, in.UseProxy)
-	if err != nil {
-		return nil, err
 	}
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.upgrade", TargetType: "cluster", TargetID: clusterID,
 		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name,

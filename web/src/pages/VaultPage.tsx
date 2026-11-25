@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Lock, Plus, RefreshCw, Shield, Unlock } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
@@ -15,6 +15,7 @@ import {
   Input,
   MaskedSecret,
   Modal,
+  LoadingState,
   PageHeader,
   PasswordConfirmModal,
   SecretInput,
@@ -27,10 +28,11 @@ import {
 import { ClusterOpsSection } from '../components/ClusterOpsSection';
 import { CodeEditor } from '../components/CodeEditor';
 import { UninstallClusterModal, type UninstallPlan } from '../components/UninstallClusterModal';
+import { ClusterCreateModal } from '../components/ClusterCreateModal';
 
 export function VaultPage() {
   const { isAdmin } = useAuth();
-  const { openTask, openNodeLogs } = useOpsDrawer();
+  const { openTask, openNodeLogs, tasks } = useOpsDrawer();
   const toast = useToast();
   const askConfirm = useConfirm();
   const [searchParams] = useSearchParams();
@@ -38,6 +40,9 @@ export function VaultPage() {
   const [clusters, setClusters] = useState<any[]>([]);
   const [nodes, setNodes] = useState<any[]>([]);
   const [selectedId, setSelectedId] = useState('');
+  const [loadingList, setLoadingList] = useState(true);
+  const selectionRef = useRef(selectedId);
+  selectionRef.current = selectedId;
   const [tab, setTab] = useState('status');
   const [status, setStatus] = useState<any>(null);
   const [custodyData, setCustodyData] = useState<any>(null);
@@ -62,7 +67,6 @@ export function VaultPage() {
 
   // Create wizard
   const [showCreate, setShowCreate] = useState(false);
-  const [cForm, setCForm] = useState({ name: '', mode: 'cluster', public_api_url: '', node_ids: [] as string[] });
   const [deployVer, setDeployVer] = useState('latest');
   const [useProxy, setUseProxy] = useState(false);
   const [defaultUseProxy, setDefaultUseProxy] = useState(false);
@@ -94,6 +98,8 @@ export function VaultPage() {
       });
     } catch (ex: any) {
       setErr(ex?.message || '加载 Vault 集群列表失败');
+    } finally {
+      setLoadingList(false);
     }
   }, [queryId]);
 
@@ -107,6 +113,7 @@ export function VaultPage() {
         apiGet(`/api/v1/clusters/${selectedId}/snapshots`),
         apiGet(`/api/v1/vault/${selectedId}/key-generations`),
       ]);
+      if (selectionRef.current !== selectedId) return;
       setCustodyData(clRes.custody || null);
       setStatus(stRes.status);
       // Keep the summary in sync with live status after initialization and maintenance.
@@ -118,6 +125,7 @@ export function VaultPage() {
       setSnapshots(snRes.snapshots || []);
       setGens(gRes.generations || []);
     } catch (ex: any) {
+      if (selectionRef.current !== selectedId) return;
       setErr(ex?.message || '加载 Vault 集群详情失败');
     }
   }, [selectedId]);
@@ -150,6 +158,20 @@ export function VaultPage() {
       setDefaultUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
     }).catch((ex) => setErr(ex.message));
   }, []);
+
+  const clusterTaskState = tasks.filter((task) => task.target_id === selectedId)
+    .map((task) => `${task.id}:${task.status}`).join(',');
+
+  useEffect(() => {
+    if (!clusterTaskState) return;
+    void loadList();
+    const uninstallDone = tasks.some((task) => task.target_id === selectedId && task.action === 'cluster.uninstall' && task.status === 'success');
+    if (!uninstallDone) void loadDetail();
+  }, [clusterTaskState, loadList, loadDetail]);
+
+  useEffect(() => {
+    setStatus(null);
+  }, [selectedId]);
 
   const cluster = clusters.find((c) => c.id === selectedId);
   const clusterProxyPref = cluster?.settings?.use_proxy;
@@ -205,28 +227,6 @@ export function VaultPage() {
   const clusterNodes = status?.nodes || [];
   const custody = custodyData || {};
 
-  const createCluster = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const members = cForm.node_ids.map((nid) => {
-        const n = nodes.find((x) => x.id === nid);
-        return { node_id: nid, advertise_addr: n?.host || '' };
-      });
-      const res = await apiPost('/api/v1/clusters', {
-        type: 'vault',
-        name: cForm.name,
-        mode: cForm.mode,
-        public_api_url: cForm.public_api_url,
-        nodes: members,
-      });
-      setShowCreate(false);
-      await loadList();
-      if (res.cluster?.id) setSelectedId(res.cluster.id);
-    } catch (ex: any) {
-      setErr(ex?.message || '创建 Vault 集群失败');
-    }
-  };
-
   const handleUninstall = async () => {
     if (!cluster) return;
     const canDeleteUndeployed =
@@ -261,6 +261,8 @@ export function VaultPage() {
     }
   };
 
+  if (loadingList) return <LoadingState label="正在加载 Vault 集群…" />;
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -287,7 +289,7 @@ export function VaultPage() {
           {clusters.map((c) => (
             <Button key={c.id} size="sm" variant={selectedId === c.id ? 'primary' : 'secondary'} onClick={() => setSelectedId(c.id)}>
               <span>{c.name}</span>
-              <StatusBadge value={c.health_status} />
+              <StatusBadge value={c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status} />
             </Button>
           ))}
         </div>
@@ -297,7 +299,7 @@ export function VaultPage() {
 
       {!cluster ? (
         <Card>
-          <EmptyState icon={<Shield className="w-6 h-6" />} title="暂无 Vault 集群" description="先在基础设施页纳管 Linux 主机，再创建并部署 Vault 集群。" />
+          <EmptyState icon={<Shield className="w-6 h-6" />} title="暂无 Vault 集群" description="Vault 负责安全存储密钥与凭据。先接入主机，再选择节点、创建配置并部署服务。" action={isAdmin && <Button variant="primary" onClick={() => setShowCreate(true)}>创建第一个 Vault 集群</Button>} />
         </Card>
       ) : (
         <div className="space-y-4">
@@ -804,42 +806,18 @@ export function VaultPage() {
         </div>
       )}
 
-      <Modal open={showCreate} title="新建 Vault 集群" onClose={() => setShowCreate(false)}>
-        <form onSubmit={createCluster} className="space-y-3 text-xs">
-          <Input label="集群名称" required value={cForm.name} onChange={(e) => setCForm({ ...cForm, name: e.target.value })} />
-          <Select label="部署模式" value={cForm.mode} onChange={(e) => setCForm({ ...cForm, mode: e.target.value })}>
-            <option value="cluster">Raft HA 集群</option>
-            <option value="single">单机模式</option>
-          </Select>
-          <Input label="统一业务入口 URL（可选）" value={cForm.public_api_url} onChange={(e) => setCForm({ ...cForm, public_api_url: e.target.value })} />
-          <div>
-            <div className="mb-1 font-medium">选择节点</div>
-            <div className="max-h-40 space-y-1 overflow-y-auto rounded border border-slate-200 p-2 dark:border-slate-800">
-              {nodes.map((n) => (
-                <label key={n.id} className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={cForm.node_ids.includes(n.id)}
-                    onChange={(e) =>
-                      setCForm({
-                        ...cForm,
-                        node_ids: e.target.checked
-                          ? [...cForm.node_ids, n.id]
-                          : cForm.node_ids.filter((x) => x !== n.id),
-                      })
-                    }
-                  />
-                  <span>{n.name} ({n.host})</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setShowCreate(false)}>取消</Button>
-            <Button type="submit" variant="primary">创建</Button>
-          </div>
-        </form>
-      </Modal>
+      <ClusterCreateModal
+        open={showCreate}
+        product="vault"
+        nodes={nodes}
+        onClose={() => setShowCreate(false)}
+        onCreated={async (id) => {
+          await loadList();
+          setSelectedId(id);
+          setTab('status');
+          toast.success('集群配置已创建，请继续部署服务');
+        }}
+      />
 
       <Modal open={showKVMount} title="启用 KV v2 挂载" onClose={() => setShowKVMount(false)}>
         <form

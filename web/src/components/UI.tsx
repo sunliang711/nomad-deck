@@ -53,6 +53,17 @@ export function Card({
 
 type Tone = 'neutral' | 'green' | 'amber' | 'red' | 'blue';
 
+const statusLabels: Record<string, string> = {
+  healthy: '健康', online: '在线', running: '运行中', success: '成功', succeeded: '成功',
+  active: '运行中', ok: '正常', completed: '已完成', enabled: '已启用', ready: '就绪',
+  initialized: '已初始化', uninitialized: '待部署', unknown: '待探测', degraded: '状态异常',
+  pending: '等待中', waiting: '等待中', upgrading: '升级中', warn: '需关注', sealed: '已密封',
+  init_in_doubt: '初始化待核对', needs_reconcile: '需核对', partial_success: '部分成功',
+  timeout: '已超时', failed: '失败', failure: '失败', offline: '离线', unreachable: '无法连接',
+  fail: '异常', rolled_back: '已回退', anomaly: '异常', timed_out: '已超时', disabled: '已停用',
+  inactive: '未运行', interrupted: '已中断', sync: '同步', async: '异步', applied: '已应用',
+};
+
 const toneMap: Record<Tone, string> = {
   neutral: 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
   green: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30',
@@ -80,7 +91,7 @@ export function StatusBadge({ value, label }: { value?: string; label?: string }
       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium ${toneMap[tone]}`}
     >
       <span className={`h-1.5 w-1.5 rounded-full bg-current ${animated ? 'animate-pulse' : ''}`} aria-hidden="true" />
-      {label || value || 'unknown'}
+      <span title={value}>{label || statusLabels[v] || value || '待探测'}</span>
     </span>
   );
 }
@@ -97,6 +108,8 @@ export function statusTone(status?: string): Tone {
     case 'completed':
     case 'enabled':
     case 'ready':
+    case 'initialized':
+    case 'applied':
       return 'green';
     case 'degraded':
     case 'pending':
@@ -118,6 +131,8 @@ export function statusTone(status?: string): Tone {
     case 'anomaly':
     case 'timed_out':
     case 'disabled':
+    case 'inactive':
+    case 'interrupted':
       return 'red';
     case 'sync':
     case 'async':
@@ -519,6 +534,7 @@ export function Modal({
   busy = false,
   dismissible = true,
   backdropClassName = '',
+  footer,
 }: {
   open: boolean;
   title: React.ReactNode;
@@ -529,6 +545,7 @@ export function Modal({
   busy?: boolean;
   dismissible?: boolean;
   backdropClassName?: string;
+  footer?: React.ReactNode;
 }) {
   if (!open) return null;
   const resolvedSize = size || (wide ? 'xl' : 'lg');
@@ -540,6 +557,7 @@ export function Modal({
       busy={busy}
       dismissible={dismissible}
       backdropClassName={backdropClassName}
+      footer={footer}
     >
       {children}
     </ModalDialog>
@@ -554,6 +572,7 @@ function ModalDialog({
   busy,
   dismissible,
   backdropClassName,
+  footer,
 }: {
   title: React.ReactNode;
   onClose: () => void;
@@ -562,6 +581,7 @@ function ModalDialog({
   busy: boolean;
   dismissible: boolean;
   backdropClassName: string;
+  footer?: React.ReactNode;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
@@ -648,6 +668,7 @@ function ModalDialog({
           )}
         </div>
         <div className="flex-1 overflow-y-auto overscroll-contain p-6">{children}</div>
+        {footer && <div className="shrink-0 border-t border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">{footer}</div>}
       </div>
     </div>,
     document.body,
@@ -731,7 +752,19 @@ export function SectionTabs({
   return (
     <nav
       role="tablist"
-      className="bg-white dark:bg-slate-900 rounded-xl border border-[#e3e8f1] dark:border-slate-800 p-1.5 inline-flex flex-wrap items-center gap-1 shadow-[0_2px_8px_rgba(15,23,42,0.02)]"
+      aria-label="页面分区"
+      onKeyDown={(event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+        const index = buttons.indexOf(event.target as HTMLButtonElement);
+        if (index < 0) return;
+        event.preventDefault();
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+          : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        onChange(tabs[next].id);
+        buttons[next]?.focus();
+      }}
+      className="max-w-full overflow-x-auto bg-white dark:bg-slate-900 rounded-xl border border-[#e3e8f1] dark:border-slate-800 p-1.5 inline-flex items-center gap-1 shadow-[0_2px_8px_rgba(15,23,42,0.02)]"
     >
       {tabs.map((t) => {
         const isActive = active === t.id;
@@ -741,8 +774,9 @@ export function SectionTabs({
             type="button"
             role="tab"
             aria-selected={isActive}
+            tabIndex={isActive ? 0 : -1}
             onClick={() => onChange(t.id)}
-            className={`inline-flex items-center gap-1.5 rounded-[10px] px-3.5 py-2 text-xs sm:text-sm transition whitespace-nowrap border ${
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-[10px] px-3.5 py-2 text-xs sm:text-sm transition whitespace-nowrap border ${
               isActive
                 ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30 font-semibold'
                 : 'border-transparent text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white font-medium'

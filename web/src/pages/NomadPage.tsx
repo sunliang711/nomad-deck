@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Boxes, Plus, RefreshCw } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
@@ -15,6 +15,7 @@ import {
   Input,
   MaskedSecret,
   Modal,
+  LoadingState,
   PageHeader,
   PasswordConfirmModal,
   SecretInput,
@@ -27,10 +28,11 @@ import { NomadWorkbench } from '../components/NomadWorkbench';
 import { CodeEditor } from '../components/CodeEditor';
 import { ClusterOpsSection } from '../components/ClusterOpsSection';
 import { UninstallClusterModal, type UninstallPlan } from '../components/UninstallClusterModal';
+import { ClusterCreateModal } from '../components/ClusterCreateModal';
 
 export function NomadPage() {
   const { isAdmin } = useAuth();
-  const { openTask, openNodeLogs } = useOpsDrawer();
+  const { openTask, openNodeLogs, tasks } = useOpsDrawer();
   const toast = useToast();
   const askConfirm = useConfirm();
   const [searchParams] = useSearchParams();
@@ -38,6 +40,9 @@ export function NomadPage() {
   const [clusters, setClusters] = useState<any[]>([]);
   const [nodes, setNodes] = useState<any[]>([]);
   const [selectedId, setSelectedId] = useState('');
+  const [loadingList, setLoadingList] = useState(true);
+  const selectionRef = useRef(selectedId);
+  selectionRef.current = selectedId;
   const [tab, setTab] = useState('status');
   const [status, setStatus] = useState<any>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
@@ -55,7 +60,6 @@ export function NomadPage() {
   const [err, setErr] = useState('');
 
   const [showCreate, setShowCreate] = useState(false);
-  const [cForm, setCForm] = useState({ name: '', mode: 'cluster', region: 'global', datacenter: 'dc1', public_api_url: '', members: [] as Array<{ node_id: string; role: string; advertise_addr: string }> });
   const [deployVer, setDeployVer] = useState('latest');
   const [upVer, setUpVer] = useState('');
   const [showJoin, setShowJoin] = useState(false);
@@ -88,6 +92,8 @@ export function NomadPage() {
       });
     } catch (ex: any) {
       setErr(ex?.message || '加载 Nomad 集群列表失败');
+    } finally {
+      setLoadingList(false);
     }
   }, [queryId]);
 
@@ -98,9 +104,15 @@ export function NomadPage() {
         apiGet(`/api/v1/clusters/${selectedId}/status`),
         apiGet(`/api/v1/clusters/${selectedId}/snapshots`),
       ]);
+      if (selectionRef.current !== selectedId) return;
       setStatus(stRes.status);
+      setClusters((prev) => prev.map((c) => c.id === selectedId ? {
+        ...c, health_status: stRes.status.health_status, init_state: stRes.status.init_state,
+        maintenance_mode: stRes.status.maintenance_mode, maintenance_reason: stRes.status.maintenance_reason,
+      } : c));
       setSnapshots(snRes.snapshots || []);
     } catch (ex: any) {
+      if (selectionRef.current !== selectedId) return;
       setErr(ex?.message || '加载 Nomad 状态失败');
     }
   }, [selectedId]);
@@ -135,6 +147,20 @@ export function NomadPage() {
       setDefaultUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
     }).catch((ex) => setErr(ex.message));
   }, []);
+
+  const clusterTaskState = tasks.filter((task) => task.target_id === selectedId)
+    .map((task) => `${task.id}:${task.status}`).join(',');
+
+  useEffect(() => {
+    if (!clusterTaskState) return;
+    void loadList();
+    const uninstallDone = tasks.some((task) => task.target_id === selectedId && task.action === 'cluster.uninstall' && task.status === 'success');
+    if (!uninstallDone) void loadOpsTab();
+  }, [clusterTaskState, loadList, loadOpsTab]);
+
+  useEffect(() => {
+    setStatus(null);
+  }, [selectedId]);
 
   const cluster = clusters.find((c) => c.id === selectedId);
   const clusterProxyPref = cluster?.settings?.use_proxy;
@@ -219,14 +245,8 @@ export function NomadPage() {
 
   const clusterNodes = status?.nodes || [];
 
-  const toggleMember = (n: any, checked: boolean) => {
-    setCForm((prev) => ({
-      ...prev,
-      members: checked
-        ? [...prev.members, { node_id: n.id, role: 'server_client', advertise_addr: n.host }]
-        : prev.members.filter((m) => m.node_id !== n.id),
-    }));
-  };
+
+  if (loadingList) return <LoadingState label="正在加载 Nomad 集群…" />;
 
   return (
     <div className="space-y-5">
@@ -254,7 +274,7 @@ export function NomadPage() {
           {clusters.map((c) => (
             <Button key={c.id} size="sm" variant={selectedId === c.id ? 'primary' : 'secondary'} onClick={() => setSelectedId(c.id)}>
               <span>{c.name}</span>
-              <StatusBadge value={c.health_status} />
+              <StatusBadge value={c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status} />
             </Button>
           ))}
         </div>
@@ -273,7 +293,7 @@ export function NomadPage() {
 
       {!cluster ? (
         <Card>
-          <EmptyState icon={<Boxes className="w-6 h-6" />} title="暂无 Nomad 集群" description="先在基础设施页纳管 Linux 主机，再创建并部署 Nomad 集群。" />
+          <EmptyState icon={<Boxes className="w-6 h-6" />} title="暂无 Nomad 集群" description="Nomad 负责调度与运行工作负载。先接入主机，再选择节点、创建配置并部署服务。" action={isAdmin && <Button variant="primary" onClick={() => setShowCreate(true)}>创建第一个 Nomad 集群</Button>} />
         </Card>
       ) : (
         <div className="space-y-4">
@@ -639,63 +659,18 @@ export function NomadPage() {
         </form>
       </Modal>
 
-      <Modal open={showCreate} title="新建 Nomad 集群" onClose={() => setShowCreate(false)}>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void apiPost('/api/v1/clusters', {
-              type: 'nomad',
-              name: cForm.name,
-              mode: cForm.mode,
-              region: cForm.region,
-              datacenter: cForm.datacenter,
-              public_api_url: cForm.public_api_url,
-              nodes: cForm.members,
-            })
-              .then((r) => { setShowCreate(false); return loadList().then(() => r.cluster?.id && setSelectedId(r.cluster.id)); })
-              .catch((ex) => setErr(ex.message));
-          }}
-          className="space-y-3 text-xs"
-        >
-          <Input label="集群名称" required value={cForm.name} onChange={(e) => setCForm({ ...cForm, name: e.target.value })} />
-          <div className="grid grid-cols-2 gap-2">
-            <Select label="模式" value={cForm.mode} onChange={(e) => setCForm({ ...cForm, mode: e.target.value })}>
-              <option value="cluster">多节点集群</option>
-              <option value="single">单机模式</option>
-            </Select>
-            <Input label="Datacenter" value={cForm.datacenter} onChange={(e) => setCForm({ ...cForm, datacenter: e.target.value })} />
-          </div>
-          <Input label="统一业务入口 URL（可选）" value={cForm.public_api_url} onChange={(e) => setCForm({ ...cForm, public_api_url: e.target.value })} />
-          <div className="max-h-40 space-y-1 overflow-y-auto rounded border border-slate-200 p-2 dark:border-slate-800">
-            {nodes.map((n) => {
-              const picked = cForm.members.find((m) => m.node_id === n.id);
-              return (
-                <div key={n.id} className="flex items-center justify-between gap-2">
-                  <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={Boolean(picked)} onChange={(e) => toggleMember(n, e.target.checked)} />
-                    <span>{n.name} ({n.host})</span>
-                  </label>
-                  {picked && (
-                    <select
-                      value={picked.role}
-                      onChange={(e) => setCForm({ ...cForm, members: cForm.members.map((m) => m.node_id === n.id ? { ...m, role: e.target.value } : m) })}
-                      className="rounded border border-slate-300 px-1.5 py-0.5 dark:border-slate-700 dark:bg-slate-950"
-                    >
-                      <option value="server_client">server_client</option>
-                      <option value="server">server</option>
-                      <option value="client">client</option>
-                    </select>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setShowCreate(false)}>取消</Button>
-            <Button type="submit" variant="primary">创建</Button>
-          </div>
-        </form>
-      </Modal>
+      <ClusterCreateModal
+        open={showCreate}
+        product="nomad"
+        nodes={nodes}
+        onClose={() => setShowCreate(false)}
+        onCreated={async (id) => {
+          await loadList();
+          setSelectedId(id);
+          setTab('status');
+          toast.success('集群配置已创建，请继续部署服务');
+        }}
+      />
 
       <PasswordConfirmModal
         open={Boolean(pwAction)}

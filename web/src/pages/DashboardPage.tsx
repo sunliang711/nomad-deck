@@ -14,6 +14,8 @@ import {
 import { apiGet, fmtTime } from '../lib/api';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { Badge, Button, Card, EmptyState, ErrorAlert, LoadingState, PageHeader, StatusBadge } from '../components/UI';
+import { GettingStarted } from '../components/GettingStarted';
+import { formatActionLabel } from '../lib/actionLabels';
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -69,7 +71,7 @@ export function DashboardPage() {
       icon: <ShieldCheck className="w-5 h-5" />,
       label: '证书临期预警',
       value: certAlerts.length,
-      sub: certAlerts.length > 0 ? '请尽快执行续期或轮换' : '所有集群证书有效期正常',
+      sub: certAlerts.length > 0 ? '请尽快执行续期或轮换' : (clusters.total ?? 0) > 0 ? '所有集群证书有效期正常' : '创建集群后自动监控证书',
       to: '/vault',
     },
     {
@@ -81,7 +83,8 @@ export function DashboardPage() {
     },
   ];
 
-  const hasClusters = (clusters.total ?? 0) > 0;
+  const hasNomad = (clusters.nomad ?? 0) > 0;
+  const hasReadyNomad = (clusters.items || []).some((c: any) => c.type === 'nomad' && c.init_state === 'initialized' && c.health_status === 'healthy');
 
   return (
     <div className="space-y-6">
@@ -138,7 +141,7 @@ export function DashboardPage() {
             </Link>
           </div>
         )}
-        {backupAlerts?.missing_offsite_target && (
+        {backupAlerts?.missing_offsite_target && (clusters.total ?? 0) > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
             <span>灾备告警：尚未配置已启用的异地备份目标（SFTP / S3 / SafeKeep）。</span>
             <Link to="/migration-backup" className="font-medium underline">
@@ -161,12 +164,12 @@ export function DashboardPage() {
               <ShieldCheck className="w-6 h-6" />
             </div>
             <div className="min-w-0">
-              <div className="text-xs font-medium text-indigo-500 dark:text-indigo-400 mb-1">集群控制面状态</div>
+              <div className="text-xs font-medium text-indigo-500 dark:text-indigo-400 mb-1">{hasNomad ? '集群控制面状态' : '开始使用 NomadDeck'}</div>
               <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-                {hasClusters ? '集群运行态与生命周期受控' : '从纳管 Linux 主机与集群开始'}
+                {hasReadyNomad ? '集群就绪，开始编排工作负载' : hasNomad ? '继续完成集群部署与检查' : '搭建你的第一个集群'}
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                {hasClusters
+                {hasReadyNomad
                   ? '可直接进入 Nomad Job 中心编排工作负载，或巡检集群状态与 Raft 快照。'
                   : '先添加 Linux 主机并推送 SSH 公钥，随后即可一键初始化部署 Nomad 或 Vault 集群。'}
               </p>
@@ -175,12 +178,14 @@ export function DashboardPage() {
           <button
             type="button"
             className="primary-button shrink-0"
-            onClick={() => navigate(hasClusters ? '/jobs' : '/infra')}
+            onClick={() => navigate(hasReadyNomad ? '/jobs' : (nodes.total ?? 0) > 0 ? '/nomad' : '/infra')}
           >
-            <span>{hasClusters ? '前往 Job 中心' : '纳管主机'}</span>
+            <span>{hasReadyNomad ? '前往 Job 中心' : hasNomad ? '继续配置集群' : (nodes.total ?? 0) > 0 ? '创建 Nomad 集群' : '接入第一台主机'}</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
+
+        <GettingStarted hasHosts={(nodes.total ?? 0) > 0} hasNomad={hasNomad} hasVault={(clusters.vault ?? 0) > 0} />
 
         <div className="grid grid-cols-1 min-[420px]:grid-cols-2 xl:grid-cols-4 gap-4">
           {cards.map((c) => (
@@ -249,7 +254,7 @@ export function DashboardPage() {
                       {c.name}
                     </Link>
                     <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      {c.type.toUpperCase()} · {c.mode} · {c.init_state}
+                      {c.type.toUpperCase()} · {c.mode === 'single' ? '单机' : '高可用集群'} · {c.init_state === 'initialized' ? '已初始化' : '待完成初始化'}
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
@@ -358,7 +363,7 @@ export function DashboardPage() {
                       onClick={() => openTask(t.id, `${t.action} (${t.id})`)}
                       className="font-mono font-medium text-indigo-600 hover:underline dark:text-indigo-400 truncate"
                     >
-                      {t.action}
+                      {formatActionLabel(t.action)}
                     </button>
                     <div className="text-slate-500 dark:text-slate-400 mt-0.5">
                       {t.triggered_by} · {fmtTime(t.created_at)}

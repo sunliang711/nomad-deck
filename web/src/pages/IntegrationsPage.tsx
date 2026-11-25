@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link2, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { apiDelete, apiGet, apiPost } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
+import { isTaskActiveStatus } from '../lib/actionLabels';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import {
@@ -21,7 +22,10 @@ import { CodeEditor } from '../components/CodeEditor';
 
 export function IntegrationsPage() {
   const { isAdmin } = useAuth();
-  const { openTask } = useOpsDrawer();
+  const { tasks, openTask } = useOpsDrawer();
+  const [deleting, setDeleting] = useState(false);
+  const deleteRef = useRef(false);
+  const [deleteTaskId, setDeleteTaskId] = useState('');
   const toast = useToast();
   const askConfirm = useConfirm();
 
@@ -66,6 +70,18 @@ export function IntegrationsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const deleteTask = tasks.find((task) => task.id === deleteTaskId);
+  const deletePending = Boolean(deleteTaskId && (!deleteTask || isTaskActiveStatus(deleteTask.status)));
+
+  useEffect(() => {
+    if (!deleteTask || isTaskActiveStatus(deleteTask.status)) return;
+    setDeleteTaskId('');
+    setPlan(null);
+    setDoctor(null);
+    setExampleHCL('');
+    void load();
+  }, [deleteTask?.id, deleteTask?.status, load]);
 
   const selectItem = async (id: string) => {
     setErr('');
@@ -123,7 +139,7 @@ export function IntegrationsPage() {
   };
 
   const deleteIntegration = async () => {
-    if (!selected) return;
+    if (!selected || deleteRef.current || deletePending) return;
     if (
       !(await askConfirm(`确定要删除联动配置「${selected.name}」吗？`, {
         title: '删除集群联动',
@@ -133,13 +149,24 @@ export function IntegrationsPage() {
     ) {
       return;
     }
+    if (deleteRef.current) return;
+    deleteRef.current = true;
+    setDeleting(true);
     try {
-      await apiDelete(`/api/v1/integrations/${selected.id}`);
-      setSelected(null);
-      toast.success('联动配置已删除');
-      await load();
+      const res = await apiDelete(`/api/v1/integrations/${selected.id}`);
+      if (res?.task?.id) {
+        setDeleteTaskId(res.task.id);
+        openTask(res.task.id, `删除联动：${selected.name}`);
+      } else {
+        setSelected(null);
+        toast.success('联动配置已删除');
+        await load();
+      }
     } catch (ex: any) {
       toast.error(ex?.message || '删除联动失败');
+    } finally {
+      deleteRef.current = false;
+      setDeleting(false);
     }
   };
 
@@ -256,8 +283,8 @@ export function IntegrationsPage() {
                   >
                     <TermLabel term="四段式体检" tip="依次检验 Nomad JWKS 公钥可达性、Vault JWT Auth 配置、工作负载 Role 绑定和签名签发链路。" />
                   </Button>
-                  <Button size="sm" variant="danger" onClick={() => void deleteIntegration()}>
-                    删除
+                  <Button size="sm" variant="danger" loading={deleting} disabled={deletePending} onClick={() => void deleteIntegration()}>
+                    {deletePending ? '正在删除…' : '删除'}
                   </Button>
                 </div>
               )

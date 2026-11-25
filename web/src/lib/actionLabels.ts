@@ -17,6 +17,7 @@ export const ACTION_LABELS: Record<string, string> = {
   'docker.install': '安装 Docker',
   'docker.upgrade': '升级 Docker',
   'integration.sync': '同步集群联动',
+  'integration.delete': '删除集群联动',
 };
 
 export function formatActionLabel(action: string): string {

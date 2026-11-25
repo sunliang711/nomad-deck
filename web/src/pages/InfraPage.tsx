@@ -35,6 +35,7 @@ export function InfraPage() {
   const [nodes, setNodes] = useState<any[]>([]);
   const [err, setErr] = useState('');
   const [metricsBusy, setMetricsBusy] = useState(false);
+  const [formBusy, setFormBusy] = useState(false);
 
   // Key modals
   const [showGenKey, setShowGenKey] = useState(false);
@@ -88,6 +89,7 @@ export function InfraPage() {
 
   const generateKey = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormBusy(true);
     setErr('');
     try {
       await apiPost('/api/v1/ssh-keys/generate', { name: keyName.trim() });
@@ -96,11 +98,14 @@ export function InfraPage() {
       await load();
     } catch (ex: any) {
       setErr(ex?.message || '生成密钥失败');
+    } finally {
+      setFormBusy(false);
     }
   };
 
   const importKey = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormBusy(true);
     setErr('');
     try {
       await apiPost('/api/v1/ssh-keys', { name: keyName.trim(), private_key: privPEM });
@@ -110,10 +115,18 @@ export function InfraPage() {
       await load();
     } catch (ex: any) {
       setErr(ex?.message || '导入密钥失败');
+    } finally {
+      setFormBusy(false);
     }
   };
 
   const openAddNode = () => {
+    setErr('');
+    if (keys.length === 0) {
+      setTab('keys');
+      toast.info('请先生成或导入 SSH 密钥，再添加主机');
+      return;
+    }
     setEditingNode(null);
     const defKey = keys.find((k) => k.is_default)?.id || keys[0]?.id || '';
     setNodeForm({ name: '', host: '', ssh_port: 22, ssh_user: 'root', ssh_key_id: defKey, use_sudo: true, notes: '' });
@@ -121,6 +134,7 @@ export function InfraPage() {
   };
 
   const openEditNode = (n: any) => {
+    setErr('');
     setEditingNode(n);
     setNodeForm({
       name: n.name,
@@ -136,6 +150,7 @@ export function InfraPage() {
 
   const saveNode = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormBusy(true);
     setErr('');
     try {
       if (editingNode) {
@@ -147,6 +162,8 @@ export function InfraPage() {
       await load();
     } catch (ex: any) {
       setErr(ex?.message || '保存主机失败');
+    } finally {
+      setFormBusy(false);
     }
   };
 
@@ -164,6 +181,7 @@ export function InfraPage() {
   const doPushKey = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!pushNode) return;
+    setFormBusy(true);
     setErr('');
     try {
       await apiPost(`/api/v1/nodes/${pushNode.id}/push-key`, { password: pushPassword });
@@ -173,6 +191,8 @@ export function InfraPage() {
       toast.success(`已成功推送公钥到主机 ${name}`);
     } catch (ex: any) {
       setErr(ex?.message || '推送公钥失败');
+    } finally {
+      setFormBusy(false);
     }
   };
 
@@ -333,6 +353,16 @@ export function InfraPage() {
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
+      {nodes.length === 0 && (
+        <Card title="从第一台主机开始">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 text-sm">
+            <div><span className="font-semibold text-indigo-600 dark:text-indigo-300">1. 准备 SSH 密钥</span><p className="mt-1 text-xs leading-6 text-slate-500">生成新密钥，或导入已能登录目标主机的私钥。</p></div>
+            <div><span className="font-semibold text-indigo-600 dark:text-indigo-300">2. 添加主机与授权</span><p className="mt-1 text-xs leading-6 text-slate-500">填写地址，选择密钥；主机尚未授权时，使用「推送公钥」。</p></div>
+            <div><span className="font-semibold text-indigo-600 dark:text-indigo-300">3. 测试连接</span><p className="mt-1 text-xs leading-6 text-slate-500">点击「测试连接」，确认在线后再创建 Nomad 或 Vault 集群。</p></div>
+          </div>
+        </Card>
+      )}
+
       {probeWarnings && (
         <Card
           title={`主机 ${probeWarnings.node} 环境探测结果`}
@@ -353,10 +383,10 @@ export function InfraPage() {
       {tab === 'nodes' && (
         <Card>
           {nodes.length === 0 ? (
-            <EmptyState text="尚未纳管任何 Linux 主机" />
+            <EmptyState icon={<ServerIcon className="h-6 w-6" />} title="接入你的第一台 Linux 主机" description="控制面通过 SSH 安装和管理集群服务。推荐准备 3 台主机体验高可用集群。" action={isAdmin && <Button variant="primary" onClick={openAddNode}>新增主机</Button>} />
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
+              <table className="w-full min-w-[1050px] text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
                     <th className="py-2 pr-3">名称 / 地址</th>
@@ -445,9 +475,9 @@ export function InfraPage() {
                               负载
                             </Button>
                             <Button size="sm" onClick={() => void testNode(n)}>
-                              探测
+                              测试连接
                             </Button>
-                            <Button size="sm" onClick={() => setPushNode(n)}>
+                            <Button size="sm" onClick={() => { setErr(''); setPushNode(n); }}>
                               推公钥
                             </Button>
                             <Button size="sm" onClick={() => void openDocker(n)}>
@@ -501,7 +531,7 @@ export function InfraPage() {
       {tab === 'keys' && (
         <Card>
           {keys.length === 0 ? (
-            <EmptyState text="暂无 SSH 密钥" />
+            <EmptyState icon={<KeyRound className="h-6 w-6" />} title="先准备一把 SSH 密钥" description="已有免密登录私钥可直接导入；也可以生成新密钥，再向主机推送公钥。" action={isAdmin && <div className="flex flex-wrap gap-2 justify-center"><Button onClick={() => { setErr(''); setShowImportKey(true); }}>导入已有私钥</Button><Button variant="primary" onClick={() => { setErr(''); setShowGenKey(true); }}>生成新密钥</Button></div>} />
           ) : (
             <div className="space-y-3">
               {keys.map((k) => (
@@ -585,19 +615,21 @@ export function InfraPage() {
       )}
 
       {/* Generate SSH key modal */}
-      <Modal open={showGenKey} title="生成 Ed25519 SSH 密钥对" onClose={() => setShowGenKey(false)}>
+      <Modal open={showGenKey} title="生成 Ed25519 SSH 密钥对" busy={formBusy} onClose={() => setShowGenKey(false)}>
         <form onSubmit={generateKey} className="space-y-4">
+          <ErrorAlert message={err} onClose={() => setErr('')} />
           <Input label="密钥名称" required value={keyName} onChange={(e) => setKeyName(e.target.value)} />
           <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setShowGenKey(false)}>取消</Button>
-            <Button type="submit" variant="primary">生成</Button>
+            <Button type="button" disabled={formBusy} onClick={() => setShowGenKey(false)}>取消</Button>
+            <Button type="submit" variant="primary" loading={formBusy}>生成</Button>
           </div>
         </form>
       </Modal>
 
       {/* Import SSH key modal */}
-      <Modal open={showImportKey} title="导入现有 SSH 私钥" onClose={() => setShowImportKey(false)}>
+      <Modal open={showImportKey} title="导入现有 SSH 私钥" busy={formBusy} onClose={() => setShowImportKey(false)}>
         <form onSubmit={importKey} className="space-y-4">
+          <ErrorAlert message={err} onClose={() => setErr('')} />
           <Input label="密钥名称" required value={keyName} onChange={(e) => setKeyName(e.target.value)} />
           <label className="block space-y-1">
             <span className="block text-xs font-medium">私钥 PEM/OpenSSH 原文（无口令）</span>
@@ -610,15 +642,16 @@ export function InfraPage() {
             />
           </label>
           <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setShowImportKey(false)}>取消</Button>
-            <Button type="submit" variant="primary">导入</Button>
+            <Button type="button" disabled={formBusy} onClick={() => setShowImportKey(false)}>取消</Button>
+            <Button type="submit" variant="primary" loading={formBusy}>导入</Button>
           </div>
         </form>
       </Modal>
 
       {/* Create/Edit Node modal */}
-      <Modal open={showNodeModal} title={editingNode ? '编辑主机' : '新增 Linux 主机'} onClose={() => setShowNodeModal(false)}>
+      <Modal open={showNodeModal} title={editingNode ? '编辑主机' : '新增 Linux 主机'} busy={formBusy} onClose={() => setShowNodeModal(false)}>
         <form onSubmit={saveNode} className="space-y-3">
+          <ErrorAlert message={err} onClose={() => setErr('')} />
           <Input label="主机名称" required value={nodeForm.name} onChange={(e) => setNodeForm({ ...nodeForm, name: e.target.value })} />
           <div className="grid grid-cols-3 gap-2">
             <div className="col-span-2">
@@ -627,12 +660,15 @@ export function InfraPage() {
             <Input
               label="SSH 端口"
               type="number"
+              min={1}
+              max={65535}
+              required
               value={nodeForm.ssh_port}
               onChange={(e) => setNodeForm({ ...nodeForm, ssh_port: Number(e.target.value) })}
             />
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Input label="SSH 用户" required value={nodeForm.ssh_user} onChange={(e) => setNodeForm({ ...nodeForm, ssh_user: e.target.value })} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input label="SSH 用户" autoComplete="off" required value={nodeForm.ssh_user} onChange={(e) => setNodeForm({ ...nodeForm, ssh_user: e.target.value })} />
             <Select label="SSH 密钥" value={nodeForm.ssh_key_id} onChange={(e) => setNodeForm({ ...nodeForm, ssh_key_id: e.target.value })}>
               {keys.map((k) => (
                 <option key={k.id} value={k.id}>
@@ -651,20 +687,21 @@ export function InfraPage() {
           </label>
           <Input label="备注" value={nodeForm.notes} onChange={(e) => setNodeForm({ ...nodeForm, notes: e.target.value })} />
           <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" onClick={() => setShowNodeModal(false)}>取消</Button>
-            <Button type="submit" variant="primary">保存</Button>
+            <Button type="button" disabled={formBusy} onClick={() => setShowNodeModal(false)}>取消</Button>
+            <Button type="submit" variant="primary" loading={formBusy}>保存</Button>
           </div>
         </form>
       </Modal>
 
       {/* Push key modal */}
-      <Modal open={Boolean(pushNode)} title={`推送公钥到 ${pushNode?.name}`} onClose={() => setPushNode(null)}>
+      <Modal open={Boolean(pushNode)} title={`推送公钥到 ${pushNode?.name}`} busy={formBusy} onClose={() => setPushNode(null)}>
         <form onSubmit={doPushKey} className="space-y-4">
+          <ErrorAlert message={err} onClose={() => setErr('')} />
           <p className="text-xs text-slate-500">使用一次性 SSH 密码将关联公钥幂等写入目标主机 authorized_keys，密码仅在内存使用，不入库、不记审计。</p>
           <SecretInput label="目标主机 SSH 密码" required value={pushPassword} onChangeValue={setPushPassword} />
           <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setPushNode(null)}>取消</Button>
-            <Button type="submit" variant="primary">推送公钥</Button>
+            <Button type="button" disabled={formBusy} onClick={() => setPushNode(null)}>取消</Button>
+            <Button type="submit" variant="primary" loading={formBusy}>推送公钥</Button>
           </div>
         </form>
       </Modal>

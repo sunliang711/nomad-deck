@@ -268,6 +268,43 @@
     min-height: 36px;
   }
 
+  .ops-disclosure {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+  }
+
+  .ops-disclosure > summary {
+    padding: 16px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .ops-disclosure > summary > span {
+    display: block;
+    margin: 6px 0 0 16px;
+    font-size: 12px;
+    font-weight: 400;
+    color: #64748b;
+  }
+
+  .ops-disclosure[open] > summary {
+    border-bottom: 1px solid #e2e8f0;
+  }
+
+  .ops-disclosure-body {
+    padding: 16px;
+  }
+
+  html.dark .ops-disclosure,
+  html.dark .ops-disclosure[open] > summary {
+    border-color: #334155;
+  }
+
+  html.dark .ops-disclosure > summary > span {
+    color: #94a3b8;
+  }
+
   .filter-bar > div:has(input) {
     background: #f8faff;
   }

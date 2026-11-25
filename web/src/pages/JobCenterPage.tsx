@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Download, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
+import { Boxes, Download, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { apiDelete, apiDownload, apiGet, apiPost, fmtTime, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../components/Toast';
@@ -10,6 +11,7 @@ import {
   Card,
   EmptyState,
   ErrorAlert,
+  LoadingState,
   Input,
   Modal,
   PageHeader,
@@ -67,7 +69,10 @@ export function JobCenterPage() {
   const [selectedJobId, setSelectedJobId] = useState('');
   const [tplName, setTplName] = useState('');
   const [err, setErr] = useState('');
+  const [loadingClusters, setLoadingClusters] = useState(true);
   const editRequestRef = useRef(0);
+  const selectedCluster = clusters.find((c) => c.id === clusterId);
+  const needsDeployment = selectedCluster?.init_state === 'uninitialized';
 
   const loadClusters = useCallback(async () => {
     setErr('');
@@ -82,11 +87,13 @@ export function JobCenterPage() {
       if (list.length > 0) setClusterId((prev) => prev || list[0].id);
     } catch (ex: any) {
       setErr(ex?.message || '加载集群或模板列表失败');
+    } finally {
+      setLoadingClusters(false);
     }
   }, [isAdmin]);
 
   const loadJobs = useCallback(async () => {
-    if (!clusterId) return;
+    if (!clusterId || needsDeployment) { setJobs([]); return; }
     setErr('');
     try {
       const res = await apiGet(`/api/v1/nomad/${clusterId}/jobs?namespace=${encodeURIComponent(namespace)}`);
@@ -94,7 +101,7 @@ export function JobCenterPage() {
     } catch (ex: any) {
       setErr(ex?.message || '加载 Job 列表失败');
     }
-  }, [clusterId, namespace]);
+  }, [clusterId, namespace, needsDeployment]);
 
   useEffect(() => {
     void loadClusters();
@@ -105,11 +112,11 @@ export function JobCenterPage() {
   }, [loadJobs]);
 
   useEffect(() => {
-    if (!clusterId) return;
+    if (!clusterId || needsDeployment) return;
     return openSSE(`/api/v1/nomad/${clusterId}/watch?topics=jobs`, {
       onEvent: (ev) => { if (ev === 'change') void loadJobs(); },
     });
-  }, [clusterId, loadJobs]);
+  }, [clusterId, loadJobs, needsDeployment]);
 
   // clearPlan also invalidates an in-flight preview when its draft or target changes.
   const clearPlan = () => { planRequestRef.current++; setPlan(null); };
@@ -243,22 +250,32 @@ export function JobCenterPage() {
     }
   };
 
+  if (loadingClusters) return <LoadingState label="正在加载 Job 工作区…" />;
+
+  if (!clusters.length) return (
+    <div className="space-y-5">
+      <PageHeader title="Nomad Job 中心" subtitle="编写任务、预览调度计划并运行工作负载" />
+      <ErrorAlert message={err} onClose={() => setErr('')} />
+      <Card><EmptyState icon={<Boxes className="h-6 w-6" />} title="先搭建一个 Nomad 集群" description="Job 需要在 Nomad Client 上运行。集群部署完成后，即可在这里编写第一个任务。" action={<Link to="/nomad" className="primary-button">前往 Nomad 集群</Link>} /></Card>
+    </div>
+  );
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="Nomad Job 中心"
-        subtitle="双模式 HCL / 可视化积木 / JSON Job 编排、Plan Dry-Run 对比、模板库与修订回滚"
+        subtitle="编写任务 → 校验配置 → 预览计划 → 确认运行，支持 HCL、可视化与 JSON"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <div className="w-40">
-              <Select value={clusterId} disabled={modeBusy || (editMode === 'visual' && !visualReady)} onChange={(e) => { setClusterId(e.target.value); clearPlan(); }}>
+              <Select aria-label="目标 Nomad 集群" value={clusterId} disabled={modeBusy || (editMode === 'visual' && !visualReady)} onChange={(e) => { setClusterId(e.target.value); clearPlan(); }}>
                 {clusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </Select>
             </div>
             <div className="w-32">
-              <Input value={namespace} onChange={(e) => { setNamespace(e.target.value); clearPlan(); }} placeholder="Namespace" />
+              <Input aria-label="任务命名空间" value={namespace} onChange={(e) => { setNamespace(e.target.value); clearPlan(); }} placeholder="Namespace" />
             </div>
-            <Button onClick={() => void loadJobs()}>
+            <Button onClick={() => { void loadClusters(); void loadJobs(); }}>
               <RefreshCw className="h-4 w-4" />
               <span>刷新</span>
             </Button>
@@ -279,19 +296,26 @@ export function JobCenterPage() {
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
-      <div className={editMode === 'visual' ? 'grid grid-cols-1 gap-5 2xl:grid-cols-[220px_minmax(0,1fr)]' : 'grid grid-cols-1 gap-5 xl:grid-cols-3'}>
-        <Card title="集群 Jobs & 模板">
+      {needsDeployment && (
+        <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
+          <p>「{selectedCluster.name}」尚未部署。可以先编写配置，部署完成后再校验和运行。</p>
+          <Link to={`/nomad?id=${clusterId}`} className="primary-button">前往部署集群</Link>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
+        <Card title="任务与模板" className="min-w-0">
           <div className="space-y-4 text-xs">
-            <div className="space-y-1.5">
+            <div className="max-h-80 overflow-y-auto space-y-2">
               {jobs.length === 0 ? (
-                <EmptyState text="暂无 Job" />
+                <EmptyState title="准备运行第一个 Job" description="编排工作台已准备示例配置，先校验，再预览计划即可提交。" />
               ) : (
                 jobs.map((j) => {
                   const jobNs = j.namespace || namespace;
                   return (
-                    <div key={`${jobNs}:${j.id}`} className="flex items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
-                      <div>
-                        <div className="font-mono font-semibold">{j.id}</div>
+                    <div key={`${jobNs}:${j.id}`} className="space-y-3 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+                      <div className="space-y-1.5">
+                        <div className="font-mono font-semibold break-all">{j.id}</div>
                         <StatusBadge value={j.stop ? 'stopped' : j.status} />
                       </div>
                       {isAdmin && (
@@ -354,11 +378,11 @@ export function JobCenterPage() {
 
             <div className="border-t border-slate-200 pt-3 dark:border-slate-800">
               <div className="mb-1.5 font-semibold">Job 模板库 ({templates.length})</div>
-              <div className="space-y-1">
+              <div className="max-h-56 overflow-y-auto space-y-2">
                 {templates.map((t) => (
-                  <div key={t.id} className="flex items-center justify-between rounded border border-slate-200 p-1.5 dark:border-slate-800">
-                    <span>{t.name}</span>
-                    <div className="flex gap-1">
+                  <div key={t.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 p-2.5 dark:border-slate-800">
+                    <span className="break-all">{t.name}</span>
+                    <div className="flex shrink-0 gap-1">
                       <Button size="sm" onClick={() => { setHcl(t.hcl || ''); setEditMode('hcl'); setJobVariables({}); clearPlan(); }}>载入</Button>
                       {isAdmin && (
                         <Button
@@ -386,17 +410,17 @@ export function JobCenterPage() {
         </Card>
 
         <Card
-          className={editMode === 'visual' ? '' : 'xl:col-span-2'}
-          title={<TermLabel term="双模式 Job 编排工作台" tip="支持编写 Nomad HCL（HashiCorp Configuration Language）、表单可视化编排或 JSON 定义，提交前可做语法校验和变更比对。" />}
+          className="min-w-0"
+          title={<TermLabel term="Job 编排工作台" tip="支持编写 Nomad HCL（HashiCorp Configuration Language）、表单可视化编排或 JSON 定义，提交前可做语法校验和变更比对。" />}
           actions={
             isAdmin && (
               <div className="flex flex-wrap gap-1.5">
                 <Button size="sm" onClick={() => setShowCompose(true)}>Compose 导入</Button>
-                <Button size="sm" disabled={modeBusy || editMode === 'visual' && !visualReady} onClick={() => void validateJob()}>
-                  <TermLabel term="Validate" tip="调用 Nomad API 校验 HCL/JSON 语法、驱动字段与参数合法性，不改动运行状态。" />
+                <Button size="sm" disabled={needsDeployment || modeBusy || editMode === 'visual' && !visualReady} onClick={() => void validateJob()}>
+                  <TermLabel term="1. 校验配置" tip="调用 Nomad API 校验 HCL/JSON 语法、驱动字段与参数合法性，不改动运行状态。" />
                 </Button>
-                <Button size="sm" variant="primary" disabled={modeBusy || editMode === 'visual' && !visualReady} onClick={() => void runPlan()}>
-                  <TermLabel term="Plan Diff" tip="预演调度变更与滚动影响范围（Plan Dry-Run），确认无误后再提交部署。" />
+                <Button size="sm" variant="primary" disabled={needsDeployment || modeBusy || editMode === 'visual' && !visualReady} onClick={() => void runPlan()}>
+                  <TermLabel term="2. 预览计划" tip="预演调度变更与滚动影响范围（Plan Dry-Run），确认无误后再提交部署。" />
                 </Button>
               </div>
             )
@@ -447,9 +471,9 @@ export function JobCenterPage() {
 
             {plan && (
               <div className="space-y-2 rounded-xl border border-indigo-300 bg-indigo-50/40 p-3.5 dark:border-indigo-500/40 dark:bg-indigo-950/30">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-indigo-900 dark:text-indigo-200">Plan Diff 预览 (plan_id: {plan.plan_id})</span>
-                  {isAdmin && <Button size="sm" variant="primary" onClick={() => void runApply()}>确认 Apply</Button>}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="font-semibold text-indigo-900 dark:text-indigo-200 break-all">调度变更预览 <span className="font-mono font-normal text-xs">{plan.plan_id}</span></span>
+                  {isAdmin && <Button size="sm" variant="primary" onClick={() => void runApply()}>3. 确认运行</Button>}
                 </div>
                 <pre className="max-h-56 overflow-auto rounded-lg bg-slate-950 p-2.5 font-mono text-[11px] text-slate-100">
                   {JSON.stringify(plan.diff || plan, null, 2)}

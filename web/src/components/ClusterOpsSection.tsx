@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
-import { Terminal } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { ArrowRight, CheckCircle2, Circle, Loader2, Server, ShieldCheck, Terminal } from 'lucide-react';
 import { apiGet, fmtTime } from '../lib/api';
+import { useOpsDrawer } from '../lib/opsDrawer';
+import { isTaskActiveStatus } from '../lib/actionLabels';
 import { useConfirm } from './ConfirmDialog';
 import { Badge, Button, Card, ExternalUrlLink, Input, StatusBadge, TermLabel } from './UI';
 
@@ -73,13 +75,20 @@ export function ClusterOpsSection({
   const [availableVersions, setAvailableVersions] = useState<string[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
   const [busyKey, setBusyKey] = useState('');
+  const busyRef = useRef(false);
+  const { tasks, openTask } = useOpsDrawer();
+  const activeTask = tasks.find((task) => task.target_id === cluster.id && isTaskActiveStatus(task.status));
 
   const runBusy = async (key: string, fn: () => Promise<unknown> | void) => {
-    if (busyKey) return;
+    if (busyRef.current || activeTask) return;
+    busyRef.current = true;
     setBusyKey(key);
     try {
       await fn();
+    } catch (ex: any) {
+      onError(ex?.message || '集群操作失败');
     } finally {
+      busyRef.current = false;
       setBusyKey('');
     }
   };
@@ -105,231 +114,62 @@ export function ClusterOpsSection({
   const serverCount = clusterNodes.filter((n: any) => n.role === 'server' || n.role === 'server_client').length;
   const clientCount = clusterNodes.filter((n: any) => n.role === 'client' || n.role === 'server_client').length;
 
+  const initState = status?.init_state || cluster.init_state;
+  const needsDeploy = initState === 'uninitialized';
+  const initialized = initState === 'initialized';
+  const healthy = (status?.health_status || cluster.health_status) === 'healthy';
+  const blocked = Boolean(busyKey || activeTask);
+  const productName = isVault ? 'Vault' : 'Nomad';
+  const versionPicker = (value: string, onChange: (v: string) => void, label: string) => (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <span className="font-medium text-slate-700 dark:text-slate-300">{label}</span>
+        <button type="button" onClick={() => void fetchVersions()} disabled={loadingVersions} className="text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-50">{loadingVersions ? '获取中…' : '获取官方版本列表'}</button>
+      </div>
+      <Input aria-label={label} placeholder="latest 或具体版本号" value={value} onChange={(e) => onChange(e.target.value)} />
+      {availableVersions.length > 0 && <select aria-label="选择官方版本" value="" onChange={(e) => e.target.value && onChange(e.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="">从官方版本列表选择…</option><option value="latest">latest（最新稳定版）</option>{availableVersions.map((v) => <option key={v} value={v}>{v}</option>)}</select>}
+      <p className="text-xs leading-5 text-slate-500">填写 latest 使用最新稳定版，也可指定版本复现环境。</p>
+    </div>
+  );
+  const proxyOption = <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300"><input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} />通过系统代理下载</label>;
+
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card title="集群概要">
-          <div className="space-y-1.5 text-xs">
-            <div>
-              健康状态：<StatusBadge value={cluster.health_status} />
-            </div>
-            <div>
-              初始化状态：<span className="font-mono">{cluster.init_state}</span>
-            </div>
-            <div>维护模式：{cluster.maintenance_mode ? `是 (${cluster.maintenance_reason})` : '否'}</div>
-            <div>
-              {isVault ? 'Active 节点' : 'Leader 节点'}：
-              <span className="font-mono">{status?.active_node || status?.leader || '-'}</span>
-            </div>
-            <div>
-              当前版本：<span className="font-mono">{clusterVersion}</span>
-            </div>
-            <div>CA 到期：{fmtTime(cluster.ca_expires_at)}</div>
-            <div>
-              统一入口：<ExternalUrlLink url={cluster.public_api_url} />
-            </div>
-          </div>
-        </Card>
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0"><div className="rounded-xl bg-indigo-50 p-3 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300">{isVault ? <ShieldCheck className="h-5 w-5" /> : <Server className="h-5 w-5" />}</div><div className="min-w-0"><h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 break-all">{cluster.name}</h2><p className="mt-1 text-xs text-slate-500">{productName} · {cluster.mode === 'single' ? '单机体验' : '高可用集群'} · {status ? `${clusterNodes.length} 台主机` : '正在读取主机…'}</p></div></div>
+          <div className="flex flex-wrap items-center gap-2"><StatusBadge value={needsDeploy ? 'uninitialized' : status?.health_status || cluster.health_status} />{(status?.maintenance_mode ?? cluster.maintenance_mode) && <Badge tone="amber">维护中</Badge>}<Badge>{clusterVersion === '-' ? '尚未安装' : `v${clusterVersion}`}</Badge></div>
+        </div>
+        <ol className="mt-5 grid grid-cols-1 gap-2 border-t border-slate-100 pt-4 sm:grid-cols-3 dark:border-slate-800" aria-label="集群搭建进度">
+          {[{ label: '配置已创建', done: true }, { label: '部署与初始化', done: initialized }, { label: '集群健康就绪', done: initialized && healthy }].map((step, i) => <li key={step.label} className={`flex items-center gap-2 text-xs ${step.done ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-500 dark:text-slate-400'}`}>{step.done ? <CheckCircle2 className="h-4 w-4" /> : <Circle className="h-4 w-4" />}<span>{i + 1}. {step.label}</span></li>)}
+        </ol>
+      </div>
 
-        <Card
-          title={
-            <TermLabel
-              term="Raft 仲裁概览"
-              tip="Raft 协议需要超过半数的投票节点在线才能选出 Leader 并写入数据；可容忍故障数表示在不失多数派前提下允许离线或重启的节点上限。"
-            />
-          }
-        >
-          <div className="space-y-1.5 text-xs">
-            <div>
-              <TermLabel term="投票成员" tip="参与 Raft 共识投票的节点（Voter）总数与当前健康数。" />：
-              {status?.voters ?? '-'}（健康 {status?.healthy_voters ?? '-'}）
-            </div>
-            <div>
-              <TermLabel term="可容忍故障数" tip="当前多数派还能容忍同时故障的节点数；为 0 时禁止再下线任意 Voter。" />：
-              <b>{status?.failure_tolerance ?? '-'}</b>
-            </div>
-            {!isVault && (
-              <div>
-                成员构成：
-                <TermLabel term="Servers" tip="负责集群调度、状态存储与 Raft 仲裁的控制面节点。" /> {serverCount} ·{' '}
-                <TermLabel term="Clients" tip="负责实际运行容器/任务的工作节点。" /> {clientCount}
-              </div>
-            )}
-            {status?.failure_tolerance === 0 && (
-              <div className="rounded bg-rose-50 p-2 text-rose-800 dark:bg-rose-950/60 dark:text-rose-200">
-                注意：可容忍故障数为 0，再有一台投票节点下线将失去多数派！
-              </div>
-            )}
-          </div>
-        </Card>
+      {activeTask && <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 p-4 dark:border-indigo-500/30 dark:bg-indigo-500/10"><span className="flex items-center gap-2 text-sm text-indigo-800 dark:text-indigo-200"><Loader2 className="h-4 w-4 animate-spin" />集群操作正在后台执行，完成后会自动刷新状态。</span><Button size="sm" onClick={() => openTask(activeTask.id)}>查看任务进度 <ArrowRight className="h-3.5 w-3.5" /></Button></div>}
 
-        {isAdmin && (
-          <Card title="部署与集群运维">
-            <div className="space-y-2.5 text-xs">
-              <div className="flex items-center justify-between gap-2">
-                <TermLabel
-                  term="安装 / 升级版本"
-                  tip="支持输入具体版本号（如 1.18.3）或填写 latest 自动解析官方最新稳定版本。"
-                />
-                <button
-                  type="button"
-                  onClick={() => void fetchVersions()}
-                  disabled={loadingVersions}
-                  className="text-[11px] font-medium text-indigo-600 hover:underline disabled:opacity-50 dark:text-indigo-400"
-                >
-                  {loadingVersions ? '获取中...' : '拉取可选版本'}
-                </button>
-              </div>
+      {needsDeploy && isAdmin && <Card title="下一步：部署集群服务"><div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(240px,1fr)]"><div><h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">主机已选好，让 {productName} 运行起来</h3><p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">将自动下载程序、配置加密通信、启动服务并完成{isVault ? '初始化与密钥托管' : '集群组建与 ACL 初始化'}。进度可在后台任务中查看。</p></div><div className="space-y-3">{versionPicker(deployVer, setDeployVer, '部署版本')}{proxyOption}{isVault && setConfirmSwap && <label className="flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200"><input className="mt-0.5" type="checkbox" checked={confirmSwap} onChange={(e) => setConfirmSwap(e.target.checked)} /><span>若主机开启未加密 Swap，我已知悉密钥可能被换出到磁盘，仍继续部署。</span></label>}<Button variant="primary" loading={busyKey === 'deploy'} disabled={blocked} onClick={() => void runBusy('deploy', onDeploy)}>部署集群 <ArrowRight className="h-4 w-4" /></Button></div></div></Card>}
 
-              {availableVersions.length > 0 && (
-                <div className="flex items-center gap-1.5">
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (!v) return;
-                      if (cluster.init_state === 'uninitialized') setDeployVer(v);
-                      else setUpVer(v);
-                    }}
-                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-950"
-                  >
-                    <option value="">从官方版本列表选择...</option>
-                    <option value="latest">latest（最新稳定版）</option>
-                    {availableVersions.map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div className="flex gap-1.5">
-                <div className="flex-1">
-                  <Input
-                    placeholder="latest 或版本号"
-                    value={deployVer}
-                    onChange={(e) => setDeployVer(e.target.value)}
-                  />
-                </div>
-                <Button size="sm" onClick={() => setDeployVer('latest')} title="设为 latest">
-                  latest
-                </Button>
-                <Button variant="primary" loading={busyKey === 'deploy'} disabled={Boolean(busyKey)} onClick={() => void runBusy('deploy', onDeploy)}>
-                  {busyKey === 'deploy' ? '提交中...' : '部署'}
-                </Button>
-              </div>
-
-              <div className="flex gap-1.5">
-                <div className="flex-1">
-                  <Input
-                    placeholder="升级版本 (latest 或版本号)"
-                    value={upVer}
-                    onChange={(e) => setUpVer(e.target.value)}
-                  />
-                </div>
-                <Button size="sm" onClick={() => setUpVer('latest')} title="设为 latest">
-                  latest
-                </Button>
-                <Button loading={busyKey === 'upgrade'} disabled={Boolean(busyKey)} onClick={() => void runBusy('upgrade', onUpgrade)}>
-                  {busyKey === 'upgrade' ? '提交中...' : '升级'}
-                </Button>
-              </div>
-
-              <label className="flex items-center gap-1.5">
-                <input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} />
-                <span>使用系统代理</span>
-              </label>
-
-              {isVault && setConfirmSwap && (
-                <label className="flex items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    checked={confirmSwap}
-                    onChange={(e) => setConfirmSwap(e.target.checked)}
-                  />
-                  <TermLabel
-                    term="部署确认未加密 Swap 风险"
-                    tip="Vault 运行时会禁用 mlock，若宿主机开启了未加密 Swap，内存中的密钥明文可能被交换到磁盘。"
-                  />
-                </label>
-              )}
-
-              {!isVault && setDrainClients && (
-                <label className="flex items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    checked={drainClients}
-                    onChange={(e) => setDrainClients(e.target.checked)}
-                  />
-                  <TermLabel
-                    term="升级前疏散 Client 节点"
-                    tip="开启后，升级每台 Nomad Client 前会先 Drain 迁移其上运行中的任务，再重启升级。"
-                  />
-                </label>
-              )}
-
-              <div className="flex flex-wrap gap-1.5 pt-0.5">
-                <Button size="sm" loading={busyKey === 'renew'} disabled={Boolean(busyKey)} onClick={() => void runBusy('renew', onRenewCerts)}>
-                  {busyKey === 'renew' ? '执行中...' : '续期证书'}
-                </Button>
-                <Button size="sm" loading={busyKey === 'ca'} disabled={Boolean(busyKey)} onClick={() => void runBusy('ca', onRotateCA)}>
-                  轮换 CA
-                </Button>
-                {!isVault && onRotateGossip && (
-                  <Button size="sm" loading={busyKey === 'gossip'} disabled={Boolean(busyKey)} onClick={() => void runBusy('gossip', onRotateGossip)}>
-                    <TermLabel
-                      term="轮换 Gossip"
-                      tip="轮换 Nomad Server 之间 Serf Gossip 集群发现通信使用的对称加密密钥。"
-                    />
-                  </Button>
-                )}
-                <Button size="sm" loading={busyKey === 'doctor'} disabled={Boolean(busyKey)} onClick={() => void runBusy('doctor', onDoctor)}>
-                  {busyKey === 'doctor' ? '体检中...' : 'Doctor 体检'}
-                </Button>
-                <Button size="sm" loading={busyKey === 'reconcile'} disabled={Boolean(busyKey)} onClick={() => void runBusy('reconcile', onReconcile)}>
-                  {busyKey === 'reconcile' ? '核对中...' : '核对解锁'}
-                </Button>
-                {!isVault && onRevealRootToken && cluster.init_state !== 'uninitialized' && (
-                  <Button size="sm" loading={busyKey === 'root-token'} disabled={Boolean(busyKey)} onClick={() => void runBusy('root-token', onRevealRootToken)}>
-                    查看 Root Token
-                  </Button>
-                )}
-                {onUninstall && (
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    loading={busyKey === 'uninstall'}
-                    disabled={Boolean(busyKey)}
-                    onClick={() => void runBusy('uninstall', onUninstall)}
-                  >
-                    {cluster.init_state === 'uninitialized' && clusterNodes.every((n: any) => n.install_state === 'pending')
-                      ? '删除未部署集群'
-                      : '卸载集群'}
-                  </Button>
-                )}
-              </div>
-            </div>
-          </Card>
-        )}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <Card title="连接与运行信息"><dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-5 gap-y-3 text-sm"><dt className="text-slate-500">初始化</dt><dd><StatusBadge value={initState} /></dd><dt className="text-slate-500">{isVault ? 'Active 主节点' : 'Leader 主节点'}</dt><dd className="font-mono text-xs break-all">{status?.active_node || status?.leader || '等待集群就绪'}</dd><dt className="text-slate-500">CA 到期</dt><dd className="text-xs">{fmtTime(cluster.ca_expires_at)}</dd><dt className="text-slate-500">统一入口</dt><dd className="min-w-0 break-all">{cluster.public_api_url ? <ExternalUrlLink url={cluster.public_api_url} /> : <span className="text-xs text-slate-500">未配置，使用下方节点地址</span>}</dd>{(status?.maintenance_reason || cluster.maintenance_reason) && <><dt className="text-amber-600">维护原因</dt><dd className="break-words text-amber-700 dark:text-amber-300">{status?.maintenance_reason || cluster.maintenance_reason}</dd></>}</dl></Card>
+        <Card title={<TermLabel term="Raft 仲裁健康" tip="超过半数投票节点在线，集群才能正常选主和写入。3 个投票节点可容忍 1 台故障。" />}><div className="grid grid-cols-3 gap-3 text-center"><div><div className="text-2xl font-semibold tabular-nums text-slate-900 dark:text-slate-100">{initialized ? status?.healthy_voters ?? '—' : '—'}<span className="text-sm font-normal text-slate-400"> / {initialized ? status?.voters ?? '—' : '—'}</span></div><div className="mt-2 text-xs text-slate-500">健康投票节点</div></div><div><div className="text-2xl font-semibold tabular-nums text-slate-900 dark:text-slate-100">{initialized ? status?.failure_tolerance ?? '—' : '—'}</div><div className="mt-2 text-xs text-slate-500">可容忍故障</div></div><div><div className="text-2xl font-semibold tabular-nums text-slate-900 dark:text-slate-100">{!initialized ? '—' : isVault ? status ? clusterNodes.filter((n) => n.sealed === false).length : '—' : status?.ready_clients ?? '—'}</div><div className="mt-2 text-xs text-slate-500">{isVault ? '已解封节点' : '就绪 Client'}</div></div></div>{!isVault && status && <p className="mt-4 text-xs text-slate-500">成员：{serverCount} 个 Server · {clientCount} 个 Client</p>}{status?.raft_error && <p className="mt-4 break-words text-xs text-amber-700 dark:text-amber-300">仲裁信息暂不可用：{status.raft_error}</p>}{initialized && status?.failure_tolerance === 0 && <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">当前没有故障余量，请先恢复异常节点，再进行重启或缩容。</p>}</Card>
       </div>
 
       <Card
         title="节点成员状态"
         actions={
           isAdmin && (
-            <Button size="sm" onClick={onOpenJoin}>
+            <Button size="sm" disabled={blocked || !initialized} onClick={onOpenJoin}>
               扩容节点
             </Button>
           )
         }
       >
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+          <table className="w-full min-w-[680px] text-left text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
-                <th className="py-2 pr-3">节点 / API 地址</th>
-                <th className="py-2 pr-3">
+                <th className="py-3 pr-4">节点 / API 地址</th>
+                <th className="py-3 pr-4">
                   {isVault ? (
                     <TermLabel
                       term="密封 / 状态"
@@ -339,48 +179,49 @@ export function ClusterOpsSection({
                     '角色 / 服务状态'
                   )}
                 </th>
-                <th className="py-2 pr-3">
+                <th className="py-3 pr-4">
                   <TermLabel term="Raft 角色" tip="节点在 Raft 共识集群中的角色（leader / follower / voter / none）。" />
                 </th>
-                <th className="py-2 pr-3">版本</th>
-                <th className="py-2 text-right">操作</th>
+                <th className="py-3 pr-4">版本</th>
+                <th className="py-3 text-right">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {clusterNodes.length === 0 && <tr><td colSpan={5} className="py-8 text-center text-slate-500">正在读取节点状态…</td></tr>}
               {clusterNodes.map((n: any) => (
                 <tr key={n.node_id}>
-                  <td className="py-2 pr-3">
+                  <td className="py-3 pr-4">
                     <div className="font-medium">{n.name}</div>
                     <div>
                       <ExternalUrlLink url={n.api_addr || n.advertise_addr} />
                     </div>
                   </td>
-                  <td className="py-2 pr-3">
+                  <td className="py-3 pr-4">
                     {isVault ? (
                       <>
                         <Badge tone={n.sealed == null ? 'neutral' : n.sealed ? 'red' : 'green'}>
-                          {n.sealed == null ? 'Unknown' : n.sealed ? 'Sealed' : 'Unsealed'}
+                          {n.sealed == null ? '待探测' : n.sealed ? '已密封' : '已解封'}
                         </Badge>
-                        <span className="ml-1.5 text-slate-500">{n.service_status}</span>
+                        <span className="ml-1.5"><StatusBadge value={n.service_status} /></span>
                       </>
                     ) : (
                       <>
-                        <Badge>{n.role}</Badge>
-                        <span className="ml-1.5 text-slate-500">{n.service_status}</span>
+                        <Badge>{n.role === 'server_client' ? 'Server + Client' : n.role === 'server' ? 'Server' : 'Client'}</Badge>
+                        <span className="ml-1.5"><StatusBadge value={n.service_status} /></span>
                       </>
                     )}
                   </td>
-                  <td className="py-2 pr-3">
-                    {n.raft_role} {n.is_voter ? '(voter)' : ''}
+                  <td className="py-3 pr-4">
+                    {n.raft_role === 'leader' ? '主节点' : n.raft_role === 'follower' ? '跟随节点' : !n.raft_role || n.raft_role === 'none' ? '待加入' : n.raft_role}{n.is_voter ? ' · 投票成员' : ''}
                   </td>
-                  <td className="py-2 pr-3 font-mono">{n.installed_version || '-'}</td>
-                  <td className="py-2 text-right">
+                  <td className="py-3 pr-4 font-mono text-xs">{n.installed_version || '-'}</td>
+                  <td className="py-3 text-right">
                     <div className="flex flex-wrap justify-end gap-1">
                       <Button size="sm" onClick={() => onOpenLogs(n)}>
                         <Terminal className="h-3 w-3" /> 日志
                       </Button>
                       {onCheckGate && (
-                        <Button size="sm" loading={busyKey === `gate:${n.node_id}`} disabled={Boolean(busyKey)} onClick={() => void runBusy(`gate:${n.node_id}`, () => onCheckGate(n))}>
+                        <Button size="sm" loading={busyKey === `gate:${n.node_id}`} disabled={blocked || !initialized} onClick={() => void runBusy(`gate:${n.node_id}`, () => onCheckGate(n))}>
                           <TermLabel
                             term="门禁"
                             tip="检查当前下线或重启该节点是否会导致 Raft 仲裁多数派受损。"
@@ -392,7 +233,7 @@ export function ClusterOpsSection({
                           <Button
                             size="sm"
                             loading={busyKey === `restart:${n.node_id}`}
-                            disabled={Boolean(busyKey)}
+                            disabled={blocked || !initialized}
                             onClick={async () => {
                               if (
                                 !(await askConfirm(`确认重启节点「${n.name}」的 ${product} 服务吗？`, {
@@ -411,7 +252,7 @@ export function ClusterOpsSection({
                             size="sm"
                             variant="danger"
                             loading={busyKey === `remove:${n.node_id}`}
-                            disabled={Boolean(busyKey)}
+                            disabled={blocked || !initialized}
                             onClick={async () => {
                               if (
                                 !(await askConfirm(`确定要从集群中缩容移除节点「${n.name}」吗？`, {
@@ -437,6 +278,15 @@ export function ClusterOpsSection({
           </table>
         </div>
       </Card>
+
+      {isAdmin && <Card title="集群运维" actions={<Button size="sm" loading={busyKey === 'doctor'} disabled={blocked || !initialized} onClick={() => void runBusy('doctor', onDoctor)}>集群体检</Button>}>
+        <div className="space-y-3">
+          {!needsDeploy && <details className="ops-disclosure"><summary>版本升级<span>按节点逐一升级服务</span></summary><div className="ops-disclosure-body space-y-3 max-w-lg">{versionPicker(upVer, setUpVer, '目标版本')}{proxyOption}{!isVault && setDrainClients && <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={drainClients} onChange={(e) => setDrainClients(e.target.checked)} />升级前疏散 Client，将任务迁移到其他节点</label>}<Button loading={busyKey === 'upgrade'} disabled={blocked} onClick={() => void runBusy('upgrade', onUpgrade)}>开始滚动升级</Button></div></details>}
+          <details className="ops-disclosure"><summary>证书与访问凭据<span>续期、轮换与管理员凭据</span></summary><div className="ops-disclosure-body"><p className="mb-3 text-xs leading-5 text-slate-500">证书和密钥轮换会更新节点配置。请在集群健康时执行，并在后台任务中确认结果。</p><div className="flex flex-wrap gap-2"><Button size="sm" loading={busyKey === 'renew'} disabled={blocked || !initialized} onClick={() => void runBusy('renew', onRenewCerts)}>续期证书</Button><Button size="sm" disabled={blocked || !initialized} onClick={() => void runBusy('ca', onRotateCA)}>轮换 CA</Button>{!isVault && onRotateGossip && <Button size="sm" disabled={blocked || !initialized} onClick={() => void runBusy('gossip', onRotateGossip)}>轮换 Gossip</Button>}{!isVault && onRevealRootToken && initialized && <Button size="sm" disabled={blocked} onClick={() => void runBusy('root-token', onRevealRootToken)}>查看 Root Token</Button>}</div></div></details>
+          <details className="ops-disclosure"><summary>异常恢复<span>核对实际状态后解除维护锁</span></summary><div className="ops-disclosure-body"><p className="mb-3 text-xs leading-5 text-slate-500">任务中断或状态不一致时，先核对远端服务。核对成功后解除维护屏障。</p><Button size="sm" loading={busyKey === 'reconcile'} disabled={blocked} onClick={() => void runBusy('reconcile', onReconcile)}>核对并解锁</Button></div></details>
+          {onUninstall && <details className="ops-disclosure border-rose-200 dark:border-rose-900/60"><summary className="text-rose-700 dark:text-rose-300">危险操作<span>卸载服务并清除集群数据</span></summary><div className="ops-disclosure-body"><p className="mb-3 text-xs leading-5 text-slate-500">将影响此集群的全部节点，请先保存需要的数据。操作前需要确认集群名称及管理员密码。</p><Button size="sm" variant="danger" loading={busyKey === 'uninstall'} disabled={blocked} onClick={() => void runBusy('uninstall', onUninstall)}>{needsDeploy && clusterNodes.every((n: any) => n.install_state === 'pending') ? '删除未部署集群' : '卸载集群'}</Button></div></details>}
+        </div>
+      </Card>}
     </div>
   );
 }

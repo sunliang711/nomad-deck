@@ -2,17 +2,38 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Activity, Copy, KeyRound, Plus, RefreshCw, Server as ServerIcon, Trash2 } from 'lucide-react';
 import { apiDelete, apiGet, apiPost, apiPut, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { copyText as copyToClipboard } from '../lib/clipboard';
 import { useOpsDrawer } from '../lib/opsDrawer';
-import { Badge, Button, Card, EmptyState, ErrorAlert, InfoTip, Input, Modal, PasswordConfirmModal, SecretInput, SectionTabs, Select, TermLabel, statusTone } from '../components/UI';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorAlert,
+  InfoTip,
+  Input,
+  Modal,
+  PageHeader,
+  PasswordConfirmModal,
+  SecretInput,
+  SectionTabs,
+  Select,
+  StatusBadge,
+  TermLabel,
+  statusTone,
+} from '../components/UI';
 
 export function InfraPage() {
   const { isAdmin } = useAuth();
   const { openTask } = useOpsDrawer();
+  const toast = useToast();
+  const askConfirm = useConfirm();
   const [tab, setTab] = useState('nodes');
   const [keys, setKeys] = useState<any[]>([]);
   const [nodes, setNodes] = useState<any[]>([]);
   const [err, setErr] = useState('');
-  const [notice, setNotice] = useState('');
   const [metricsBusy, setMetricsBusy] = useState(false);
 
   // Key modals
@@ -147,8 +168,9 @@ export function InfraPage() {
     try {
       await apiPost(`/api/v1/nodes/${pushNode.id}/push-key`, { password: pushPassword });
       setPushPassword('');
+      const name = pushNode.name;
       setPushNode(null);
-      setNotice(`已成功推送公钥到主机 ${pushNode.name}`);
+      toast.success(`已成功推送公钥到主机 ${name}`);
     } catch (ex: any) {
       setErr(ex?.message || '推送公钥失败');
     }
@@ -220,15 +242,16 @@ export function InfraPage() {
     setErr('');
     try {
       const res = await apiPost(`/api/v1/nodes/${dockerNode.id}/docker/proxy-test`, {});
-      setNotice(`镜像代理测试结果：${JSON.stringify(res.result)}`);
+      toast.info(`镜像代理测试结果：${JSON.stringify(res.result)}`);
     } catch (ex: any) {
       setErr(ex?.message || '代理测试失败');
     }
   };
 
   const copyText = (text: string, msg: string) => {
-    void navigator.clipboard.writeText(text);
-    setNotice(msg);
+    void copyToClipboard(text)
+      .then(() => toast.success(msg))
+      .catch((ex) => toast.error(ex?.message || '复制失败'));
   };
 
   const refreshAllMetrics = async () => {
@@ -237,7 +260,7 @@ export function InfraPage() {
     try {
       const res = await apiPost('/api/v1/nodes/metrics/refresh', {});
       if (Array.isArray(res.nodes)) setNodes(res.nodes);
-      setNotice(`主机实时负载采集完成：成功 ${res.ok ?? 0}，失败 ${res.failed ?? 0}`);
+      toast.success(`主机实时负载采集完成：成功 ${res.ok ?? 0}，失败 ${res.failed ?? 0}`);
     } catch (ex: any) {
       setErr(ex?.message || '采集主机负载失败');
     } finally {
@@ -252,63 +275,63 @@ export function InfraPage() {
       if (res.node) {
         setNodes((prev) => prev.map((x) => (x.id === node.id ? res.node : x)));
       }
-      setNotice(`已刷新 ${node.name} CPU/内存利用率`);
+      toast.success(`已刷新 ${node.name} CPU/内存利用率`);
     } catch (ex: any) {
       setErr(ex?.message || `采集 ${node.name} 负载失败`);
     }
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <SectionTabs
-          tabs={[
-            { id: 'nodes', label: `主机节点 (${nodes.length})` },
-            { id: 'keys', label: `SSH 密钥库 (${keys.length})`, tip: '控制面使用 Ed25519 私钥免密登录目标主机（首次连接支持 TOFU 主机指纹信任）。' },
-          ]}
-          active={tab}
-          onChange={setTab}
-        />
-        <div className="flex gap-2">
-          <Button size="sm" onClick={() => void load()}>
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>刷新</span>
-          </Button>
-          {isAdmin && tab === 'nodes' && (
-            <>
-              <Button size="sm" disabled={metricsBusy} onClick={() => void refreshAllMetrics()}>
-                <Activity className="h-3.5 w-3.5" />
-                <span>{metricsBusy ? '采集中...' : '采集实时负载'}</span>
-              </Button>
-              <Button size="sm" variant="primary" onClick={openAddNode}>
-                <Plus className="h-3.5 w-3.5" />
-                <span>新增主机</span>
-              </Button>
-            </>
-          )}
-          {isAdmin && tab === 'keys' && (
-            <>
-              <Button size="sm" onClick={() => setShowImportKey(true)}>
-                导入私钥
-              </Button>
-              <Button size="sm" variant="primary" onClick={() => setShowGenKey(true)}>
-                <Plus className="h-3.5 w-3.5" />
-                <span>生成 Ed25519</span>
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
+    <div className="space-y-5">
+      <PageHeader
+        title="基础设施"
+        subtitle="纳管 Linux 主机节点、SSH Ed25519 密钥库、主机体检与 Docker Engine 管理"
+        actions={
+          <>
+            <Button onClick={() => void load()}>
+              <RefreshCw className="h-4 w-4" />
+              <span>刷新</span>
+            </Button>
+            {isAdmin && tab === 'nodes' && (
+              <>
+                <Button disabled={metricsBusy} onClick={() => void refreshAllMetrics()}>
+                  <Activity className="h-4 w-4" />
+                  <span>{metricsBusy ? '采集中...' : '采集实时负载'}</span>
+                </Button>
+                <Button variant="primary" onClick={openAddNode}>
+                  <Plus className="h-4 w-4" />
+                  <span>新增主机</span>
+                </Button>
+              </>
+            )}
+            {isAdmin && tab === 'keys' && (
+              <>
+                <Button onClick={() => setShowImportKey(true)}>导入私钥</Button>
+                <Button variant="primary" onClick={() => setShowGenKey(true)}>
+                  <Plus className="h-4 w-4" />
+                  <span>生成 Ed25519</span>
+                </Button>
+              </>
+            )}
+          </>
+        }
+      />
+
+      <SectionTabs
+        tabs={[
+          { id: 'nodes', label: '主机节点', badge: nodes.length },
+          {
+            id: 'keys',
+            label: 'SSH 密钥库',
+            badge: keys.length,
+            tip: '控制面使用 Ed25519 私钥免密登录目标主机（首次连接支持 TOFU 主机指纹信任）。',
+          },
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
-      {notice && (
-        <div className="flex items-center justify-between rounded-md border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-200">
-          <span>{notice}</span>
-          <button onClick={() => setNotice('')} className="underline">
-            关闭
-          </button>
-        </div>
-      )}
 
       {probeWarnings && (
         <Card
@@ -368,7 +391,7 @@ export function InfraPage() {
                         </div>
                       </td>
                       <td className="py-2.5 pr-3">
-                        <Badge tone={statusTone(n.status)}>{n.status || 'unknown'}</Badge>
+                        <StatusBadge value={n.status || 'unknown'} />
                       </td>
                       <td className="py-2.5 pr-3 min-w-[160px]">
                         <div className="space-y-1.5 text-[11px]">
@@ -442,11 +465,23 @@ export function InfraPage() {
                             <Button
                               size="sm"
                               variant="danger"
-                              onClick={() =>
+                              onClick={async () => {
+                                if (
+                                  !(await askConfirm(`确定要删除主机「${n.name}」(${n.host}) 吗？`, {
+                                    title: '删除主机节点',
+                                    confirmText: '确认删除',
+                                    danger: true,
+                                  }))
+                                ) {
+                                  return;
+                                }
                                 void apiDelete(`/api/v1/nodes/${n.id}`)
-                                  .then(() => load())
-                                  .catch((ex) => setErr(ex.message))
-                              }
+                                  .then(() => {
+                                    toast.success(`已删除主机 ${n.name}`);
+                                    return load();
+                                  })
+                                  .catch((ex) => toast.error(ex.message));
+                              }}
                             >
                               <Trash2 className="h-3 w-3" />
                             </Button>
@@ -476,7 +511,7 @@ export function InfraPage() {
                 >
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex items-center gap-2">
-                      <KeyRound className="h-3.5 w-3.5 text-emerald-500" />
+                      <KeyRound className="h-3.5 w-3.5 text-indigo-500" />
                       <span className="font-semibold text-sm">{k.name}</span>
                       <Badge>{k.algorithm}</Badge>
                       {k.is_default && <Badge tone="green">默认</Badge>}
@@ -520,11 +555,23 @@ export function InfraPage() {
                       <Button
                         size="sm"
                         variant="danger"
-                        onClick={() =>
+                        onClick={async () => {
+                          if (
+                            !(await askConfirm(`确定要删除 SSH 密钥「${k.name}」吗？`, {
+                              title: '删除 SSH 密钥',
+                              confirmText: '确认删除',
+                              danger: true,
+                            }))
+                          ) {
+                            return;
+                          }
                           void apiDelete(`/api/v1/ssh-keys/${k.id}`)
-                            .then(() => load())
-                            .catch((ex) => setErr(ex.message))
-                        }
+                            .then(() => {
+                              toast.success(`已删除 SSH 密钥 ${k.name}`);
+                              return load();
+                            })
+                            .catch((ex) => toast.error(ex.message));
+                        }}
                       >
                         删除
                       </Button>
@@ -698,7 +745,7 @@ export function InfraPage() {
         onConfirm={async (pw) => {
           if (!pwResetNode) return;
           await apiPost(`/api/v1/nodes/${pwResetNode.id}/reset-fingerprint`, { current_password: pw });
-          setNotice(`已重置 ${pwResetNode.name} 主机指纹`);
+          toast.success(`已重置 ${pwResetNode.name} 主机指纹`);
           await load();
         }}
       />

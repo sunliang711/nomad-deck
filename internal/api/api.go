@@ -140,6 +140,7 @@ func (a *API) Handler() http.Handler {
 			r.Delete("/auth/sessions/{id}", a.revokeSession)
 
 			r.Get("/audit-logs", a.listAuditLogs)
+			r.Get("/audit-logs/export", a.exportAuditLogs)
 			r.Get("/audit-logs/{id}", a.getAuditLog)
 
 			r.Get("/dashboard/summary", a.dashboardSummary)
@@ -154,6 +155,7 @@ func (a *API) Handler() http.Handler {
 			r.Get("/releases/{product}", a.listReleases)
 			r.Get("/operations", a.listOperations)
 			r.Get("/cron-jobs", a.listCronJobs)
+			r.Post("/cron-jobs/preview", a.previewCronSchedule)
 			r.Get("/cron-jobs/{id}/runs", a.listCronRuns)
 			r.Get("/operations/{id}", a.getOperation)
 			r.Get("/operations/{id}/stream", a.streamOperation)

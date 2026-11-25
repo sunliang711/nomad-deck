@@ -1,11 +1,28 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Lock, Plus, RefreshCw, Unlock } from 'lucide-react';
+import { Lock, Plus, RefreshCw, Shield, Unlock } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import {
-  Badge, Button, Card, EmptyState, ErrorAlert, Input, MaskedSecret, Modal, PasswordConfirmModal, SecretInput, SectionTabs, Select, TermLabel, statusTone,
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorAlert,
+  Input,
+  MaskedSecret,
+  Modal,
+  PageHeader,
+  PasswordConfirmModal,
+  SecretInput,
+  SectionTabs,
+  Select,
+  StatusBadge,
+  TermLabel,
+  statusTone,
 } from '../components/UI';
 import { ClusterOpsSection } from '../components/ClusterOpsSection';
 import { CodeEditor } from '../components/CodeEditor';
@@ -13,6 +30,8 @@ import { CodeEditor } from '../components/CodeEditor';
 export function VaultPage() {
   const { isAdmin } = useAuth();
   const { openTask, openNodeLogs } = useOpsDrawer();
+  const toast = useToast();
+  const askConfirm = useConfirm();
   const [searchParams] = useSearchParams();
   const queryId = searchParams.get('id') || '';
   const [clusters, setClusters] = useState<any[]>([]);
@@ -37,7 +56,6 @@ export function VaultPage() {
   const [kvMountForm, setKvMountForm] = useState({ path: '', description: '' });
   const [gateView, setGateView] = useState<any>(null);
   const [err, setErr] = useState('');
-  const [notice, setNotice] = useState('');
   const [rootToken, setRootToken] = useState('');
 
   // Create wizard
@@ -181,37 +199,50 @@ export function VaultPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="space-y-5">
+      <PageHeader
+        title="Vault 集群"
+        subtitle="管理 Raft HA Vault 集群、Shamir 密钥托管解封、Raft 快照与 Auth/Policy/KV"
+        actions={
+          <>
+            <Button onClick={() => void loadDetail()}>
+              <RefreshCw className="h-4 w-4" />
+              <span>刷新 (30s)</span>
+            </Button>
+            {isAdmin && (
+              <Button variant="primary" onClick={() => setShowCreate(true)}>
+                <Plus className="h-4 w-4" />
+                <span>新建 Vault 集群</span>
+              </Button>
+            )}
+          </>
+        }
+      />
+
+      {clusters.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {clusters.map((c) => (
             <Button key={c.id} size="sm" variant={selectedId === c.id ? 'primary' : 'secondary'} onClick={() => setSelectedId(c.id)}>
-              {c.name} <Badge tone={statusTone(c.health_status)}>{c.health_status}</Badge>
+              <span>{c.name}</span>
+              <StatusBadge value={c.health_status} />
             </Button>
           ))}
         </div>
-        <div className="flex gap-2">
-          <Button size="sm" onClick={() => void loadDetail()}><RefreshCw className="h-3.5 w-3.5" /> 刷新 (30s)</Button>
-          {isAdmin && (
-            <Button size="sm" variant="primary" onClick={() => setShowCreate(true)}>
-              <Plus className="h-3.5 w-3.5" /> 新建 Vault 集群
-            </Button>
-          )}
-        </div>
-      </div>
+      )}
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
-      {notice && <div className="rounded bg-emerald-50 px-3.5 py-2 text-xs text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">{notice}</div>}
 
       {!cluster ? (
-        <Card><EmptyState text="暂无 Vault 集群" /></Card>
+        <Card>
+          <EmptyState icon={<Shield className="w-6 h-6" />} title="暂无 Vault 集群" description="先在基础设施页纳管 Linux 主机，再创建并部署 Vault 集群。" />
+        </Card>
       ) : (
         <div className="space-y-4">
           <SectionTabs
             tabs={[
               { id: 'status', label: '集群状态详情' },
               { id: 'custody', label: '初始化与密钥托管', tip: '控制面托管 Vault Unseal Key（Shamir 门限分片）与短时效运维 Token，支持自动解封、Rekey 轮换及签发临时 Root Token。' },
-              { id: 'snapshots', label: `Raft 快照 (${snapshots.length})`, tip: '对 Vault Integrated Storage (Raft) 后端状态执行一致性快照备份与在线恢复。' },
+              { id: 'snapshots', label: 'Raft 快照', badge: snapshots.length, tip: '对 Vault Integrated Storage (Raft) 后端状态执行一致性快照备份与在线恢复。' },
               { id: 'manage', label: 'Auth / Policy / KV', tip: '管理 Vault 认证挂载（Userpass/JWT/AppRole）、HCL 权限策略（Policy）以及 KV v2 密钥引擎。' },
             ]}
             active={tab}
@@ -263,12 +294,12 @@ export function VaultPage() {
                 }
                 onDoctor={() =>
                   void apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
-                    .then((r) => setNotice(r.report?.summary || 'Doctor 完成'))
+                    .then((r) => toast.info(r.report?.summary || 'Doctor 完成'))
                     .catch((ex) => setErr(ex.message))
                 }
                 onReconcile={() =>
                   void apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
-                    .then((r) => setNotice(r.report?.message || '已核对'))
+                    .then((r) => toast.success(r.report?.message || '已核对'))
                     .catch((ex) => setErr(ex.message))
                 }
                 onOpenJoin={() => { setJoinNodeId(''); setConfirmSwap(false); setShowJoin(true); }}
@@ -327,7 +358,13 @@ export function VaultPage() {
                       <Button onClick={() => void apiPost(`/api/v1/vault/${selectedId}/unseal`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>
                         <Unlock className="h-3.5 w-3.5" /> 全集群解封
                       </Button>
-                      <Button variant="danger" onClick={() => void apiPost(`/api/v1/vault/${selectedId}/seal`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>
+                      <Button
+                        variant="danger"
+                        onClick={async () => {
+                          if (!(await askConfirm('确定要安全封存整个 Vault 集群吗？封存后将暂停对外提供密钥读写服务。', { title: '封存 Vault 集群', confirmText: '确认封存', danger: true }))) return;
+                          void apiPost(`/api/v1/vault/${selectedId}/seal`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message));
+                        }}
+                      >
                         <Lock className="h-3.5 w-3.5" /> 安全封存
                       </Button>
                       <Button
@@ -363,7 +400,7 @@ export function VaultPage() {
                             run: async (pw) => {
                               const r = await apiPost(`/api/v1/vault/${selectedId}/root-token`, { current_password: pw });
                               setRootToken(r.root_token || '');
-                              setNotice('已签发临时 Root Token，使用完毕后请及时点击“吊销 Root Token”。');
+                              toast.info('已签发临时 Root Token，使用完毕后请及时吊销');
                             },
                           })
                         }
@@ -403,7 +440,7 @@ export function VaultPage() {
                               void apiPost(`/api/v1/vault/${selectedId}/root-token/revoke`, { token: rootToken })
                                 .then(() => {
                                   setRootToken('');
-                                  setNotice('临时 Root Token 已向 Vault 吊销');
+                                  toast.success('临时 Root Token 已向 Vault 吊销');
                                 })
                                 .catch((ex) => setErr(ex.message))
                             }
@@ -507,7 +544,21 @@ export function VaultPage() {
                         >
                           恢复
                         </Button>
-                        <Button size="sm" onClick={() => void apiDelete(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}`).then(() => loadDetail()).catch((ex) => setErr(ex.message))}>删除</Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={async () => {
+                            if (!(await askConfirm(`确定要删除快照 ${sn.id} 吗？`, { title: '删除 Raft 快照', confirmText: '确认删除', danger: true }))) return;
+                            void apiDelete(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}`)
+                              .then(() => {
+                                toast.success('快照已删除');
+                                return loadDetail();
+                              })
+                              .catch((ex) => setErr(ex.message));
+                          }}
+                        >
+                          删除
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -525,7 +576,23 @@ export function VaultPage() {
                     {auths.map((a, i) => (
                       <div key={i} className="flex items-center gap-1">
                         <Badge>{a.path || a.type}</Badge>
-                        {isAdmin && a.type !== 'token' && <Button size="sm" variant="danger" onClick={() => void apiDelete(`/api/v1/vault/${selectedId}/auth?path=${encodeURIComponent(a.path)}`).then(() => loadManage()).catch((ex) => setErr(ex.message))}>停用 {a.path}</Button>}
+                        {isAdmin && a.type !== 'token' && (
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={async () => {
+                              if (!(await askConfirm(`确认停用 Auth 方法「${a.path}」吗？`, { title: '停用 Auth 方法', confirmText: '确认停用', danger: true }))) return;
+                              void apiDelete(`/api/v1/vault/${selectedId}/auth?path=${encodeURIComponent(a.path)}`)
+                                .then(() => {
+                                  toast.success(`已停用 ${a.path}`);
+                                  return loadManage();
+                                })
+                                .catch((ex) => setErr(ex.message));
+                            }}
+                          >
+                            停用 {a.path}
+                          </Button>
+                        )}
                       </div>
                     ))}
                     {isAdmin && <Button size="sm" onClick={() => setShowAuth(true)}>启用 Auth 方法</Button>}
@@ -553,14 +620,30 @@ export function VaultPage() {
                       variant="primary"
                       onClick={() =>
                         void apiPut(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(policyEdit.name)}`, { policy: policyEdit.rules })
-                          .then(() => { setNotice('Policy 已保存'); return loadManage(); })
+                          .then(() => { toast.success('Policy 已保存'); return loadManage(); })
                           .catch((ex) => setErr(ex.message))
                       }
                     >
                       保存 Policy
                     </Button>
                   )}
-                  {isAdmin && policyEdit.name && !['root', 'default', 'nomad-deck-admin'].includes(policyEdit.name) && <Button variant="danger" onClick={() => void apiDelete(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(policyEdit.name)}`).then(() => { setPolicyEdit({ name: '', rules: '' }); return loadManage(); }).catch((ex) => setErr(ex.message))}>删除 Policy</Button>}
+                  {isAdmin && policyEdit.name && !['root', 'default', 'nomad-deck-admin'].includes(policyEdit.name) && (
+                    <Button
+                      variant="danger"
+                      onClick={async () => {
+                        if (!(await askConfirm(`确认删除 Policy「${policyEdit.name}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
+                        void apiDelete(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(policyEdit.name)}`)
+                          .then(() => {
+                            setPolicyEdit({ name: '', rules: '' });
+                            toast.success('Policy 已删除');
+                            return loadManage();
+                          })
+                          .catch((ex) => setErr(ex.message));
+                      }}
+                    >
+                      删除 Policy
+                    </Button>
+                  )}
                 </div>
               </Card>
 
@@ -636,7 +719,7 @@ export function VaultPage() {
                               cas: kvItem.cas,
                             })
                               .then((r) => {
-                                setNotice(kvItem.cas === 0 ? 'Secret 已创建' : 'KV 已更新');
+                                toast.success(kvItem.cas === 0 ? 'Secret 已创建' : 'KV 已更新');
                                 // Vault returns the authoritative version, including after deleted versions.
                                 setKvItem((cur) => (cur ? { ...cur, cas: Number(r.result?.version ?? cur.cas + 1) } : null));
                               })
@@ -707,7 +790,7 @@ export function VaultPage() {
                 setKvKeys([]);
                 setKvPath('');
                 setShowKVMount(false);
-                setNotice('KV v2 挂载已启用');
+                toast.success('KV v2 挂载已启用');
               })
               .catch((ex) => setErr(ex.message));
           }}

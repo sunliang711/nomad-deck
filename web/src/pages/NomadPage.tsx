@@ -1,11 +1,27 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, RefreshCw } from 'lucide-react';
+import { Boxes, Plus, RefreshCw } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
 import {
-  Badge, Button, Card, EmptyState, ErrorAlert, Input, MaskedSecret, Modal, PasswordConfirmModal, SecretInput, SectionTabs, Select, statusTone,
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorAlert,
+  Input,
+  MaskedSecret,
+  Modal,
+  PageHeader,
+  PasswordConfirmModal,
+  SecretInput,
+  SectionTabs,
+  Select,
+  StatusBadge,
+  statusTone,
 } from '../components/UI';
 import { NomadWorkbench } from '../components/NomadWorkbench';
 import { CodeEditor } from '../components/CodeEditor';
@@ -14,6 +30,8 @@ import { ClusterOpsSection } from '../components/ClusterOpsSection';
 export function NomadPage() {
   const { isAdmin } = useAuth();
   const { openTask, openNodeLogs } = useOpsDrawer();
+  const toast = useToast();
+  const askConfirm = useConfirm();
   const [searchParams] = useSearchParams();
   const queryId = searchParams.get('id') || '';
   const [clusters, setClusters] = useState<any[]>([]);
@@ -32,7 +50,6 @@ export function NomadPage() {
   const [policyEdit, setPolicyEdit] = useState({ name: '', rules: '' });
   const [newToken, setNewToken] = useState('');
   const [err, setErr] = useState('');
-  const [notice, setNotice] = useState('');
 
   const [showCreate, setShowCreate] = useState(false);
   const [cForm, setCForm] = useState({ name: '', mode: 'cluster', region: 'global', datacenter: 'dc1', public_api_url: '', members: [] as Array<{ node_id: string; role: string; advertise_addr: string }> });
@@ -136,38 +153,51 @@ export function NomadPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="space-y-5">
+      <PageHeader
+        title="Nomad 集群"
+        subtitle="管理 Nomad Server/Client 编排、运行态工作台、Raft 快照与 ACL 多租户治理"
+        actions={
+          <>
+            <Button onClick={() => { void loadList(); if (tab === 'status' || tab === 'snapshots') void loadOpsTab(); if (tab === 'governance') void loadGovernance(); }}>
+              <RefreshCw className="h-4 w-4" />
+              <span>刷新</span>
+            </Button>
+            {isAdmin && (
+              <Button variant="primary" onClick={() => setShowCreate(true)}>
+                <Plus className="h-4 w-4" />
+                <span>新建 Nomad 集群</span>
+              </Button>
+            )}
+          </>
+        }
+      />
+
+      {clusters.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {clusters.map((c) => (
             <Button key={c.id} size="sm" variant={selectedId === c.id ? 'primary' : 'secondary'} onClick={() => setSelectedId(c.id)}>
-              {c.name} <Badge tone={statusTone(c.health_status)}>{c.health_status}</Badge>
+              <span>{c.name}</span>
+              <StatusBadge value={c.health_status} />
             </Button>
           ))}
         </div>
-        <div className="flex gap-2">
-          <Button size="sm" onClick={() => { void loadList(); if (tab === 'status' || tab === 'snapshots') void loadOpsTab(); if (tab === 'governance') void loadGovernance(); }}><RefreshCw className="h-3.5 w-3.5" /> 刷新</Button>
-          {isAdmin && (
-            <Button size="sm" variant="primary" onClick={() => setShowCreate(true)}>
-              <Plus className="h-3.5 w-3.5" /> 新建 Nomad 集群
-            </Button>
-          )}
-        </div>
-      </div>
+      )}
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
-      {notice && <div className="rounded bg-emerald-50 px-3.5 py-2 text-xs text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">{notice}</div>}
       {newToken && <MaskedSecret value={newToken} label="新签发 ACL Token Secret（仅展示一次）：" />}
 
       {!cluster ? (
-        <Card><EmptyState text="暂无 Nomad 集群" /></Card>
+        <Card>
+          <EmptyState icon={<Boxes className="w-6 h-6" />} title="暂无 Nomad 集群" description="先在基础设施页纳管 Linux 主机，再创建并部署 Nomad 集群。" />
+        </Card>
       ) : (
         <div className="space-y-4">
           <SectionTabs
             tabs={[
               { id: 'status', label: '集群状态详情' },
               { id: 'workbench', label: '运行态工作台', tip: '实时查看与管理 Nomad Clients、Servers、Allocations、Deployments、CSI 存储与 Variables。' },
-              { id: 'snapshots', label: `Raft 快照 (${snapshots.length})`, tip: '保存与恢复 Nomad Server Raft 状态机中的任务、变量与 ACL 快照。' },
+              { id: 'snapshots', label: 'Raft 快照', badge: snapshots.length, tip: '保存与恢复 Nomad Server Raft 状态机中的任务、变量与 ACL 快照。' },
               { id: 'governance', label: '治理 (Namespace / Pool / ACL)', tip: '配置多租户命名空间（Namespace）、节点资源池（Node Pool）与访问控制（ACL Policy / Role / Token）。' },
             ]}
             active={tab}
@@ -225,12 +255,12 @@ export function NomadPage() {
                 }
                 onDoctor={() =>
                   void apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
-                    .then((r) => setNotice(r.report?.summary || 'Doctor 完成'))
+                    .then((r) => toast.info(r.report?.summary || 'Doctor 完成'))
                     .catch((ex) => setErr(ex.message))
                 }
                 onReconcile={() =>
                   void apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
-                    .then((r) => setNotice(r.report?.message || '已核对'))
+                    .then((r) => toast.success(r.report?.message || '已核对'))
                     .catch((ex) => setErr(ex.message))
                 }
                 onOpenJoin={() => { setJoinNodeId(''); setShowJoin(true); }}
@@ -330,7 +360,21 @@ export function NomadPage() {
                         >
                           恢复
                         </Button>
-                        <Button size="sm" onClick={() => void apiDelete(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}`).then(() => loadOpsTab()).catch((ex) => setErr(ex.message))}>删除</Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={async () => {
+                            if (!(await askConfirm(`确定要删除快照 ${sn.id} 吗？`, { title: '删除 Raft 快照', confirmText: '确认删除', danger: true }))) return;
+                            void apiDelete(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}`)
+                              .then(() => {
+                                toast.success('快照已删除');
+                                return loadOpsTab();
+                              })
+                              .catch((ex) => setErr(ex.message));
+                          }}
+                        >
+                          删除
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -368,10 +412,26 @@ export function NomadPage() {
                   <Input label="Policy 名称" value={policyEdit.name} onChange={(e) => setPolicyEdit({ ...policyEdit, name: e.target.value })} />
                   <CodeEditor value={policyEdit.rules} onChange={(v) => setPolicyEdit({ ...policyEdit, rules: v })} readOnly={!isAdmin} height="160px" />
                   {isAdmin && (
-                    <div className="flex gap-2">
-                      <Button variant="primary" onClick={() => policyEdit.name && void apiPut(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`, { rules: policyEdit.rules }).then(() => { setNotice('Policy 已保存'); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>保存 Policy</Button>
-                      <Button variant="danger" disabled={!policyEdit.name} onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`).then(() => { setPolicyEdit({ name: '', rules: '' }); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>删除 Policy</Button>
-                      <Button onClick={() => void apiPost(`/api/v1/nomad/${selectedId}/acl/tokens`, { name: 'ops-token', policies: policyEdit.name ? [policyEdit.name] : [] }).then((r) => { setNewToken(r.token?.secret_id || ''); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>签发 Client Token</Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="primary" onClick={() => policyEdit.name && void apiPut(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`, { rules: policyEdit.rules }).then(() => { toast.success('Policy 已保存'); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>保存 Policy</Button>
+                      <Button
+                        variant="danger"
+                        disabled={!policyEdit.name}
+                        onClick={async () => {
+                          if (!policyEdit.name) return;
+                          if (!(await askConfirm(`确认删除 ACL Policy「${policyEdit.name}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
+                          void apiDelete(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`)
+                            .then(() => {
+                              setPolicyEdit({ name: '', rules: '' });
+                              toast.success('Policy 已删除');
+                              return loadGovernance();
+                            })
+                            .catch((ex) => setErr(ex.message));
+                        }}
+                      >
+                        删除 Policy
+                      </Button>
+                      <Button onClick={() => void apiPost(`/api/v1/nomad/${selectedId}/acl/tokens`, { name: 'ops-token', policies: policyEdit.name ? [policyEdit.name] : [] }).then((r) => { setNewToken(r.token?.secret_id || ''); toast.success('已签发 Client Token'); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>签发 Client Token</Button>
                     </div>
                   )}
                   <div className="border-t border-slate-200 pt-2 dark:border-slate-800">
@@ -380,7 +440,21 @@ export function NomadPage() {
                       <div key={tk.accessor_id} className="flex items-center justify-between py-1">
                         <span className="font-mono">{tk.name} ({(tk.accessor_id || '').slice(0, 8)})</span>
                         {isAdmin && (
-                          <Button size="sm" variant="danger" onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/acl/tokens/${tk.accessor_id}`).then(() => loadGovernance()).catch((ex) => setErr(ex.message))}>吊销</Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={async () => {
+                              if (!(await askConfirm(`确认吊销 ACL Token「${tk.name}」吗？`, { title: '吊销 Token', confirmText: '确认吊销', danger: true }))) return;
+                              void apiDelete(`/api/v1/nomad/${selectedId}/acl/tokens/${tk.accessor_id}`)
+                                .then(() => {
+                                  toast.success('Token 已吊销');
+                                  return loadGovernance();
+                                })
+                                .catch((ex) => setErr(ex.message));
+                            }}
+                          >
+                            吊销
+                          </Button>
                         )}
                       </div>
                     ))}

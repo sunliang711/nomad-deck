@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -73,4 +74,31 @@ func (a *API) listCronRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+func (a *API) previewCronSchedule(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Schedule string `json:"schedule"`
+		CronExpr string `json:"cron_expr"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	expr := strings.TrimSpace(req.Schedule)
+	if expr == "" {
+		expr = strings.TrimSpace(req.CronExpr)
+	}
+	times, err := a.Cron.Preview(r.Context(), expr, 5)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_cron", err.Error())
+		return
+	}
+	out := make([]string, 0, len(times))
+	for _, t := range times {
+		out = append(out, t.UTC().Format("2006-01-02T15:04:05Z"))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"next_runs": out,
+		"timezone":  a.Cron.Timezone(r.Context()),
+	})
 }

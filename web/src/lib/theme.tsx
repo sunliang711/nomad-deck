@@ -8,9 +8,15 @@ const ThemeContext = createContext<{ theme: Theme; toggle: () => void }>({
 });
 
 function initialTheme(): Theme {
-  const saved = localStorage.getItem('nd_theme');
-  if (saved === 'dark' || saved === 'light') return saved;
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  if (typeof window === 'undefined') return 'light';
+  try {
+    const saved = localStorage.getItem('nd_theme');
+    if (saved === 'dark' || saved === 'light') return saved;
+    if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) return 'dark';
+  } catch {
+    // ignore storage errors
+  }
+  return 'light';
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -18,12 +24,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
+    root.classList.toggle('dark', theme === 'dark');
+    root.style.colorScheme = theme;
+    try {
+      localStorage.setItem('nd_theme', theme);
+    } catch {
+      // ignore storage errors
     }
-    localStorage.setItem('nd_theme', theme);
   }, [theme]);
 
   const toggle = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));

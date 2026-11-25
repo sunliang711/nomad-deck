@@ -140,6 +140,37 @@ func (s *Scheduler) next(ctx context.Context, j *db.CronJob, after time.Time) ti
 	return sch.Next(after.In(s.location(ctx))).UTC()
 }
 
+// Timezone returns the configured scheduling timezone name.
+func (s *Scheduler) Timezone(ctx context.Context) string {
+	return s.location(ctx).String()
+}
+
+// Preview validates expr and returns the next count scheduled timestamps in UTC.
+func (s *Scheduler) Preview(ctx context.Context, expr string, count int) ([]time.Time, error) {
+	sch, err := ParseExpr(expr)
+	if err != nil {
+		return nil, err
+	}
+	if count <= 0 {
+		count = 5
+	}
+	if count > 20 {
+		count = 20
+	}
+	loc := s.location(ctx)
+	cur := s.now().In(loc)
+	out := make([]time.Time, 0, count)
+	for i := 0; i < count; i++ {
+		next := sch.Next(cur)
+		if next.IsZero() {
+			break
+		}
+		out = append(out, next.UTC())
+		cur = next
+	}
+	return out, nil
+}
+
 // Start seeds the built-in jobs, applies misfire policies and starts the
 // scheduling loop.
 func (s *Scheduler) Start(ctx context.Context) error {

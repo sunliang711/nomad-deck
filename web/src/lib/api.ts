@@ -9,8 +9,15 @@ export class ApiError extends Error {
   }
 }
 
+export interface ApiRequestOptions {
+  skipAuthPrompt?: boolean;
+}
+
+type UnauthorizedHandler = () => Promise<boolean>;
+
 let csrfToken = '';
-let onUnauthorizedHandler: (() => void) | null = null;
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+let reauthPromise: Promise<boolean> | null = null;
 
 export function setCSRFToken(token: string) {
   csrfToken = token || '';
@@ -20,8 +27,22 @@ export function getCSRFToken(): string {
   return csrfToken;
 }
 
-export function setOnUnauthorized(fn: (() => void) | null) {
-  onUnauthorizedHandler = fn;
+export function setUnauthorizedHandler(fn: UnauthorizedHandler | null) {
+  unauthorizedHandler = fn;
+}
+
+export function isReauthenticating(): boolean {
+  return reauthPromise !== null;
+}
+
+async function waitForReauth(): Promise<boolean> {
+  if (!unauthorizedHandler) return false;
+  if (!reauthPromise) {
+    reauthPromise = unauthorizedHandler().finally(() => {
+      reauthPromise = null;
+    });
+  }
+  return reauthPromise;
 }
 
 async function parseError(resp: Response): Promise<ApiError> {
@@ -36,25 +57,55 @@ async function parseError(resp: Response): Promise<ApiError> {
   }
 }
 
-export async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
-  const method = (init.method || 'GET').toUpperCase();
-  const headers = new Headers(init.headers || {});
-  if (!headers.has('Content-Type') && init.body && !(init.body instanceof FormData)) {
-    headers.set('Content-Type', 'application/json');
-  }
-  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS' && csrfToken) {
-    headers.set('X-CSRF-Token', csrfToken);
-  }
-  const resp = await fetch(path, {
-    ...init,
-    method,
-    headers,
-    credentials: 'same-origin',
-  });
-  if (!resp.ok) {
-    if (resp.status === 401 && path !== '/api/v1/auth/login' && path !== '/api/v1/auth/status') {
-      onUnauthorizedHandler?.();
+function shouldPromptReauth(path: string, options?: ApiRequestOptions): boolean {
+  if (options?.skipAuthPrompt || !unauthorizedHandler) return false;
+  return (
+    path !== '/api/v1/auth/login' &&
+    path !== '/api/v1/auth/status' &&
+    path !== '/api/v1/auth/setup' &&
+    path !== '/api/v1/auth/logout'
+  );
+}
+
+async function fetchWithAuth(
+  path: string,
+  buildInit: () => RequestInit,
+  options?: ApiRequestOptions,
+): Promise<Response> {
+  let resp = await fetch(path, buildInit());
+  if (resp.status === 401 && shouldPromptReauth(path, options)) {
+    const ok = await waitForReauth();
+    if (ok) {
+      resp = await fetch(path, buildInit());
     }
+  }
+  return resp;
+}
+
+export async function api<T = any>(
+  path: string,
+  init: RequestInit = {},
+  options?: ApiRequestOptions,
+): Promise<T> {
+  const method = (init.method || 'GET').toUpperCase();
+  const buildInit = (): RequestInit => {
+    const headers = new Headers(init.headers || {});
+    if (!headers.has('Content-Type') && init.body && !(init.body instanceof FormData)) {
+      headers.set('Content-Type', 'application/json');
+    }
+    if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS' && csrfToken) {
+      headers.set('X-CSRF-Token', csrfToken);
+    }
+    return {
+      ...init,
+      method,
+      headers,
+      credentials: 'same-origin',
+    };
+  };
+
+  const resp = await fetchWithAuth(path, buildInit, options);
+  if (!resp.ok) {
     throw await parseError(resp);
   }
   if (resp.status === 204) {
@@ -67,16 +118,16 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
   return (await resp.text()) as T;
 }
 
-export const apiGet = <T = any>(path: string) => api<T>(path);
+export const apiGet = <T = any>(path: string, options?: ApiRequestOptions) => api<T>(path, {}, options);
 
-export const apiPost = <T = any>(path: string, body?: unknown) =>
-  api<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+export const apiPost = <T = any>(path: string, body?: unknown, options?: ApiRequestOptions) =>
+  api<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }, options);
 
-export const apiPut = <T = any>(path: string, body?: unknown) =>
-  api<T>(path, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) });
+export const apiPut = <T = any>(path: string, body?: unknown, options?: ApiRequestOptions) =>
+  api<T>(path, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) }, options);
 
-export const apiDelete = <T = any>(path: string, body?: unknown) =>
-  api<T>(path, { method: 'DELETE', body: body === undefined ? undefined : JSON.stringify(body) });
+export const apiDelete = <T = any>(path: string, body?: unknown, options?: ApiRequestOptions) =>
+  api<T>(path, { method: 'DELETE', body: body === undefined ? undefined : JSON.stringify(body) }, options);
 
 // apiUpload builds FormData with ordered text fields BEFORE the file part.
 export async function apiUpload<T = any>(
@@ -95,21 +146,22 @@ export async function apiUpload<T = any>(
 
 export async function apiDownload(path: string, body?: unknown, fallbackFilename = 'download.bin') {
   const method = body === undefined ? 'GET' : 'POST';
-  const headers = new Headers();
-  if (method === 'POST') {
-    headers.set('Content-Type', 'application/json');
-    if (csrfToken) headers.set('X-CSRF-Token', csrfToken);
-  }
-  const resp = await fetch(path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    credentials: 'same-origin',
-  });
-  if (!resp.ok) {
-    if (resp.status === 401) {
-      onUnauthorizedHandler?.();
+  const buildInit = (): RequestInit => {
+    const headers = new Headers();
+    if (method === 'POST') {
+      headers.set('Content-Type', 'application/json');
+      if (csrfToken) headers.set('X-CSRF-Token', csrfToken);
     }
+    return {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: 'same-origin',
+    };
+  };
+
+  const resp = await fetchWithAuth(path, buildInit);
+  if (!resp.ok) {
     throw await parseError(resp);
   }
   const blob = await resp.blob();

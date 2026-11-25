@@ -2,7 +2,23 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, fmtTime, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Select, TermLabel, statusTone } from '../components/UI';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorAlert,
+  Input,
+  Modal,
+  PageHeader,
+  SectionTabs,
+  Select,
+  StatusBadge,
+  TermLabel,
+  statusTone,
+} from '../components/UI';
 import { CodeEditor } from '../components/CodeEditor';
 import { VisualJobBuilder, type VisualJobBuilderHandle } from '../components/VisualJobBuilder';
 
@@ -28,6 +44,8 @@ const sampleHCL = `job "hello" {
 
 export function JobCenterPage() {
   const { isAdmin } = useAuth();
+  const toast = useToast();
+  const askConfirm = useConfirm();
   const [clusters, setClusters] = useState<any[]>([]);
   const [clusterId, setClusterId] = useState('');
   const [namespace, setNamespace] = useState('default');
@@ -49,7 +67,6 @@ export function JobCenterPage() {
   const [selectedJobId, setSelectedJobId] = useState('');
   const [tplName, setTplName] = useState('');
   const [err, setErr] = useState('');
-  const [notice, setNotice] = useState('');
   const editRequestRef = useRef(0);
 
   const loadClusters = useCallback(async () => {
@@ -157,7 +174,7 @@ export function JobCenterPage() {
     setErr('');
     try {
       await apiPost(`/api/v1/nomad/${clusterId}/job-ops/validate`, await jobInput());
-      setNotice('校验通过');
+      toast.success('Job 校验通过');
     } catch (ex: any) {
       setErr(ex?.message || '校验失败');
     }
@@ -182,7 +199,7 @@ export function JobCenterPage() {
     try {
       await apiPost(`/api/v1/nomad/${clusterId}/job-ops/apply`, { plan_id: plan.plan_id });
       clearPlan();
-      setNotice('Job Apply 提交成功');
+      toast.success('Job Apply 提交成功');
       await loadJobs();
     } catch (ex: any) {
       setErr(ex?.message || 'Apply 失败');
@@ -219,7 +236,7 @@ export function JobCenterPage() {
       }
       setJobVariables(source?.variables || {});
       setNamespace(ns);
-      setNotice(source?.drifted ? source.reason : '');
+      if (source?.drifted && source?.reason) toast.info(source.reason);
       setRevisions(rev.revisions || []);
     } catch (ex: any) {
       if (request === editRequestRef.current) setErr(ex?.message || '读取 Job 编辑源码失败');
@@ -227,32 +244,40 @@ export function JobCenterPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Select value={clusterId} disabled={modeBusy || editMode === 'visual' && !visualReady} onChange={(e) => { setClusterId(e.target.value); clearPlan(); }}>
-            {clusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </Select>
-          <Input value={namespace} onChange={(e) => { setNamespace(e.target.value); clearPlan(); }} placeholder="Namespace" />
-        </div>
-        <div className="flex gap-2">
-          <Button size="sm" onClick={() => void loadJobs()}><RefreshCw className="h-3.5 w-3.5" /> 刷新</Button>
-          {isAdmin && clusterId && (
-            <Button
-              size="sm"
-              onClick={() =>
-                void apiDownload(`/api/v1/nomad/${clusterId}/job-ops/export`, { namespace }, 'nomad-jobs.zip')
-                  .catch((ex) => setErr(ex.message))
-              }
-            >
-              <Download className="h-3.5 w-3.5" /> 批量导出 HCL
+    <div className="space-y-5">
+      <PageHeader
+        title="Nomad Job 中心"
+        subtitle="双模式 HCL / 可视化积木 / JSON Job 编排、Plan Dry-Run 对比、模板库与修订回滚"
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="w-40">
+              <Select value={clusterId} disabled={modeBusy || (editMode === 'visual' && !visualReady)} onChange={(e) => { setClusterId(e.target.value); clearPlan(); }}>
+                {clusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+            </div>
+            <div className="w-32">
+              <Input value={namespace} onChange={(e) => { setNamespace(e.target.value); clearPlan(); }} placeholder="Namespace" />
+            </div>
+            <Button onClick={() => void loadJobs()}>
+              <RefreshCw className="h-4 w-4" />
+              <span>刷新</span>
             </Button>
-          )}
-        </div>
-      </div>
+            {isAdmin && clusterId && (
+              <Button
+                onClick={() =>
+                  void apiDownload(`/api/v1/nomad/${clusterId}/job-ops/export`, { namespace }, 'nomad-jobs.zip')
+                    .catch((ex) => toast.error(ex.message))
+                }
+              >
+                <Download className="h-4 w-4" />
+                <span>批量导出 HCL</span>
+              </Button>
+            )}
+          </div>
+        }
+      />
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
-      {notice && <div className="rounded bg-emerald-50 px-3.5 py-2 text-xs text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">{notice}</div>}
 
       <div className={editMode === 'visual' ? 'grid grid-cols-1 gap-5 2xl:grid-cols-[220px_minmax(0,1fr)]' : 'grid grid-cols-1 gap-5 xl:grid-cols-3'}>
         <Card title="集群 Jobs & 模板">
@@ -267,7 +292,7 @@ export function JobCenterPage() {
                     <div key={`${jobNs}:${j.id}`} className="flex items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
                       <div>
                         <div className="font-mono font-semibold">{j.id}</div>
-                        <Badge tone={statusTone(j.stop ? 'stopped' : j.status)}>{j.stop ? 'stopped' : j.status}</Badge>
+                        <StatusBadge value={j.stop ? 'stopped' : j.status} />
                       </div>
                       {isAdmin && (
                         <div className="flex gap-1">
@@ -278,7 +303,10 @@ export function JobCenterPage() {
                             disabled={!j.stop}
                             onClick={() =>
                               void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/start`, {})
-                                .then(() => loadJobs())
+                                .then(() => {
+                                  toast.success(`已启动 Job ${j.id}`);
+                                  return loadJobs();
+                                })
                                 .catch((ex) => setErr(ex.message))
                             }
                           >
@@ -288,11 +316,15 @@ export function JobCenterPage() {
                             size="sm"
                             aria-label="停止 Job"
                             disabled={j.stop}
-                            onClick={() =>
+                            onClick={async () => {
+                              if (!(await askConfirm(`确认停止运行中的 Job「${j.id}」（Namespace: ${jobNs}）吗？`, { title: '停止 Job', confirmText: '确认停止', danger: true }))) return;
                               void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/stop`, {})
-                                .then(() => loadJobs())
-                                .catch((ex) => setErr(ex.message))
-                            }
+                                .then(() => {
+                                  toast.success(`已停止 Job ${j.id}`);
+                                  return loadJobs();
+                                })
+                                .catch((ex) => setErr(ex.message));
+                            }}
                           >
                             <Square className="h-3 w-3" />
                           </Button>
@@ -300,10 +332,13 @@ export function JobCenterPage() {
                             size="sm"
                             aria-label="清理 Job"
                             variant="danger"
-                            onClick={() => {
-                              if (!window.confirm(`确认清理并彻底删除 Job "${j.id}"（Namespace: ${jobNs}）？`)) return;
+                            onClick={async () => {
+                              if (!(await askConfirm(`确认清理并彻底删除 Job「${j.id}」（Namespace: ${jobNs}）吗？`, { title: '清理删除 Job', confirmText: '确认 Purge', danger: true }))) return;
                               void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/purge`, { confirm_job_id: j.id })
-                                .then(() => loadJobs())
+                                .then(() => {
+                                  toast.success(`已清理 Job ${j.id}`);
+                                  return loadJobs();
+                                })
                                 .catch((ex) => setErr(ex.message));
                             }}
                           >
@@ -329,11 +364,15 @@ export function JobCenterPage() {
                         <Button
                           size="sm"
                           variant="danger"
-                          onClick={() =>
+                          onClick={async () => {
+                            if (!(await askConfirm(`确认删除 Job 模板「${t.name}」吗？`, { title: '删除模板', confirmText: '确认删除', danger: true }))) return;
                             void apiDelete(`/api/v1/job-templates/${t.id}`)
-                              .then(() => loadClusters())
-                              .catch((ex) => setErr(ex.message))
-                          }
+                              .then(() => {
+                                toast.success(`已删除模板 ${t.name}`);
+                                return loadClusters();
+                              })
+                              .catch((ex) => setErr(ex.message));
+                          }}
                         >
                           删
                         </Button>
@@ -397,7 +436,7 @@ export function JobCenterPage() {
                   onClick={() =>
                     tplName &&
                     void apiPost('/api/v1/job-templates', { name: tplName, edit_mode: 'hcl', hcl })
-                      .then(() => { setTplName(''); setNotice('模板已保存'); return loadClusters(); })
+                      .then(() => { setTplName(''); toast.success('模板已保存'); return loadClusters(); })
                       .catch((ex) => setErr(ex.message))
                   }
                 >
@@ -407,12 +446,12 @@ export function JobCenterPage() {
             )}
 
             {plan && (
-              <div className="space-y-2 rounded border border-emerald-300 bg-emerald-50/40 p-3 dark:border-emerald-800 dark:bg-emerald-950/30">
+              <div className="space-y-2 rounded-xl border border-indigo-300 bg-indigo-50/40 p-3.5 dark:border-indigo-500/40 dark:bg-indigo-950/30">
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold">Plan Diff 预览 (plan_id: {plan.plan_id})</span>
+                  <span className="font-semibold text-indigo-900 dark:text-indigo-200">Plan Diff 预览 (plan_id: {plan.plan_id})</span>
                   {isAdmin && <Button size="sm" variant="primary" onClick={() => void runApply()}>确认 Apply</Button>}
                 </div>
-                <pre className="max-h-56 overflow-auto rounded bg-slate-950 p-2.5 font-mono text-[11px] text-slate-100">
+                <pre className="max-h-56 overflow-auto rounded-lg bg-slate-950 p-2.5 font-mono text-[11px] text-slate-100">
                   {JSON.stringify(plan.diff || plan, null, 2)}
                 </pre>
               </div>
@@ -432,7 +471,7 @@ export function JobCenterPage() {
                             void apiPost(
                               `/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(namespace)}/jobs/${encodeURIComponent(selectedJobId)}/revert`,
                               { version: rv.remote_job_version },
-                            ).then(() => setNotice('已回滚 Job 版本')).catch((ex) => setErr(ex.message))
+                            ).then(() => toast.success('已回滚 Job 版本')).catch((ex) => setErr(ex.message))
                           }
                         >
                           <RotateCcw className="h-3 w-3" /> 回滚
@@ -462,7 +501,7 @@ export function JobCenterPage() {
                     setJobVariables({});
                     clearPlan();
                     setShowCompose(false);
-                    setNotice('已转换为 Nomad HCL');
+                    toast.success('已转换为 Nomad HCL');
                   })
                   .catch((ex) => setErr(ex.message))
               }

@@ -65,4 +65,18 @@ func TestCronRoutes(t *testing.T) {
 	if code, b := root.do("PUT", "/api/v1/settings", map[string]any{"cron.timezone": "Asia/Shanghai"}, nil); code != 200 {
 		t.Fatalf("timezone: %d %v", code, b)
 	}
+	if code, b := root.do("POST", "/api/v1/cron-jobs/preview", map[string]any{"schedule": "0 4 * * *"}, nil); code != 200 {
+		t.Fatalf("preview valid: %d %v", code, b)
+	} else if runs, ok := b["next_runs"].([]any); !ok || len(runs) != 5 {
+		t.Fatalf("preview count: %+v", b)
+	}
+	if code, _ := root.do("POST", "/api/v1/cron-jobs/preview", map[string]any{"schedule": "bogus"}, nil); code != 400 {
+		t.Fatalf("preview invalid: %d", code)
+	}
+	if code, _ := viewer.do("GET", "/api/v1/audit-logs/export?format=csv", nil, nil); code != 200 {
+		t.Fatalf("audit export csv: %d", code)
+	}
+	if code, _ := viewer.do("GET", "/api/v1/audit-logs/export?format=json", nil, nil); code != 200 {
+		t.Fatalf("audit export json: %d", code)
+	}
 }

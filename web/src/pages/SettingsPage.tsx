@@ -2,7 +2,23 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, RotateCw } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Badge, Button, Card, ErrorAlert, Input, PasswordConfirmModal, SecretInput, SectionTabs, Select, TermLabel, statusTone } from '../components/UI';
+import { useToast } from '../components/Toast';
+import { useConfirm, type BeforeNavigateDetail } from '../components/ConfirmDialog';
+import {
+  Badge,
+  Button,
+  Card,
+  ErrorAlert,
+  Input,
+  LoadingState,
+  PageHeader,
+  PasswordConfirmModal,
+  SecretInput,
+  SectionTabs,
+  Select,
+  StatusBadge,
+  TermLabel,
+} from '../components/UI';
 
 type SettingGroup = 'general' | 'releases' | 'clusters';
 
@@ -47,22 +63,63 @@ const settingMeta: SettingItemMeta[] = [
 
 export function SettingsPage() {
   const { isAdmin } = useAuth();
+  const toast = useToast();
+  const askConfirm = useConfirm();
+
   const [tab, setTab] = useState<'general' | 'releases' | 'clusters' | 'proxy' | 'security'>('general');
+  const [loading, setLoading] = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [savingProxy, setSavingProxy] = useState(false);
+  const [testingProxy, setTestingProxy] = useState(false);
+
   const [settings, setSettings] = useState<Record<string, any>>({});
-  const [proxy, setProxy] = useState<any>({ configured: false, type: 'http', host: '', port: 3128, username: '', password: '', no_proxy: '' });
+  const [savedSettingsSnap, setSavedSettingsSnap] = useState('');
+
+  const [proxy, setProxy] = useState<any>({
+    configured: false,
+    type: 'http',
+    host: '',
+    port: 3128,
+    username: '',
+    password: '',
+    password_set: false,
+    no_proxy: '',
+  });
+  const [savedProxySnap, setSavedProxySnap] = useState('');
   const [proxyTest, setProxyTest] = useState<any>(null);
   const [masterKey, setMasterKey] = useState<any>(null);
   const [showRotatePw, setShowRotatePw] = useState(false);
   const [err, setErr] = useState('');
-  const [notice, setNotice] = useState('');
+
+  const buildSettingsSnap = (obj: Record<string, any>) => {
+    const out: Record<string, any> = {};
+    for (const m of settingMeta) {
+      out[m.key] = obj[m.key] ?? '';
+    }
+    return JSON.stringify(out);
+  };
+
+  const buildProxySnap = (p: any) =>
+    JSON.stringify({
+      type: p.type,
+      host: (p.host || '').trim(),
+      port: Number(p.port),
+      username: (p.username || '').trim(),
+      password: p.password || '',
+      no_proxy: (p.no_proxy || '').trim(),
+    });
 
   const load = useCallback(async () => {
+    setLoading(true);
     setErr('');
     try {
       const [sRes, pRes] = await Promise.all([apiGet('/api/v1/settings'), apiGet('/api/v1/settings/proxy')]);
-      setSettings(sRes.settings || {});
+      const nextSettings = sRes.settings || {};
+      setSettings(nextSettings);
+      setSavedSettingsSnap(buildSettingsSnap(nextSettings));
+
       const pv = pRes.proxy || {};
-      setProxy({
+      const nextProxy = {
         configured: Boolean(pv.configured),
         type: pv.type || 'http',
         host: pv.host || '',
@@ -71,13 +128,18 @@ export function SettingsPage() {
         password: '',
         password_set: Boolean(pv.password_set),
         no_proxy: (pv.no_proxy || []).join(','),
-      });
+      };
+      setProxy(nextProxy);
+      setSavedProxySnap(buildProxySnap(nextProxy));
+
       if (isAdmin) {
         const mkRes = await apiGet('/api/v1/settings/master-key');
         setMasterKey(mkRes.master_key);
       }
     } catch (ex: any) {
       setErr(ex?.message || '加载系统设置失败');
+    } finally {
+      setLoading(false);
     }
   }, [isAdmin]);
 
@@ -85,19 +147,50 @@ export function SettingsPage() {
     void load();
   }, [load]);
 
+  const settingsDirty = savedSettingsSnap !== '' && buildSettingsSnap(settings) !== savedSettingsSnap;
+  const proxyDirty = savedProxySnap !== '' && buildProxySnap(proxy) !== savedProxySnap;
+
+  useEffect(() => {
+    if (!settingsDirty && !proxyDirty) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    const beforeNavigate = (event: Event) => {
+      const navigation = event as CustomEvent<BeforeNavigateDetail>;
+      navigation.detail.waitUntil(
+        askConfirm('当前系统设置尚未保存，确认放弃更改并离开吗？', {
+          title: '未保存的系统设置',
+          confirmText: '放弃更改',
+        }),
+      );
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    window.addEventListener('nomad-deck:before-navigate', beforeNavigate);
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnload);
+      window.removeEventListener('nomad-deck:before-navigate', beforeNavigate);
+    };
+  }, [settingsDirty, proxyDirty, askConfirm]);
+
   const saveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr('');
+    setSavingSettings(true);
     try {
       const payload: Record<string, any> = {};
       for (const m of settingMeta) {
         if (m.key in settings) payload[m.key] = settings[m.key];
       }
       const res = await apiPut('/api/v1/settings', payload);
-      setSettings(res.settings || {});
-      setNotice(res.restart_required ? '设置已保存，部分变更需重启控制面后生效。' : '系统设置已保存。');
+      const next = res.settings || {};
+      setSettings(next);
+      setSavedSettingsSnap(buildSettingsSnap(next));
+      toast.success(res.restart_required ? '设置已保存（部分参数需重启控制面生效）' : '系统设置已保存');
     } catch (ex: any) {
-      setErr(ex?.message || '保存系统设置失败');
+      toast.error(ex?.message || '保存系统设置失败');
+    } finally {
+      setSavingSettings(false);
     }
   };
 
@@ -108,40 +201,58 @@ export function SettingsPage() {
     port: Number(proxy.port),
     username: proxy.username,
     password: proxy.password === '' ? undefined : proxy.password,
-    no_proxy: proxy.no_proxy.split(',').map((s: string) => s.trim()).filter(Boolean),
+    no_proxy: proxy.no_proxy
+      .split(',')
+      .map((s: string) => s.trim())
+      .filter(Boolean),
   });
 
   const saveProxy = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr('');
+    setSavingProxy(true);
     try {
       await apiPut('/api/v1/settings/proxy', proxyPayload(true));
-      setNotice('系统代理设置已保存');
+      toast.success('系统代理设置已保存');
       await load();
     } catch (ex: any) {
-      setErr(ex?.message || '保存代理失败');
+      toast.error(ex?.message || '保存代理失败');
+    } finally {
+      setSavingProxy(false);
     }
   };
 
   const clearProxy = async () => {
+    if (
+      !(await askConfirm('确认清空当前系统代理配置吗？', {
+        title: '清空系统代理',
+        confirmText: '确认清空',
+        danger: true,
+      }))
+    ) {
+      return;
+    }
     setErr('');
     try {
       await apiPut('/api/v1/settings/proxy', { enabled: false });
       setProxyTest(null);
-      setNotice('已清空系统代理配置');
+      toast.success('已清空系统代理配置');
       await load();
     } catch (ex: any) {
-      setErr(ex?.message || '清空代理失败');
+      toast.error(ex?.message || '清空代理失败');
     }
   };
 
   const testProxy = async () => {
     setErr('');
+    setTestingProxy(true);
     try {
       const res = await apiPost('/api/v1/settings/proxy/test', proxyPayload(true));
       setProxyTest(res.report);
     } catch (ex: any) {
-      setErr(ex?.message || '代理测试失败');
+      toast.error(ex?.message || '代理测试失败');
+    } finally {
+      setTestingProxy(false);
     }
   };
 
@@ -150,189 +261,279 @@ export function SettingsPage() {
   const visibleMeta = settingMeta.filter((m) => m.group === tab);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
+      <PageHeader
+        title="系统设置"
+        subtitle="全局调度参数、官方发行版下载源、网络代理与数据库主密钥轮换"
+        actions={
+          <Button onClick={() => void load()} disabled={loading}>
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            <span>刷新</span>
+          </Button>
+        }
+      />
+
       <SectionTabs
         tabs={[
           { id: 'general', label: '基础与调度' },
           { id: 'releases', label: '版本与分发源', tip: '控制 Nomad / Vault / Docker 默认版本、镜像源与下载限速。' },
           { id: 'clusters', label: '集群与快照', tip: '管理 Raft 快照目录与保留数、证书告警阈值及终端超时。' },
-          { id: 'proxy', label: '网络代理', tip: '控制面下载官方安装包、自更新及节点 Docker 拉取镜像时可选走的代理。' },
-          ...(isAdmin ? [{ id: 'security', label: '主密钥与安全', tip: '用于加密数据库中 SSH 私钥、Vault 解封密钥和灾备凭据的主密钥状态与轮换。' }] : []),
+          {
+            id: 'proxy',
+            label: '网络代理',
+            tip: '控制面下载官方安装包、自更新及节点 Docker 拉取镜像时可选走的代理。',
+            badge: proxy.configured ? '已配置' : '未配置',
+          },
+          ...(isAdmin
+            ? [
+                {
+                  id: 'security',
+                  label: '主密钥与安全',
+                  tip: '用于加密数据库中 SSH 私钥、Vault 解封密钥和灾备凭据的主密钥状态与轮换。',
+                },
+              ]
+            : []),
         ]}
         active={tab}
         onChange={(id) => setTab(id as typeof tab)}
       />
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
-      {notice && (
-        <div className="rounded-md bg-emerald-50 px-3.5 py-2 text-xs text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">
-          {notice}
-        </div>
-      )}
 
-      {(tab === 'general' || tab === 'releases' || tab === 'clusters') && (
-        <Card title={activeGroupTitle}>
-          <form onSubmit={saveSettings} className="space-y-4">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-              {visibleMeta.map((m) => {
-                const labelNode = m.tip ? <TermLabel term={m.label} tip={m.tip} /> : m.label;
-                if (m.type === 'bool') {
-                  return (
-                    <label key={m.key} className="flex items-center gap-2 pt-4 text-xs font-medium">
-                      <input
-                        type="checkbox"
+      {loading ? (
+        <LoadingState label="正在加载系统设置..." />
+      ) : (
+        <>
+          {(tab === 'general' || tab === 'releases' || tab === 'clusters') && (
+            <Card title={activeGroupTitle}>
+              <form onSubmit={saveSettings} className="space-y-5">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {visibleMeta.map((m) => {
+                    const labelNode = m.tip ? <TermLabel term={m.label} tip={m.tip} /> : m.label;
+                    if (m.type === 'bool') {
+                      return (
+                        <label key={m.key} className="flex items-center gap-2.5 pt-5 text-xs font-medium text-slate-700 dark:text-slate-200">
+                          <input
+                            type="checkbox"
+                            disabled={!isAdmin}
+                            checked={Boolean(settings[m.key])}
+                            onChange={(e) => setSettings({ ...settings, [m.key]: e.target.checked })}
+                          />
+                          <span>{labelNode}</span>
+                        </label>
+                      );
+                    }
+                    if (m.type === 'select') {
+                      return (
+                        <Select
+                          key={m.key}
+                          label={labelNode}
+                          disabled={!isAdmin}
+                          value={settings[m.key] ?? m.options?.[0]}
+                          onChange={(e) => setSettings({ ...settings, [m.key]: e.target.value })}
+                        >
+                          {m.options?.map((o) => (
+                            <option key={o} value={o}>{o}</option>
+                          ))}
+                        </Select>
+                      );
+                    }
+                    return (
+                      <Input
+                        key={m.key}
+                        label={labelNode}
                         disabled={!isAdmin}
-                        checked={Boolean(settings[m.key])}
-                        onChange={(e) => setSettings({ ...settings, [m.key]: e.target.checked })}
+                        type={m.type === 'number' ? 'number' : 'text'}
+                        value={settings[m.key] ?? ''}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            [m.key]: m.type === 'number' ? Number(e.target.value) : e.target.value,
+                          })
+                        }
                       />
-                      <span>{labelNode}</span>
-                    </label>
-                  );
-                }
-                if (m.type === 'select') {
-                  return (
-                    <Select
-                      key={m.key}
-                      label={labelNode}
-                      disabled={!isAdmin}
-                      value={settings[m.key] ?? m.options?.[0]}
-                      onChange={(e) => setSettings({ ...settings, [m.key]: e.target.value })}
-                    >
-                      {m.options?.map((o) => <option key={o} value={o}>{o}</option>)}
-                    </Select>
-                  );
-                }
-                return (
+                    );
+                  })}
+                </div>
+                {isAdmin && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200 dark:border-slate-800">
+                    <span role="status" className={`text-xs ${settingsDirty ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'}`}>
+                      {settingsDirty ? '当前表单有未保存的更改' : '已与服务器配置同步'}
+                    </span>
+                    <Button type="submit" variant="primary" disabled={savingSettings || !settingsDirty}>
+                      {savingSettings ? '保存中...' : settingsDirty ? '保存系统设置' : '已保存'}
+                    </Button>
+                  </div>
+                )}
+              </form>
+            </Card>
+          )}
+
+          {tab === 'proxy' && (
+            <Card
+              title="系统代理（HTTP / HTTPS / SOCKS5）"
+              actions={<StatusBadge value={proxy.configured ? 'enabled' : 'disabled'} label={proxy.configured ? '已配置' : '未配置'} />}
+            >
+              <form onSubmit={saveProxy} className="space-y-4 text-xs">
+                <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                  此处仅保存系统代理地址与凭据；具体操作是否走代理，由部署、升级、自更新页面的“使用系统代理”勾选项及“版本与分发源”的默认勾选决定。
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">代理协议</label>
+                    <div className="inline-flex rounded-lg border border-slate-300 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800 w-full">
+                      {(['http', 'https', 'socks5'] as const).map((proto) => (
+                        <button
+                          key={proto}
+                          type="button"
+                          disabled={!isAdmin}
+                          onClick={() => setProxy({ ...proxy, type: proto })}
+                          className={`flex-1 px-2.5 py-2 text-xs font-medium uppercase transition border-r last:border-r-0 border-slate-300 dark:border-slate-700 ${
+                            proxy.type === proto
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {proto}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <Input
-                    key={m.key}
-                    label={labelNode}
+                    label="主机"
+                    required
                     disabled={!isAdmin}
-                    type={m.type === 'number' ? 'number' : 'text'}
-                    value={settings[m.key] ?? ''}
-                    onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        [m.key]: m.type === 'number' ? Number(e.target.value) : e.target.value,
-                      })
+                    value={proxy.host}
+                    onChange={(e) => setProxy({ ...proxy, host: e.target.value })}
+                  />
+                  <Input
+                    label="端口"
+                    type="number"
+                    required
+                    disabled={!isAdmin}
+                    value={proxy.port}
+                    onChange={(e) => setProxy({ ...proxy, port: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Input
+                    label="用户名"
+                    disabled={!isAdmin}
+                    value={proxy.username}
+                    onChange={(e) => setProxy({ ...proxy, username: e.target.value })}
+                  />
+                  <SecretInput
+                    label="密码"
+                    disabled={!isAdmin}
+                    value={proxy.password}
+                    hasStoredValue={Boolean(proxy.password_set)}
+                    resetKey={proxy.password_set}
+                    onChangeValue={(v) => setProxy({ ...proxy, password: v })}
+                    onRevealStored={
+                      isAdmin
+                        ? async () => {
+                            const r = await apiPost('/api/v1/settings/proxy/reveal', {});
+                            return r.password || '';
+                          }
+                        : undefined
                     }
                   />
-                );
-              })}
-            </div>
-            {isAdmin && (
-              <div className="flex justify-end">
-                <Button type="submit" variant="primary">保存系统设置</Button>
-              </div>
-            )}
-          </form>
-        </Card>
-      )}
-
-      {tab === 'proxy' && (
-        <Card
-          title="系统代理（HTTP / HTTPS / SOCKS5）"
-          actions={<Badge tone={proxy.configured ? 'green' : 'neutral'}>{proxy.configured ? '已配置' : '未配置'}</Badge>}
-        >
-          <form onSubmit={saveProxy} className="space-y-3 text-xs">
-            <p className="text-slate-500">
-              此处仅保存系统代理地址与凭据；具体操作是否走代理，由部署、升级、自更新页面的“使用系统代理”勾选项及“版本与分发源”的默认勾选决定。
-            </p>
-            <div className="grid grid-cols-3 gap-2">
-              <Select label="类型" disabled={!isAdmin} value={proxy.type} onChange={(e) => setProxy({ ...proxy, type: e.target.value })}>
-                <option value="http">http</option>
-                <option value="https">https</option>
-                <option value="socks5">socks5</option>
-              </Select>
-              <Input label="主机" required disabled={!isAdmin} value={proxy.host} onChange={(e) => setProxy({ ...proxy, host: e.target.value })} />
-              <Input label="端口" type="number" required disabled={!isAdmin} value={proxy.port} onChange={(e) => setProxy({ ...proxy, port: Number(e.target.value) })} />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Input label="用户名" disabled={!isAdmin} value={proxy.username} onChange={(e) => setProxy({ ...proxy, username: e.target.value })} />
-              <SecretInput
-                label="密码"
-                disabled={!isAdmin}
-                value={proxy.password}
-                hasStoredValue={Boolean(proxy.password_set)}
-                resetKey={proxy.password_set}
-                onChangeValue={(v) => setProxy({ ...proxy, password: v })}
-                onRevealStored={
-                  isAdmin
-                    ? async () => {
-                        const r = await apiPost('/api/v1/settings/proxy/reveal', {});
-                        return r.password || '';
-                      }
-                    : undefined
-                }
-              />
-            </div>
-            <Input
-              label={<TermLabel term="no_proxy（逗号分隔）" tip="不经过代理直连的主机名、IP 或 CIDR，多个值用英文逗号分隔。" />}
-              disabled={!isAdmin}
-              value={proxy.no_proxy}
-              onChange={(e) => setProxy({ ...proxy, no_proxy: e.target.value })}
-            />
-            {isAdmin && (
-              <div className="flex flex-wrap gap-2">
-                <Button type="submit" variant="primary">保存代理</Button>
-                <Button type="button" onClick={() => void testProxy()}>测试连通性</Button>
-                {proxy.configured && (
-                  <Button type="button" variant="danger" onClick={() => void clearProxy()}>清空代理</Button>
-                )}
-              </div>
-            )}
-            {proxyTest && (
-              <div className="space-y-1 rounded bg-slate-100 p-3 dark:bg-slate-950">
-                <div>出口 IP：<span className="font-mono">{proxyTest.exit_ip || '-'}</span></div>
-                {(proxyTest.results || []).map((c: any, i: number) => (
-                  <div key={i} className="flex justify-between">
-                    <span>{c.name} ({c.url})</span>
-                    <Badge tone={c.ok ? 'green' : 'red'}>{c.ok ? `OK (${c.status_code})` : c.error}</Badge>
+                </div>
+                <Input
+                  label={<TermLabel term="no_proxy（逗号分隔）" tip="不经过代理直连的主机名、IP 或 CIDR，多个值用英文逗号分隔。" />}
+                  disabled={!isAdmin}
+                  value={proxy.no_proxy}
+                  onChange={(e) => setProxy({ ...proxy, no_proxy: e.target.value })}
+                />
+                {isAdmin && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+                    <span role="status" className={`text-xs ${proxyDirty ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'}`}>
+                      {proxyDirty ? '代理配置有未保存更改' : '当前无未保存更改'}
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      {proxy.configured && (
+                        <Button variant="danger" onClick={() => void clearProxy()}>
+                          清空代理
+                        </Button>
+                      )}
+                      <Button onClick={() => void testProxy()} disabled={testingProxy}>
+                        {testingProxy ? '测试中...' : '测试连通性'}
+                      </Button>
+                      <Button type="submit" variant="primary" disabled={savingProxy}>
+                        {savingProxy ? '保存中...' : '保存代理'}
+                      </Button>
+                    </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </form>
-        </Card>
-      )}
+                )}
+                {proxyTest && (
+                  <div className="space-y-1.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200/70 dark:border-slate-800 p-3.5">
+                    <div>
+                      出口 IP：<span className="font-mono font-medium">{proxyTest.exit_ip || '-'}</span>
+                    </div>
+                    {(proxyTest.results || []).map((c: any, i: number) => (
+                      <div key={i} className="flex items-center justify-between gap-2">
+                        <span>
+                          {c.name} ({c.url})
+                        </span>
+                        <Badge tone={c.ok ? 'green' : 'red'}>{c.ok ? `OK (${c.status_code})` : c.error}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </form>
+            </Card>
+          )}
 
-      {tab === 'security' && isAdmin && masterKey && (
-        <Card
-          title={<TermLabel term="主密钥状态与在线轮换" tip="控制面使用主密钥通过 AES-GCM 加密 SSH 私钥、Vault Unseal Key 和灾备密码；轮换会用新密钥重加密库内全部密文与快照签名。" />}
-          actions={
-            <Button size="sm" onClick={() => void load()}>
-              <RefreshCw className="h-3.5 w-3.5" /> 刷新
-            </Button>
-          }
-        >
-          <div className="space-y-3 text-xs">
-            <div className="flex justify-between">
-              <span className="text-slate-500">当前主密钥</span>
-              <span className="font-mono">{masterKey.primary_key_id} ({masterKey.primary_source})</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">待轮换新密钥</span>
-              <span className="font-mono">
-                {masterKey.next_key_id ? `${masterKey.next_key_id} (${masterKey.next_source})` : '未加载'}
-              </span>
-            </div>
-            {masterKey.journal && (
-              <div className="rounded bg-slate-100 p-2.5 dark:bg-slate-950">
-                轮换进度：<Badge tone={statusTone(masterKey.journal.state)}>{masterKey.journal.state}</Badge>{' '}
-                <span className="ml-2">
-                  重加密记录 {masterKey.journal.progress?.reencrypted_rows || 0} 条 · 快照 {masterKey.journal.progress?.snapshots_done || 0}/{masterKey.journal.progress?.snapshots_total || 0}
-                </span>
-              </div>
-            )}
-            {masterKey.next_steps && <p className="text-slate-600 dark:text-slate-300">{masterKey.next_steps}</p>}
-            <Button
-              variant="primary"
-              disabled={!masterKey.rotation_ready || masterKey.running}
-              onClick={() => setShowRotatePw(true)}
+          {tab === 'security' && isAdmin && masterKey && (
+            <Card
+              title={
+                <TermLabel
+                  term="主密钥状态与在线轮换"
+                  tip="控制面使用主密钥通过 AES-GCM 加密 SSH 私钥、Vault Unseal Key 和灾备密码；轮换会用新密钥重加密库内全部密文与快照签名。"
+                />
+              }
+              actions={
+                <Button size="sm" onClick={() => void load()}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>刷新</span>
+                </Button>
+              }
             >
-              <RotateCw className="h-3.5 w-3.5" /> 发起主密钥轮换
-            </Button>
-          </div>
-        </Card>
+              <div className="space-y-3 text-xs">
+                <div className="flex justify-between items-center py-1 border-b border-slate-100 dark:border-slate-800">
+                  <span className="text-slate-500">当前主密钥</span>
+                  <span className="font-mono font-medium">
+                    {masterKey.primary_key_id} ({masterKey.primary_source})
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-100 dark:border-slate-800">
+                  <span className="text-slate-500">待轮换新密钥</span>
+                  <span className="font-mono">
+                    {masterKey.next_key_id ? `${masterKey.next_key_id} (${masterKey.next_source})` : '未加载'}
+                  </span>
+                </div>
+                {masterKey.journal && (
+                  <div className="rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200/70 dark:border-slate-800 p-3">
+                    轮换进度：<StatusBadge value={masterKey.journal.state} />{' '}
+                    <span className="ml-2">
+                      重加密记录 {masterKey.journal.progress?.reencrypted_rows || 0} 条 · 快照{' '}
+                      {masterKey.journal.progress?.snapshots_done || 0}/{masterKey.journal.progress?.snapshots_total || 0}
+                    </span>
+                  </div>
+                )}
+                {masterKey.next_steps && <p className="text-slate-600 dark:text-slate-300 leading-relaxed">{masterKey.next_steps}</p>}
+                <Button
+                  variant="primary"
+                  disabled={!masterKey.rotation_ready || masterKey.running}
+                  onClick={() => setShowRotatePw(true)}
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                  <span>发起主密钥轮换</span>
+                </Button>
+              </div>
+            </Card>
+          )}
+        </>
       )}
 
       <PasswordConfirmModal
@@ -341,7 +542,7 @@ export function SettingsPage() {
         onClose={() => setShowRotatePw(false)}
         onConfirm={async (pw) => {
           await apiPost('/api/v1/settings/master-key/rotate', { current_password: pw });
-          setNotice('主密钥轮换已启动，请刷新查看进度');
+          toast.success('主密钥轮换已启动，请刷新查看进度');
           await load();
         }}
       />

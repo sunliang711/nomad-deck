@@ -1,14 +1,30 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Plus, RefreshCw, Trash2 } from 'lucide-react';
-import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api';
+import { Link2, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { apiDelete, apiGet, apiPost } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, Select, TermLabel, statusTone } from '../components/UI';
+import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/ConfirmDialog';
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorAlert,
+  Input,
+  Modal,
+  PageHeader,
+  Select,
+  StatusBadge,
+  TermLabel,
+} from '../components/UI';
 import { CodeEditor } from '../components/CodeEditor';
 
 export function IntegrationsPage() {
   const { isAdmin } = useAuth();
   const { openTask } = useOpsDrawer();
+  const toast = useToast();
+  const askConfirm = useConfirm();
+
   const [items, setItems] = useState<any[]>([]);
   const [clusters, setClusters] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
@@ -76,9 +92,10 @@ export function IntegrationsPage() {
         target_cluster_id: createForm.target_cluster_id || vaultDefault,
       });
       setShowCreate(false);
+      toast.success(`已创建联动 ${createForm.name}`);
       await load(res.integration?.id);
     } catch (ex: any) {
-      setErr(ex?.message || '创建联动失败');
+      toast.error(ex?.message || '创建联动失败');
     }
   };
 
@@ -90,20 +107,92 @@ export function IntegrationsPage() {
       await apiPost(`/api/v1/integrations/${selected.id}/roles`, {
         role_name: roleForm.role_name,
         policy_mode: roleForm.policy_mode,
-        secret_paths: roleForm.secret_paths.split(',').map((s) => s.trim()).filter(Boolean),
+        secret_paths: roleForm.secret_paths
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
         bound_claims: { nomad_namespace: roleForm.bound_namespace.trim() },
         token_period: roleForm.token_period,
       });
       setShowRole(false);
+      toast.success(`已保存工作负载 Role ${roleForm.role_name}`);
       await selectItem(selected.id);
     } catch (ex: any) {
-      setErr(ex?.message || '保存 Role 失败');
+      toast.error(ex?.message || '保存 Role 失败');
+    }
+  };
+
+  const deleteIntegration = async () => {
+    if (!selected) return;
+    if (
+      !(await askConfirm(`确定要删除联动配置「${selected.name}」吗？`, {
+        title: '删除集群联动',
+        confirmText: '确认删除',
+        danger: true,
+      }))
+    ) {
+      return;
+    }
+    try {
+      await apiDelete(`/api/v1/integrations/${selected.id}`);
+      setSelected(null);
+      toast.success('联动配置已删除');
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || '删除联动失败');
+    }
+  };
+
+  const deleteRole = async (r: any) => {
+    if (!selected) return;
+    if (
+      !(await askConfirm(`确认删除工作负载 Role「${r.role_name}」吗？`, {
+        title: '删除 Role',
+        confirmText: '确认删除',
+        danger: true,
+      }))
+    ) {
+      return;
+    }
+    try {
+      await apiDelete(`/api/v1/integrations/${selected.id}/roles/${r.id}`);
+      toast.success(`已删除 Role ${r.role_name}`);
+      await selectItem(selected.id);
+    } catch (ex: any) {
+      toast.error(ex?.message || '删除 Role 失败');
     }
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between">
+    <div className="space-y-5">
+      <PageHeader
+        title="集群联动"
+        subtitle="配置 Nomad 与 Vault 之间的 JWT Workload Identity 双向信任、角色策略与四段式链路体检"
+        actions={
+          <>
+            <Button onClick={() => void load()}>
+              <RefreshCw className="h-4 w-4" />
+              <span>刷新</span>
+            </Button>
+            {isAdmin && (
+              <Button
+                variant="primary"
+                onClick={() => {
+                  const n = clusters.find((c) => c.type === 'nomad')?.id || '';
+                  const v = clusters.find((c) => c.type === 'vault')?.id || '';
+                  setCreateForm({ name: 'nomad-vault', source_cluster_id: n, target_cluster_id: v, auth_path: 'jwt-nomad' });
+                  setShowCreate(true);
+                }}
+              >
+                <Plus className="h-4 w-4" />
+                <span>新建联动</span>
+              </Button>
+            )}
+          </>
+        }
+      />
+
+      {items.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {items.map((it) => (
             <Button
@@ -112,33 +201,23 @@ export function IntegrationsPage() {
               variant={selected?.id === it.id ? 'primary' : 'secondary'}
               onClick={() => void selectItem(it.id)}
             >
-              {it.name} ({it.status})
+              <span>{it.name}</span>
+              <span className="opacity-75">({it.status})</span>
             </Button>
           ))}
         </div>
-        <div className="flex gap-2">
-          <Button size="sm" onClick={() => void load()}><RefreshCw className="h-3.5 w-3.5" /> 刷新</Button>
-          {isAdmin && (
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => {
-                const n = clusters.find((c) => c.type === 'nomad')?.id || '';
-                const v = clusters.find((c) => c.type === 'vault')?.id || '';
-                setCreateForm({ name: 'nomad-vault', source_cluster_id: n, target_cluster_id: v, auth_path: 'jwt-nomad' });
-                setShowCreate(true);
-              }}
-            >
-              <Plus className="h-3.5 w-3.5" /> 新建联动
-            </Button>
-          )}
-        </div>
-      </div>
+      )}
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
       {!selected ? (
-        <Card><EmptyState text="暂无 Nomad-Vault 联动配置" /></Card>
+        <Card>
+          <EmptyState
+            icon={<Link2 className="w-6 h-6" />}
+            title="暂无 Nomad-Vault 联动配置"
+            description="创建联动后即可一键打通 Nomad JWKS 与 Vault JWT Auth，并生成工作负载示例。"
+          />
+        </Card>
       ) : (
         <div className="space-y-4">
           <Card
@@ -146,7 +225,14 @@ export function IntegrationsPage() {
             actions={
               isAdmin && (
                 <div className="flex flex-wrap gap-1.5">
-                  <Button size="sm" onClick={() => void apiPost(`/api/v1/integrations/${selected.id}/plan`, {}).then((r) => setPlan(r.plan)).catch((ex) => setErr(ex.message))}>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      void apiPost(`/api/v1/integrations/${selected.id}/plan`, {})
+                        .then((r) => setPlan(r.plan))
+                        .catch((ex) => toast.error(ex.message))
+                    }
+                  >
                     <TermLabel term="Plan 预览" tip="对比 Nomad JWKS、Vault JWT Auth 挂载、Role 与 Policy 期望状态与当前线上状态的差异。" />
                   </Button>
                   <Button
@@ -155,73 +241,73 @@ export function IntegrationsPage() {
                     onClick={() =>
                       void apiPost(`/api/v1/integrations/${selected.id}/apply`, {})
                         .then((r) => r.task?.id && openTask(r.task.id, `Apply 联动: ${selected.name}`))
-                        .catch((ex) => setErr(ex.message))
+                        .catch((ex) => toast.error(ex.message))
                     }
                   >
                     一键 Apply
                   </Button>
-                  <Button size="sm" onClick={() => void apiPost(`/api/v1/integrations/${selected.id}/doctor`, {}).then((r) => setDoctor(r.report)).catch((ex) => setErr(ex.message))}>
-                    <TermLabel term="四段式体检" tip="依次检验 Nomad JWKS 公钥可达性、Vault JWT Auth 配置、工作负载 Role 绑定和签名签发链路。" />
-                  </Button>
                   <Button
                     size="sm"
-                    variant="danger"
                     onClick={() =>
-                      void apiDelete(`/api/v1/integrations/${selected.id}`)
-                        .then(() => { setSelected(null); return load(); })
-                        .catch((ex) => setErr(ex.message))
+                      void apiPost(`/api/v1/integrations/${selected.id}/doctor`, {})
+                        .then((r) => setDoctor(r.report))
+                        .catch((ex) => toast.error(ex.message))
                     }
                   >
+                    <TermLabel term="四段式体检" tip="依次检验 Nomad JWKS 公钥可达性、Vault JWT Auth 配置、工作负载 Role 绑定和签名签发链路。" />
+                  </Button>
+                  <Button size="sm" variant="danger" onClick={() => void deleteIntegration()}>
                     删除
                   </Button>
                 </div>
               )
             }
           >
-            <div className="mb-3 flex flex-wrap gap-3 text-xs text-slate-600 dark:text-slate-300">
+            <div className="mb-4 flex flex-wrap items-center gap-4 text-xs text-slate-600 dark:text-slate-300">
               <span>
                 <TermLabel term="Auth Mount" tip="Vault 中启用 JWT 认证引擎的挂载路径，用于校验 Nomad 签发给工作负载的身份 JWT（OIDC / JWKS）。" />:{' '}
-                <code className="font-mono">{selected.auth_path}</code>
+                <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.auth_path}</code>
               </span>
-              <span>状态: <Badge tone={statusTone(selected.status)}>{selected.status}</Badge></span>
+              <span className="inline-flex items-center gap-1.5">
+                状态: <StatusBadge value={selected.status} />
+              </span>
             </div>
 
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-semibold">工作负载 Roles</span>
-              {isAdmin && <Button size="sm" onClick={() => setShowRole(true)}><Plus className="h-3 w-3" /> 添加 Role</Button>}
+            <div className="mb-2.5 flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">工作负载 Roles</span>
+              {isAdmin && (
+                <Button size="sm" onClick={() => setShowRole(true)}>
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>添加 Role</span>
+                </Button>
+              )}
             </div>
             {(selected.roles || []).length === 0 ? (
-              <EmptyState text="暂无 Role" />
+              <EmptyState title="暂无 Role" description="添加至少一个工作负载 Role 以绑定 Vault Policy 和 Secret 路径。" />
             ) : (
               <div className="space-y-2 text-xs">
                 {selected.roles.map((r: any) => (
-                  <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2.5 dark:border-slate-800">
+                  <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
                     <div>
-                      <span className="font-mono font-semibold">{r.role_name}</span>
-                      <span className="ml-2 text-slate-500">mode: {r.policy_mode} · paths: {(r.secret_paths || []).join(', ')}</span>
+                      <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">{r.role_name}</span>
+                      <span className="ml-2 text-slate-500">
+                        mode: {r.policy_mode} · paths: {(r.secret_paths || []).join(', ')}
+                      </span>
                     </div>
                     {isAdmin && (
-                      <div className="flex gap-1">
+                      <div className="flex gap-1.5">
                         <Button
                           size="sm"
                           onClick={() =>
                             void apiPost(`/api/v1/integrations/${selected.id}/job-example`, { role: r.role_name })
                               .then((res) => setExampleHCL(res.hcl || ''))
-                              .catch((ex) => setErr(ex.message))
+                              .catch((ex) => toast.error(ex.message))
                           }
                         >
                           示例 Job
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          onClick={() =>
-                            void apiDelete(`/api/v1/integrations/${selected.id}/roles/${r.id}`)
-                              .then(() => selectItem(selected.id))
-                              .catch((ex) => setErr(ex.message))
-                          }
-                        >
-                          <Trash2 className="h-3 w-3" />
+                        <Button size="sm" variant="danger" onClick={() => void deleteRole(r)}>
+                          <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     )}
@@ -233,7 +319,7 @@ export function IntegrationsPage() {
 
           {plan && (
             <Card title="联动 Plan 预览" actions={<Button size="sm" onClick={() => setPlan(null)}>关闭</Button>}>
-              <pre className="max-h-72 overflow-auto rounded bg-slate-950 p-3 font-mono text-xs text-slate-100">
+              <pre className="max-h-72 overflow-auto rounded-xl bg-slate-950 p-4 font-mono text-xs text-slate-100">
                 {JSON.stringify(plan, null, 2)}
               </pre>
             </Card>
@@ -243,9 +329,9 @@ export function IntegrationsPage() {
             <Card title="四段式链路体检" actions={<Button size="sm" onClick={() => setDoctor(null)}>关闭</Button>}>
               <div className="space-y-2 text-xs">
                 {(doctor.checks || []).map((c: any, i: number) => (
-                  <div key={i} className="flex items-center justify-between rounded border border-slate-200 p-2 dark:border-slate-800">
+                  <div key={i} className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
                     <span><b>{c.name}</b>：{c.message}</span>
-                    <Badge tone={statusTone(c.status)}>{c.status}</Badge>
+                    <StatusBadge value={c.status} />
                   </div>
                 ))}
               </div>
@@ -271,7 +357,7 @@ export function IntegrationsPage() {
           </Select>
           <Input label="Vault JWT Auth Mount" required value={createForm.auth_path} onChange={(e) => setCreateForm({ ...createForm, auth_path: e.target.value })} />
           <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setShowCreate(false)}>取消</Button>
+            <Button onClick={() => setShowCreate(false)}>取消</Button>
             <Button type="submit" variant="primary">创建</Button>
           </div>
         </form>
@@ -288,7 +374,7 @@ export function IntegrationsPage() {
           <Input label="允许的 Nomad Namespace" required value={roleForm.bound_namespace} onChange={(e) => setRoleForm({ ...roleForm, bound_namespace: e.target.value })} />
           <Input label="Token Period" value={roleForm.token_period} onChange={(e) => setRoleForm({ ...roleForm, token_period: e.target.value })} />
           <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setShowRole(false)}>取消</Button>
+            <Button onClick={() => setShowRole(false)}>取消</Button>
             <Button type="submit" variant="primary">保存</Button>
           </div>
         </form>

@@ -1,10 +1,9 @@
-import React from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './lib/auth';
-import { ThemeProvider } from './lib/theme';
 import { OpsDrawerProvider } from './lib/opsDrawer';
 import { Layout } from './components/Layout';
-import { LoginPage } from './pages/LoginPage';
+import { LoadingState } from './components/UI';
+import { LoginPage, SessionExpiredModal } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { InfraPage } from './pages/InfraPage';
 import { NomadPage } from './pages/NomadPage';
@@ -20,11 +19,11 @@ import { AccountsPage } from './pages/AccountsPage';
 import { VersionPage } from './pages/VersionPage';
 
 function AppRoutes() {
-  const { loading, authenticated } = useAuth();
+  const { loading, authenticated, sessionExpired } = useAuth();
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">
-        正在加载 NomadDeck 控制面...
+      <div className="min-h-screen grid place-items-center bg-[#f5f7fb] dark:bg-[#0b1120]">
+        <LoadingState label="正在加载 NomadDeck 控制面..." />
       </div>
     );
   }
@@ -51,19 +50,18 @@ function AppRoutes() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
+      {sessionExpired && <SessionExpiredModal />}
     </OpsDrawerProvider>
   );
 }
 
 export function App() {
   return (
-    <ThemeProvider>
-      <AuthProvider>
-        <BrowserRouter>
-          <AppRoutes />
-        </BrowserRouter>
-      </AuthProvider>
-    </ThemeProvider>
+    <AuthProvider>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
 

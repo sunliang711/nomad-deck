@@ -330,7 +330,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               const next = moveNode(document, source, here, schema);
               commit(next.document, next.path);
             } catch (ex: any) { setError(ex.message || '无法移动到此层级'); }
-          }} className={`flex items-center gap-1 rounded py-1 pr-1 ${picked ? 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}>
+          }} className={`flex items-center gap-1 rounded py-1 pr-1 ${picked ? 'bg-indigo-100 text-indigo-900 dark:bg-indigo-950/60 dark:text-indigo-100' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}>
           {item.body ? <button aria-label={`${folded ? '展开' : '折叠'} ${nodeTitle(item)}`} onClick={() => setCollapsed((prev) => { const next = new Set(prev); if (folded) next.delete(key); else next.add(key); return next; })} className="shrink-0 p-0.5">{folded ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}</button> : <span className="w-4 text-center text-[10px] text-slate-400">＝</span>}
           <button aria-label={`编辑 ${nodeTitle(item)}`} onClick={() => setSelected(here)} className="min-w-0 flex-1 truncate text-left font-mono text-xs">{nodeTitle(item)}</button>
           {!readOnly && <GripVertical className="h-3 w-3 shrink-0 text-slate-400" />}
@@ -358,7 +358,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
       {diagnostics.length > 0 && <div role="status" className="max-h-36 space-y-1 overflow-auto rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">{diagnostics.map((issue, i) => <button key={i} className="block text-left" onClick={() => { let path = issue.path || []; while (path.length && !nodeAt(document, path)) path = path.slice(0, -1); setSelected(path); }}>{issue.message}</button>)}</div>}
       <div className="grid gap-3 lg:grid-cols-[minmax(190px,0.7fr)_minmax(0,1.5fr)]">
         <div className="max-h-[650px] overflow-auto rounded border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900">
-          <button onClick={() => setSelected([])} className={`mb-2 w-full rounded px-2 py-1.5 text-left font-semibold ${selected.length ? '' : 'bg-emerald-100 dark:bg-emerald-950'}`}>HCL 文档</button>
+          <button onClick={() => setSelected([])} className={`mb-2 w-full rounded px-2 py-1.5 text-left font-semibold ${selected.length ? '' : 'bg-indigo-100 text-indigo-900 dark:bg-indigo-950/60 dark:text-indigo-100'}`}>HCL 文档</button>
           <div role="tree" aria-label="Job 结构树">{outline(document, [])}</div>
         </div>
         <div className="max-h-[650px] space-y-4 overflow-auto rounded border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
@@ -381,7 +381,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             </div>;
           })}
           {isBody && <>
-            {children.length > 0 && <div className="space-y-1.5"><div className="font-semibold">子块</div>{children.map(({ item, path }) => <button key={path.join('.')} onClick={() => setSelected(path)} className="flex w-full items-center justify-between rounded border border-slate-200 p-2 text-left font-mono hover:border-emerald-400 dark:border-slate-700"><span>{nodeTitle(item)}</span><ChevronRight className="h-3.5 w-3.5" /></button>)}</div>}
+            {children.length > 0 && <div className="space-y-1.5"><div className="font-semibold">子块</div>{children.map(({ item, path }) => <button key={path.join('.')} onClick={() => setSelected(path)} className="flex w-full items-center justify-between rounded border border-slate-200 p-2 text-left font-mono hover:border-indigo-400 dark:border-slate-700"><span>{nodeTitle(item)}</span><ChevronRight className="h-3.5 w-3.5" /></button>)}</div>}
             {!readOnly && <div className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-700">
               <div className="font-semibold">添加子元素</div>
               {(rule.attributes.length > 0 || rule.blocks.length > 0) && <><Input aria-label="搜索可添加元素" placeholder="搜索属性或块，例如 resources" value={filter} onChange={(e) => setFilter(e.target.value)} />

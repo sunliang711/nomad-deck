@@ -1,5 +1,11 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { apiGet, apiPost, setCSRFToken, setOnUnauthorized } from './api';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import {
+  apiGet,
+  apiPost,
+  isReauthenticating,
+  setCSRFToken,
+  setUnauthorizedHandler,
+} from './api';
 
 export interface AuthUser {
   id: string;
@@ -14,8 +20,11 @@ interface AuthState {
   version: string;
   user: AuthUser | null;
   isAdmin: boolean;
+  sessionExpired: boolean;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
+  completeReauth: (user: AuthUser, csrfToken?: string) => void;
+  abortReauth: () => void;
 }
 
 const AuthContext = createContext<AuthState>({
@@ -25,8 +34,11 @@ const AuthContext = createContext<AuthState>({
   version: '',
   user: null,
   isAdmin: false,
+  sessionExpired: false,
   refresh: async () => {},
   logout: async () => {},
+  completeReauth: () => {},
+  abortReauth: () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -35,6 +47,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false);
   const [version, setVersion] = useState('');
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const reauthResolversRef = useRef<((ok: boolean) => void)[]>([]);
+
+  const settleReauth = useCallback((ok: boolean) => {
+    setSessionExpired(false);
+    while (reauthResolversRef.current.length > 0) {
+      reauthResolversRef.current.shift()?.(ok);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -44,7 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         version?: string;
         user?: AuthUser;
         csrf_token?: string;
-      }>('/api/v1/auth/status');
+      }>('/api/v1/auth/status', { skipAuthPrompt: true });
       setNeedsSetup(Boolean(data.needs_setup));
       setAuthenticated(Boolean(data.authenticated));
       setVersion(data.version || '');
@@ -60,24 +81,83 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    setOnUnauthorized(() => {
-      setCSRFToken('');
-      setAuthenticated(false);
-      setUser(null);
-    });
     void refresh();
-    return () => setOnUnauthorized(null);
   }, [refresh]);
+
+  useEffect(() => {
+    if (!authenticated) {
+      setUnauthorizedHandler(null);
+      settleReauth(false);
+      return;
+    }
+
+    setUnauthorizedHandler(
+      () =>
+        new Promise<boolean>((resolve) => {
+          reauthResolversRef.current.push(resolve);
+          setSessionExpired(true);
+        }),
+    );
+
+    let lastCheckedAt = Date.now();
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible' || isReauthenticating()) return;
+      const now = Date.now();
+      if (now - lastCheckedAt < 60_000) return;
+      lastCheckedAt = now;
+      void apiGet<{ authenticated: boolean; user?: AuthUser; csrf_token?: string; version?: string }>(
+        '/api/v1/auth/status',
+        { skipAuthPrompt: true },
+      )
+        .then((res) => {
+          if (res.version) setVersion(res.version);
+          if (!res.authenticated) {
+            setSessionExpired(true);
+            return;
+          }
+          if (res.user) setUser(res.user);
+          if (res.csrf_token) setCSRFToken(res.csrf_token);
+        })
+        .catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      setUnauthorizedHandler(null);
+      settleReauth(false);
+    };
+  }, [authenticated, settleReauth]);
+
+  const completeReauth = useCallback(
+    (nextUser: AuthUser, nextCSRF?: string) => {
+      if (nextCSRF) setCSRFToken(nextCSRF);
+      setUser(nextUser);
+      setAuthenticated(true);
+      settleReauth(true);
+    },
+    [settleReauth],
+  );
+
+  const abortReauth = useCallback(() => {
+    settleReauth(false);
+    setCSRFToken('');
+    setAuthenticated(false);
+    setUser(null);
+  }, [settleReauth]);
 
   const logout = useCallback(async () => {
     try {
-      await apiPost('/api/v1/auth/logout');
+      await apiPost('/api/v1/auth/logout', undefined, { skipAuthPrompt: true });
+    } catch {
+      // ignore logout network errors
     } finally {
+      settleReauth(false);
       setCSRFToken('');
       setAuthenticated(false);
       setUser(null);
     }
-  }, []);
+  }, [settleReauth]);
 
   return (
     <AuthContext.Provider
@@ -88,8 +168,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         version,
         user,
         isAdmin: user?.role === 'admin',
+        sessionExpired,
         refresh,
         logout,
+        completeReauth,
+        abortReauth,
       }}
     >
       {children}

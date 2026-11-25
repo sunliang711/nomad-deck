@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Terminal } from 'lucide-react';
 import { apiGet, fmtTime } from '../lib/api';
-import { Badge, Button, Card, ExternalUrlLink, Input, TermLabel, statusTone } from './UI';
+import { useConfirm } from './ConfirmDialog';
+import { Badge, Button, Card, ExternalUrlLink, Input, StatusBadge, TermLabel } from './UI';
 
 interface ClusterOpsSectionProps {
   product: 'nomad' | 'vault';
@@ -64,6 +65,7 @@ export function ClusterOpsSection({
   onRemoveNode,
   onError,
 }: ClusterOpsSectionProps) {
+  const askConfirm = useConfirm();
   const [availableVersions, setAvailableVersions] = useState<string[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
 
@@ -94,7 +96,7 @@ export function ClusterOpsSection({
         <Card title="集群概要">
           <div className="space-y-1.5 text-xs">
             <div>
-              健康状态：<Badge tone={statusTone(cluster.health_status)}>{cluster.health_status}</Badge>
+              健康状态：<StatusBadge value={cluster.health_status} />
             </div>
             <div>
               初始化状态：<span className="font-mono">{cluster.init_state}</span>
@@ -158,7 +160,7 @@ export function ClusterOpsSection({
                   type="button"
                   onClick={() => void fetchVersions()}
                   disabled={loadingVersions}
-                  className="text-[11px] font-medium text-emerald-600 hover:underline disabled:opacity-50 dark:text-emerald-400"
+                  className="text-[11px] font-medium text-indigo-600 hover:underline disabled:opacity-50 dark:text-indigo-400"
                 >
                   {loadingVersions ? '获取中...' : '拉取可选版本'}
                 </button>
@@ -352,10 +354,38 @@ export function ClusterOpsSection({
                       )}
                       {isAdmin && (
                         <>
-                          <Button size="sm" onClick={() => onRestartNode(n)}>
+                          <Button
+                            size="sm"
+                            onClick={async () => {
+                              if (
+                                !(await askConfirm(`确认重启节点「${n.name}」的 ${product} 服务吗？`, {
+                                  title: '重启节点服务',
+                                  confirmText: '确认重启',
+                                }))
+                              ) {
+                                return;
+                              }
+                              onRestartNode(n);
+                            }}
+                          >
                             重启
                           </Button>
-                          <Button size="sm" variant="danger" onClick={() => onRemoveNode(n)}>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={async () => {
+                              if (
+                                !(await askConfirm(`确定要从集群中缩容移除节点「${n.name}」吗？`, {
+                                  title: '缩容移除节点',
+                                  confirmText: '确认缩容',
+                                  danger: true,
+                                }))
+                              ) {
+                                return;
+                              }
+                              onRemoveNode(n);
+                            }}
+                          >
                             缩容
                           </Button>
                         </>

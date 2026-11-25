@@ -1,8 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { EditorState } from '@codemirror/state';
-import { EditorView, lineNumbers } from '@codemirror/view';
+import { EditorView, lineNumbers, keymap } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { keymap } from '@codemirror/view';
 import { useTheme } from '../lib/theme';
 
 export function CodeEditor({
@@ -30,10 +29,10 @@ export function CodeEditor({
         '&': {
           height,
           fontSize: '13px',
-          backgroundColor: isDark ? '#020617' : '#f8fafc',
+          backgroundColor: isDark ? '#020617' : '#f8faff',
           color: isDark ? '#e2e8f0' : '#0f172a',
-          borderRadius: '0.375rem',
-          border: isDark ? '1px solid #1e293b' : '1px solid #cbd5e1',
+          borderRadius: '0.75rem',
+          border: isDark ? '1px solid #1f2937' : '1px solid #dce3ee',
         },
         '.cm-scroller': {
           overflow: 'auto',
@@ -42,7 +41,7 @@ export function CodeEditor({
         '.cm-gutters': {
           backgroundColor: isDark ? '#0f172a' : '#f1f5f9',
           color: '#64748b',
-          borderRight: isDark ? '1px solid #1e293b' : '1px solid #e2e8f0',
+          borderRight: isDark ? '1px solid #1f2937' : '1px solid #e2e8f0',
         },
       },
       { dark: isDark },

@@ -2,12 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, Search, Terminal } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, fmtBytes, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Sparkline, TermLabel, statusTone } from './UI';
+import { Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Sparkline, StatusBadge, TermLabel } from './UI';
+import { useToast } from './Toast';
+import { useConfirm } from './ConfirmDialog';
 import { TerminalModal } from './TerminalModal';
 import { CodeEditor } from './CodeEditor';
 
 export function NomadWorkbench({ clusterId }: { clusterId: string }) {
   const { isAdmin } = useAuth();
+  const toast = useToast();
+  const askConfirm = useConfirm();
   const [subTab, setSubTab] = useState('jobs');
   const [namespace, setNamespace] = useState('default');
   const [namespaces, setNamespaces] = useState<any[]>([]);
@@ -42,7 +46,6 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
   const [scaleCount, setScaleCount] = useState(1);
   const [scaleGroup, setScaleGroup] = useState('');
   const [err, setErr] = useState('');
-  const [notice, setNotice] = useState('');
   const subTabRef = useRef(subTab);
   subTabRef.current = subTab;
   const jobRequestRef = useRef(0);
@@ -278,7 +281,6 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
       </div>
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
-      {notice && <div className="rounded bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">{notice}</div>}
 
       {searchRes && (
         <Card title="搜索结果" actions={<Button size="sm" onClick={() => setSearchRes(null)}>关闭</Button>}>
@@ -309,7 +311,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                       <tr key={`${j.namespace}:${j.id}`}>
                         <td className="py-2 pr-3 font-mono font-medium">{j.id}</td>
                         <td className="py-2 pr-3">{j.namespace} · {j.type}</td>
-                        <td className="py-2 pr-3"><Badge tone={statusTone(j.stop ? 'stopped' : j.status)}>{j.stop ? 'stopped' : j.status}</Badge></td>
+                        <td className="py-2 pr-3"><StatusBadge value={j.stop ? 'stopped' : j.status} /></td>
                         <td className="py-2 text-right">
                           <Button size="sm" onClick={() => void inspectJob(j)}>运行态详情</Button>
                         </td>
@@ -352,7 +354,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                         void apiPost(
                           `/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/scale`,
                           { group: scaleGroup, count: scaleCount },
-                        ).then(() => { setNotice('扩缩副本请求已提交'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))
+                        ).then(() => { toast.success('扩缩副本请求已提交'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))
                       }
                     >
                       扩缩副本
@@ -362,7 +364,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                         size="sm"
                         onClick={() =>
                           void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/periodic/force`, {})
-                            .then(() => setNotice('已触发 Periodic 运行'))
+                            .then(() => toast.success('已触发 Periodic 运行'))
                             .catch((ex) => setErr(ex.message))
                         }
                       >
@@ -374,7 +376,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                         size="sm"
                         onClick={() =>
                           void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/dispatch`, { meta: {} })
-                            .then(() => setNotice('已派发 Parameterized 子任务'))
+                            .then(() => toast.success('已派发 Parameterized 子任务'))
                             .catch((ex) => setErr(ex.message))
                         }
                       >
@@ -389,13 +391,13 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                     <div className="mb-1 font-semibold"><TermLabel term="Deployments" tip="滚动发布与金丝雀升级控制器，支持 Promote（放行全量）、Pause、Resume 与 Fail 回滚。" /></div>
                     {jobDeps.map((d) => (
                       <div key={d.ID} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
-                        <span>{d.ID.slice(0, 8)} · <Badge tone={statusTone(d.Status)}>{d.Status}</Badge> {d.StatusDescription}</span>
+                        <span>{d.ID.slice(0, 8)} · <StatusBadge value={d.Status} /> {d.StatusDescription}</span>
                         {isAdmin && d.Status === 'running' && (
                           <div className="flex gap-1">
-                            <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/promote`, {}).then(() => inspectJob(selectedJob)).catch((ex) => setErr(ex.message))}>Promote</Button>
-                            <Button size="sm" variant="danger" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/fail`, {}).then(() => inspectJob(selectedJob)).catch((ex) => setErr(ex.message))}>Fail</Button>
-                            <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/pause`, {}).then(() => inspectJob(selectedJob)).catch((ex) => setErr(ex.message))}>Pause</Button>
-                            <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/resume`, {}).then(() => inspectJob(selectedJob)).catch((ex) => setErr(ex.message))}>Resume</Button>
+                            <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/promote`, {}).then(() => { toast.success('已放行 Deployment (Promote)'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Promote</Button>
+                            <Button size="sm" variant="danger" onClick={() => void askConfirm(`确定要将 Deployment ${d.ID.slice(0, 8)} 标记为失败并触发回滚吗？`, { title: '回滚 Deployment', confirmText: '确认 Fail', danger: true }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/fail`, {}).then(() => { toast.success('已触发 Deployment Fail'); return inspectJob(selectedJob); }) : undefined).catch((ex) => setErr(ex.message))}>Fail</Button>
+                            <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/pause`, {}).then(() => { toast.success('已暂停 Deployment'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Pause</Button>
+                            <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/resume`, {}).then(() => { toast.success('已恢复 Deployment'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Resume</Button>
                           </div>
                         )}
                       </div>
@@ -413,7 +415,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                           <span className="ml-2 text-slate-500">{a.TaskGroup} · 节点 {a.NodeName}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
-                          <Badge tone={statusTone(a.ClientStatus)}>{a.ClientStatus}</Badge>
+                          <StatusBadge value={a.ClientStatus} />
                           <Button size="sm" onClick={() => void inspectAlloc(a)}>详情 / 日志 / 终端</Button>
                         </div>
                       </div>
@@ -453,7 +455,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap gap-4">
-                    <Sparkline values={cpuHist} color="#10b981" label={`CPU ${(cpuHist[cpuHist.length - 1] || 0).toFixed(1)}%`} />
+                    <Sparkline values={cpuHist} color="#4f46e5" label={`CPU ${(cpuHist[cpuHist.length - 1] || 0).toFixed(1)}%`} />
                     <Sparkline values={memHist} max={512} color="#0ea5e9" label={`Mem ${(memHist[memHist.length - 1] || 0).toFixed(1)} MiB`} />
                   </div>
                   {isAdmin && logTask && (
@@ -461,8 +463,8 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                       <Button size="sm" variant="primary" disabled={selectedAlloc.TaskStates?.[logTask]?.State !== 'running'} onClick={() => setTerminal({ allocId: selectedAlloc.ID, task: logTask })}>
                         <Terminal className="h-3 w-3" /> 打开交互式终端
                       </Button>
-                      <Button size="sm" disabled={selectedAlloc.TaskStates?.[logTask]?.State !== 'running'} onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/restart`, { task: logTask }).then(() => setNotice('已请求重启 Task')).catch((ex) => setErr(ex.message))}>重启 Task</Button>
-                      <Button size="sm" variant="danger" disabled={['complete', 'failed', 'lost'].includes(selectedAlloc.ClientStatus)} onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stop`, {}).then(() => setNotice('已请求停止 Alloc')).catch((ex) => setErr(ex.message))}>停止 Alloc</Button>
+                      <Button size="sm" disabled={selectedAlloc.TaskStates?.[logTask]?.State !== 'running'} onClick={() => void askConfirm(`确定要重启 Allocation ${selectedAlloc.ID.slice(0, 8)} 中的任务 ${logTask} 吗？`, { title: '重启 Task', confirmText: '确认重启' }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/restart`, { task: logTask }).then(() => { toast.success('已请求重启 Task'); }) : undefined).catch((ex) => setErr(ex.message))}>重启 Task</Button>
+                      <Button size="sm" variant="danger" disabled={['complete', 'failed', 'lost'].includes(selectedAlloc.ClientStatus)} onClick={() => void askConfirm(`确定要停止 Allocation ${selectedAlloc.ID.slice(0, 8)} 吗？调度器可能会重新拉起新副本。`, { title: '停止 Allocation', confirmText: '确认停止', danger: true }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stop`, {}).then(() => { toast.success('已请求停止 Alloc'); }) : undefined).catch((ex) => setErr(ex.message))}>停止 Alloc</Button>
                     </div>
                   )}
                 </div>
@@ -570,7 +572,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                   <div className="text-slate-500">调度：{c.scheduling_eligibility} · Drain：{c.drain ? '是' : '否'}</div>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <Badge tone={statusTone(c.status)}>{c.status}</Badge>
+                  <StatusBadge value={c.status} />
                   {isAdmin && (
                     <>
                       <Button
@@ -578,7 +580,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                         onClick={() =>
                           void apiPost(`/api/v1/nomad/${clusterId}/clients/${c.id}/eligibility`, {
                             eligible: c.scheduling_eligibility !== 'eligible',
-                          }).then(() => loadInfraViews('clients')).catch((ex) => setErr(ex.message))
+                          }).then(() => { toast.success(c.scheduling_eligibility === 'eligible' ? '已设为不可调度' : '已恢复可调度'); return loadInfraViews('clients'); }).catch((ex) => setErr(ex.message))
                         }
                       >
                         {c.scheduling_eligibility === 'eligible' ? '设为不可调度' : '恢复可调度'}
@@ -587,8 +589,15 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                         size="sm"
                         variant="danger"
                         onClick={() =>
-                          void apiPost(`/api/v1/nomad/${clusterId}/clients/${c.id}/drain`, { cancel: Boolean(c.drain) })
-                            .then(() => loadInfraViews('clients'))
+                          void askConfirm(
+                            c.drain ? `确定要取消节点 ${c.name} 的 Drain 状态吗？` : `确定要对节点 ${c.name} 执行 Drain 吗？将驱逐其上运行实例。`,
+                            {
+                              title: c.drain ? '取消节点 Drain' : '启用节点 Drain',
+                              confirmText: c.drain ? '确认取消' : '确认 Drain',
+                              danger: !c.drain,
+                            },
+                          )
+                            .then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/clients/${c.id}/drain`, { cancel: Boolean(c.drain) }).then(() => { toast.success(c.drain ? '已取消 Drain' : '已开启 Drain'); return loadInfraViews('clients'); }) : undefined)
                             .catch((ex) => setErr(ex.message))
                         }
                       >
@@ -634,8 +643,8 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                       size="sm"
                       variant="danger"
                       onClick={() =>
-                        void apiDelete(`/api/v1/nomad/${clusterId}/volumes/${encodeURIComponent(vid)}?namespace=${encodeURIComponent(vns)}`)
-                          .then(() => loadInfraViews('storage'))
+                        void askConfirm(`确定要注销 CSI 卷「${vid}」吗？`, { title: '注销 CSI 卷', confirmText: '确认注销', danger: true })
+                          .then((ok) => ok ? apiDelete(`/api/v1/nomad/${clusterId}/volumes/${encodeURIComponent(vid)}?namespace=${encodeURIComponent(vns)}`).then(() => { toast.success('CSI 卷已注销'); return loadInfraViews('storage'); }) : undefined)
                           .catch((ex) => setErr(ex.message))
                       }
                     >
@@ -691,8 +700,8 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                       size="sm"
                       variant="danger"
                       onClick={() =>
-                        void apiDelete(`/api/v1/nomad/${clusterId}/variables/item?path=${encodeURIComponent(v.path)}&namespace=${encodeURIComponent(v.namespace)}&cas=${v.modify_index}`)
-                          .then(() => loadInfraViews('variables'))
+                        void askConfirm(`确定要删除变量「${v.namespace} / ${v.path}」吗？`, { title: '删除 Variable', confirmText: '确认删除', danger: true })
+                          .then((ok) => ok ? apiDelete(`/api/v1/nomad/${clusterId}/variables/item?path=${encodeURIComponent(v.path)}&namespace=${encodeURIComponent(v.namespace)}&cas=${v.modify_index}`).then(() => { toast.success('Variable 已删除'); return loadInfraViews('variables'); }) : undefined)
                           .catch((ex) => setErr(ex.message))
                       }
                     >
@@ -736,7 +745,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                   void apiPut(`/api/v1/nomad/${clusterId}/variables/item?path=${encodeURIComponent(varEdit.path)}&namespace=${encodeURIComponent(varEdit.namespace || 'default')}`, {
                     items,
                     cas: varEdit.modifyIndex,
-                  }).then(() => { setVarEdit(null); return loadInfraViews('variables'); }).catch((ex) => setErr(ex.message));
+                  }).then(() => { setVarEdit(null); toast.success('Variable 已保存'); return loadInfraViews('variables'); }).catch((ex) => setErr(ex.message));
                 } catch {
                   setErr('Items 必须是合法 JSON');
                 }

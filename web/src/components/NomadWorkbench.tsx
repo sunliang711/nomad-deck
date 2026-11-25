@@ -28,6 +28,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
   const [filePreview, setFilePreview] = useState<{ path: string; text: string } | null>(null);
   const [allocLogs, setAllocLogs] = useState('');
   const [logTask, setLogTask] = useState('');
+  const [logRevision, setLogRevision] = useState(0);
   const [terminal, setTerminal] = useState<{ allocId: string; task: string; action?: string } | null>(null);
 
   const [clients, setClients] = useState<any[]>([]);
@@ -156,6 +157,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
     }
   };
 
+  // inspectAlloc refreshes details and restarts logs, including allocations listed before tasks appear.
   const inspectAlloc = async (alloc: any) => {
     const request = ++allocRequestRef.current;
     setSelectedAlloc(alloc);
@@ -164,10 +166,11 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
     setCpuHist([]);
     setMemHist([]);
     setAllocLogs('');
+    setLogRevision((revision) => revision + 1);
     setFsPath('');
     setFilePreview(null);
     const firstTask = Object.keys(alloc.TaskStates || {})[0] || '';
-    setLogTask(firstTask);
+    setLogTask((current) => selectedAlloc?.ID === alloc.ID && alloc.TaskStates?.[current] ? current : firstTask);
     try {
       const [det, st, ls] = await Promise.all([
         apiGet(`/api/v1/nomad/${clusterId}/allocs/${alloc.ID}`),
@@ -175,7 +178,9 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
         apiGet(`/api/v1/nomad/${clusterId}/allocs/${alloc.ID}/fs/ls?path=`),
       ]);
       if (request !== allocRequestRef.current) return;
-      setSelectedAlloc(det.allocation || alloc);
+      const detail = det.allocation || alloc;
+      setSelectedAlloc(detail);
+      setLogTask((current) => current && detail.TaskStates?.[current] ? current : Object.keys(detail.TaskStates || {})[0] || '');
       const stats = st.stats || st;
       setAllocStats(stats);
       setCpuHist([stats?.ResourceUsage?.CpuStats?.Percent || 0]);
@@ -222,7 +227,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
       },
     );
     return stop;
-  }, [clusterId, selectedAlloc?.ID, logTask]);
+  }, [clusterId, selectedAlloc?.ID, logTask, logRevision]);
 
   return (
     <div className="space-y-4">

@@ -657,7 +657,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                       size="sm"
                       variant="danger"
                       onClick={() =>
-                        void apiDelete(`/api/v1/nomad/${clusterId}/variables/item?path=${encodeURIComponent(v.path)}&namespace=${encodeURIComponent(v.namespace)}`)
+                        void apiDelete(`/api/v1/nomad/${clusterId}/variables/item?path=${encodeURIComponent(v.path)}&namespace=${encodeURIComponent(v.namespace)}&cas=${v.modify_index}`)
                           .then(() => loadInfraViews('variables'))
                           .catch((ex) => setErr(ex.message))
                       }

@@ -164,8 +164,9 @@ export function wsURL(path: string): string {
   return `${proto}//${window.location.host}${path}`;
 }
 
+// fmtTime renders absent Go timestamps as an empty value in management views.
 export function fmtTime(v?: string | null): string {
-  if (!v) return '-';
+  if (!v || v.startsWith('0001-01-01T00:00:00')) return '-';
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return v;
   return d.toLocaleString('zh-CN', { hour12: false });

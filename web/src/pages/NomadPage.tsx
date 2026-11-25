@@ -127,7 +127,7 @@ export function NomadPage() {
           ))}
         </div>
         <div className="flex gap-2">
-          <Button size="sm" onClick={() => void loadList()}><RefreshCw className="h-3.5 w-3.5" /> 刷新</Button>
+          <Button size="sm" onClick={() => { void loadList(); if (tab === 'nodes' || tab === 'snapshots') void loadOpsTab(); if (tab === 'governance') void loadGovernance(); }}><RefreshCw className="h-3.5 w-3.5" /> 刷新</Button>
           {isAdmin && (
             <Button size="sm" variant="primary" onClick={() => setShowCreate(true)}>
               <Plus className="h-3.5 w-3.5" /> 新建 Nomad 集群

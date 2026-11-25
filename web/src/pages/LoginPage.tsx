@@ -1,5 +1,5 @@
 import React, { useId, useState } from 'react';
-import { ArrowRight, Boxes, Eye, EyeOff, Loader2, LockKeyhole, Moon, ShieldCheck, Sun } from 'lucide-react';
+import { ArrowRight, Boxes, Eye, EyeOff, Loader2, LockKeyhole, Moon, Sun } from 'lucide-react';
 import { apiPost } from '../lib/api';
 import { useAuth, type AuthUser } from '../lib/auth';
 import { useTheme } from '../lib/theme';
@@ -71,7 +71,7 @@ export function LoginPage() {
       <div className="hidden lg:flex flex-col justify-between relative overflow-hidden bg-[#111b34] dark:bg-[#090e1a] border-r border-transparent dark:border-slate-800 text-white p-12 xl:p-16">
         <div className="absolute -right-32 top-1/4 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
         <div className="flex items-center gap-3 font-semibold text-2xl">
-          <ShieldCheck className="w-8 h-8 text-indigo-400" />
+          <img src="/favicon.svg" alt="NomadDeck" width={40} height={40} className="w-10 h-10 shrink-0" />
           <span>
             NomadDeck<span className="text-indigo-400">.</span>
           </span>
@@ -110,9 +110,7 @@ export function LoginPage() {
 
         <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xl shadow-slate-200/30 dark:shadow-black/40 p-6 sm:p-9">
           <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
-              <ShieldCheck className="w-6 h-6" />
-            </div>
+            <img src="/favicon.svg" alt="NomadDeck" width={40} height={40} className="w-10 h-10 shrink-0" />
             <div>
               <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">
                 {needsSetup ? '首次初始化配置' : '欢迎回来'}

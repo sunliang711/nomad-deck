@@ -17,7 +17,6 @@ import {
   Server,
   Settings,
   Shield,
-  ShieldCheck,
   Sun,
   Users,
   X,
@@ -132,34 +131,34 @@ export function Layout({ children }: { children: React.ReactNode }) {
           menuOpen ? 'flex translate-x-0' : 'hidden -translate-x-full'
         } lg:flex lg:translate-x-0`}
       >
-        <div className="px-6 h-[88px] flex items-center gap-3 shrink-0">
-          <div className="w-10 h-10 rounded-xl bg-indigo-500 flex items-center justify-center text-white shadow-lg shadow-indigo-950/30 shrink-0">
-            <ShieldCheck className="w-6 h-6" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="font-semibold text-xl text-white tracking-tight leading-none flex items-center gap-2">
-              <span>
+        <div className="px-5 py-5 shrink-0">
+          <div className="flex items-center gap-3">
+            <img src="/favicon.svg" alt="NomadDeck" width={40} height={40} className="w-10 h-10 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-lg text-white tracking-tight leading-none">
                 NomadDeck<span className="text-indigo-400">.</span>
-              </span>
-              <a
-                href="/version"
-                onClick={(e) => void handleNavClick(e, '/version')}
-                title={`当前版本 ${versionLabel}（点击查看版本与升级）`}
-                className="text-[10px] font-mono font-normal px-1.5 py-0.5 rounded bg-white/10 text-slate-300 hover:bg-indigo-500/40 hover:text-white transition truncate"
-              >
-                {versionLabel}
-              </a>
+              </div>
+              <div className="text-[11px] text-slate-400 mt-2 tracking-wider">集群运维控制面</div>
             </div>
-            <div className="text-[11px] text-slate-400 mt-2 tracking-wider truncate">集群运维控制面</div>
+            <button
+              type="button"
+              onClick={() => setMenuOpen(false)}
+              className="lg:hidden shrink-0 p-1 text-slate-400 hover:text-white"
+              aria-label="收起菜单"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setMenuOpen(false)}
-            className="lg:hidden ml-auto p-1 text-slate-400 hover:text-white"
-            aria-label="收起菜单"
+          <a
+            href="/version"
+            onClick={(e) => void handleNavClick(e, '/version')}
+            title={`当前版本 ${versionLabel}（点击查看版本与升级）`}
+            className="mt-3 flex items-start gap-2 rounded-lg bg-white/5 px-2.5 py-2 text-xs text-slate-300 hover:bg-indigo-500/20 hover:text-white transition"
           >
-            <X className="w-5 h-5" />
-          </button>
+            <span className="shrink-0 text-slate-400">版本</span>
+            <span className="min-w-0 break-all font-mono leading-4">{versionLabel}</span>
+            <ChevronRight className="ml-auto mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+          </a>
         </div>
 
         <nav aria-label="主导航" className="flex-1 px-4 py-3 overflow-y-auto">

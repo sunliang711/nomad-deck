@@ -3,6 +3,7 @@ package nomad
 import (
 	"context"
 	"testing"
+	"time"
 
 	"nomad-deck/internal/auth"
 )
@@ -14,6 +15,7 @@ func errCode(err error) string {
 	return ""
 }
 
+// TestGovernance exercises namespace protection and ACL object management.
 func TestGovernance(t *testing.T) {
 	e := newSvcEnv(t)
 	ctx := context.Background()
@@ -41,7 +43,8 @@ func TestGovernance(t *testing.T) {
 	job := map[string]any{"Job": map[string]any{"ID": "web", "Name": "web", "Namespace": "team-a", "Type": "service",
 		"Datacenters": []string{"dc1"}, "TaskGroups": []any{map[string]any{"Name": "g", "Count": 1,
 			"Tasks": []any{map[string]any{"Name": "t", "Driver": "raw_exec", "Config": map[string]any{"command": "/bin/true"}}}}}}}
-	if err := api.Request(ctx, "PUT", "jobs?namespace=team-a", job, nil); err != nil {
+	var registered struct{ EvalID string }
+	if err := api.Request(ctx, "PUT", "jobs?namespace=team-a", job, &registered); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteNamespace(ctx, testActor, id, "team-a"); errCode(err) != "namespace_in_use" {
@@ -49,6 +52,21 @@ func TestGovernance(t *testing.T) {
 	}
 	if err := s.DeleteNamespace(ctx, testActor, id, "default"); errCode(err) != "builtin" {
 		t.Fatalf("default namespace: %v", err)
+	}
+	// Wait for scheduling before purging; Nomad 1.11 can panic if a pending plan loses its job.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var evaluation struct{ Status string }
+		if err := api.Request(ctx, "GET", "evaluation/"+registered.EvalID+"?namespace=team-a", nil, &evaluation); err != nil {
+			t.Fatal(err)
+		}
+		if evaluation.Status == "complete" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job evaluation did not complete: %s", evaluation.Status)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 	if err := api.Request(ctx, "DELETE", "job/web?namespace=team-a&purge=true", nil, nil); err != nil {
 		t.Fatal(err)

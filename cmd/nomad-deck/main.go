@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	// Keep configured time zones available in minimal container images.
+	_ "time/tzdata"
 
 	"golang.org/x/term"
 

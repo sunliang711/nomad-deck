@@ -105,6 +105,13 @@ export function NomadPage() {
   }, [loadList]);
 
   useEffect(() => {
+    void apiGet('/api/v1/settings').then((r) => {
+      setDeployVer(r.settings?.['defaults.nomad_version'] || '');
+      setUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
+    }).catch((ex) => setErr(ex.message));
+  }, []);
+
+  useEffect(() => {
     if (selectedId && (tab === 'nodes' || tab === 'snapshots')) void loadOpsTab();
     if (selectedId && tab === 'governance') void loadGovernance();
   }, [selectedId, tab, loadOpsTab]);

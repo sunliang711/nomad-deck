@@ -120,6 +120,13 @@ export function VaultPage() {
   }, [loadList]);
 
   useEffect(() => {
+    void apiGet('/api/v1/settings').then((r) => {
+      setDeployVer(r.settings?.['defaults.vault_version'] || '');
+      setUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
+    }).catch((ex) => setErr(ex.message));
+  }, []);
+
+  useEffect(() => {
     setPolicyEdit({ name: '', rules: '' });
     setKvItem(null);
     setKvKeys([]);

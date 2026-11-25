@@ -154,7 +154,9 @@ export function InfraPage() {
     setDockerNode(n);
     setErr('');
     try {
-      const res = await apiGet(`/api/v1/nodes/${n.id}/docker`);
+      const [res, defaults] = await Promise.all([apiGet(`/api/v1/nodes/${n.id}/docker`), apiGet('/api/v1/settings')]);
+      setDockerVer(defaults.settings?.['defaults.docker_version'] || '');
+      setDockerUseProxy(Boolean(defaults.settings?.['proxy.use_for_releases']));
       setDockerInfo(res.docker);
       const cfg = res.docker?.host_config || res.docker?.effective || {};
       setDockerCfg({

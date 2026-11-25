@@ -363,9 +363,11 @@ export function VaultPage() {
                 <div className="space-y-3 text-xs">
                   <div>当前代际：{custody.seal_generation ?? '-'}</div>
                   <div>自动解封：<Badge tone={custody.auto_unseal_by_deck ? 'green' : 'amber'}>{custody.auto_unseal_by_deck ? '开启' : '关闭'}</Badge></div>
+                  {isAdmin && <Button size="sm" onClick={() => void apiPut(`/api/v1/vault/${selectedId}/custody`, { auto_unseal_by_deck: !custody.auto_unseal_by_deck }).then(() => loadDetail()).catch((ex) => setErr(ex.message))}>{custody.auto_unseal_by_deck ? '关闭自动解封' : '开启自动解封'}</Button>}
                   {custody.unseal_suppressed_reason && (
                     <div className="rounded bg-amber-50 p-2 text-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
                       抑制原因：{custody.unseal_suppressed_reason}
+                      {isAdmin && <Button size="sm" onClick={() => setPwAction({ title: '解除自动解封抑制', run: async (pw) => { await apiPut(`/api/v1/vault/${selectedId}/custody`, { clear_suppression: true, current_password: pw }); await loadDetail(); } })}>解除抑制</Button>}
                     </div>
                   )}
                   <div>运维 Token 到期：{fmtTime(custody.admin_token_expires_at)}</div>

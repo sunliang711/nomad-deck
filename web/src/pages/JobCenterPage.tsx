@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, fmtTime, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -32,8 +32,9 @@ export function JobCenterPage() {
   const [namespace, setNamespace] = useState('default');
   const [jobs, setJobs] = useState<any[]>([]);
   const [templates, setTemplates] = useState<any[]>([]);
-  const [editMode, setEditMode] = useState<'hcl' | 'visual'>('hcl');
+  const [editMode, setEditMode] = useState<'hcl' | 'visual' | 'json'>('hcl');
   const [hcl, setHcl] = useState(sampleHCL);
+  const [jobVariables, setJobVariables] = useState<Record<string, string>>({});
   const [visual, setVisual] = useState({
     id: 'hello',
     namespace: 'default',
@@ -55,6 +56,7 @@ export function JobCenterPage() {
   const [tplName, setTplName] = useState('');
   const [err, setErr] = useState('');
   const [notice, setNotice] = useState('');
+  const editRequestRef = useRef(0);
 
   const loadClusters = useCallback(async () => {
     setErr('');
@@ -133,16 +135,26 @@ export function JobCenterPage() {
     }
   };
 
+  // Preserve the authoritative JSON definition and variables when no HCL source exists.
+  const jobInput = () => editMode === 'json'
+    ? { input_type: 'json', job_json: JSON.parse(hcl), namespace, edit_mode: 'json' }
+    : { input_type: 'hcl', hcl, variables: jobVariables, namespace, edit_mode: editMode };
+
+  const validateJob = async () => {
+    setErr('');
+    try {
+      await apiPost(`/api/v1/nomad/${clusterId}/job-ops/validate`, jobInput());
+      setNotice('校验通过');
+    } catch (ex: any) {
+      setErr(ex?.message || '校验失败');
+    }
+  };
+
   const runPlan = async () => {
     if (!clusterId) return;
     setErr('');
     try {
-      const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/plan`, {
-        input_type: 'hcl',
-        hcl,
-        namespace,
-        edit_mode: editMode,
-      });
+      const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/plan`, jobInput());
       setPlan(res.plan);
     } catch (ex: any) {
       setErr(ex?.message || 'Plan 失败');
@@ -163,17 +175,36 @@ export function JobCenterPage() {
   };
 
   const loadJobForEdit = async (j: any) => {
+    const request = ++editRequestRef.current;
     const ns = j.namespace || namespace;
     setSelectedJobId(j.id);
+    setPlan(null);
+    setHcl('');
+    setJobVariables({});
+    setErr('');
     try {
       const [src, rev] = await Promise.all([
         apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${encodeURIComponent(j.id)}/edit-source`),
         apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${encodeURIComponent(j.id)}/revisions`),
       ]);
-      if (src.source?.hcl) setHcl(src.source.hcl);
+      if (request !== editRequestRef.current) return;
+      const source = src.source;
+      if (source?.hcl) {
+        setHcl(source.hcl);
+        setEditMode('hcl');
+      } else if (source?.job) {
+        setHcl(JSON.stringify(source.job, null, 2));
+        setEditMode('json');
+      } else {
+        setHcl('');
+        setErr('该 Job 没有可用的编辑定义');
+      }
+      setJobVariables(source?.variables || {});
+      setNamespace(ns);
+      setNotice(source?.drifted ? source.reason : '');
       setRevisions(rev.revisions || []);
     } catch (ex: any) {
-      setErr(ex?.message || '读取 Job 编辑源码失败');
+      if (request === editRequestRef.current) setErr(ex?.message || '读取 Job 编辑源码失败');
     }
   };
 
@@ -275,7 +306,7 @@ export function JobCenterPage() {
                   <div key={t.id} className="flex items-center justify-between rounded border border-slate-200 p-1.5 dark:border-slate-800">
                     <span>{t.name}</span>
                     <div className="flex gap-1">
-                      <Button size="sm" onClick={() => setHcl(t.hcl || '')}>载入</Button>
+                      <Button size="sm" onClick={() => { setHcl(t.hcl || ''); setEditMode('hcl'); setJobVariables({}); setPlan(null); }}>载入</Button>
                       {isAdmin && (
                         <Button
                           size="sm"
@@ -304,7 +335,7 @@ export function JobCenterPage() {
             isAdmin && (
               <div className="flex flex-wrap gap-1.5">
                 <Button size="sm" onClick={() => setShowCompose(true)}>Compose 导入</Button>
-                <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/job-ops/validate`, { input_type: 'hcl', hcl, namespace }).then(() => setNotice('校验通过')).catch((ex) => setErr(ex.message))}>
+                <Button size="sm" onClick={() => void validateJob()}>
                   Validate
                 </Button>
                 <Button size="sm" variant="primary" onClick={() => void runPlan()}>
@@ -319,9 +350,10 @@ export function JobCenterPage() {
               tabs={[
                 { id: 'hcl', label: '原生 HCL 编辑器' },
                 { id: 'visual', label: '可视化编排' },
+                { id: 'json', label: 'JSON 定义' },
               ]}
               active={editMode}
-              onChange={(m) => setEditMode(m as any)}
+              onChange={(m) => { setEditMode(m as any); setPlan(null); }}
             />
 
             {editMode === 'visual' && (
@@ -344,7 +376,7 @@ export function JobCenterPage() {
               </div>
             )}
 
-            <CodeEditor value={hcl} onChange={setHcl} readOnly={!isAdmin} height="340px" />
+            <CodeEditor value={hcl} onChange={(value) => { setHcl(value); setPlan(null); }} readOnly={!isAdmin} height="340px" />
 
             {isAdmin && (
               <div className="flex flex-wrap items-center gap-2">
@@ -356,6 +388,7 @@ export function JobCenterPage() {
                 />
                 <Button
                   size="sm"
+                  disabled={editMode === 'json'}
                   onClick={() =>
                     tplName &&
                     void apiPost('/api/v1/job-templates', { name: tplName, edit_mode: 'hcl', hcl })
@@ -420,6 +453,9 @@ export function JobCenterPage() {
                 void apiPost(`/api/v1/nomad/${clusterId}/job-ops/compose-convert`, { compose: composeText })
                   .then((r) => {
                     if (r.hcl) setHcl(r.hcl);
+                    setEditMode('hcl');
+                    setJobVariables({});
+                    setPlan(null);
                     setShowCompose(false);
                     setNotice('已转换为 Nomad HCL');
                   })

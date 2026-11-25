@@ -312,6 +312,50 @@ func RenderProxyDropIn(proxyURL string, noProxy []string) string {
 
 func pkgNames() string { return strings.Join(release.DockerPackages, " ") }
 
+// dockerEnsureRunningScript recovers failed units and avoids restarting an already upgraded daemon.
+func dockerEnsureRunningScript(version string) string {
+	return `set -e
+systemctl reset-failed docker.service docker.socket
+systemctl start docker
+timeout 60 docker info >/dev/null
+current_version=$(docker version --format '{{.Server.Version}}')
+if [ "$current_version" != ` + sshx.Quote(version) + ` ]; then
+  systemctl restart docker
+  timeout 60 docker info >/dev/null
+fi
+docker version --format '{{.Server.Version}}'
+`
+}
+
+// dockerPackagePolicyScript suppresses package-triggered runtime restarts and restores the host policy on exit.
+func dockerPackagePolicyScript(path string) string {
+	return `policy_path=` + sshx.Quote(path) + `
+policy_backup=$(mktemp "${policy_path}.nomad-deck.XXXXXX")
+rm -f -- "$policy_backup"
+restore_policy() {
+  rm -f -- "$policy_path"
+  if [ -n "$policy_backup" ]; then mv -- "$policy_backup" "$policy_path"; fi
+}
+if [ -e "$policy_path" ] || [ -L "$policy_path" ]; then
+  mv -- "$policy_path" "$policy_backup"
+else
+  policy_backup=""
+fi
+trap restore_policy EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+cat > "$policy_path" <<POLICY
+#!/bin/sh
+case "\$1" in
+  docker|docker.service|docker.socket|containerd|containerd.service) exit 101 ;;
+esac
+if [ -n "$policy_backup" ]; then exec "$policy_backup" "\$@"; fi
+exit 0
+POLICY
+chmod 0755 "$policy_path"
+`
+}
+
 // dockerPrecheckScript checks that installing the staged packages only
 // needs dependencies available from the host's configured repositories.
 func dockerPrecheckScript(format, dir string) string {
@@ -337,11 +381,12 @@ func dockerInstallScript(format, dir string, downgrade bool) string {
 	if format == "deb" {
 		return fmt.Sprintf(`set -e
 cd %[1]s
+%[3]s
 apt-mark unhold %[2]s >/dev/null 2>&1 || true
 DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades -o Dpkg::Options::=--force-confold ./*.deb
 apt-mark hold %[2]s >/dev/null
 echo "已安装并锁定版本：$(dpkg-query -W -f='${Package}=${Version} ' %[2]s)"
-`, sshx.Quote(dir), pkgNames())
+`, sshx.Quote(dir), pkgNames(), dockerPackagePolicyScript("/usr/sbin/policy-rc.d"))
 	}
 	verb := "install"
 	if downgrade {
@@ -920,6 +965,7 @@ func (s *Service) waitAllocsHealthy(ctx context.Context, d *dockerHost, ids []st
 	}
 }
 
+// upgradeDockerHost verifies daemon recovery and reports rollback failures accurately.
 func (s *Service) upgradeDockerHost(ctx context.Context, t *ops.Task, nodeID string, in DockerInstallInput, hc *cluster.HTTPClient) error {
 	d, err := s.loadDockerHost(ctx, nodeID)
 	if err != nil {
@@ -952,10 +998,17 @@ func (s *Service) upgradeDockerHost(ctx context.Context, t *ops.Task, nodeID str
 		return err
 	}
 	defer func() { nc.Done(ctx, err) }()
+	// A previous failed upgrade may have exhausted systemd's start limit.
+	if _, err = nc.Run(ctx, dockerEnsureRunningScript(cur)); err != nil {
+		return err
+	}
+	if err = s.waitDockerDriver(ctx, d, nc.Step.Logf); err != nil {
+		return err
+	}
 	kind := classifyDockerUpgrade(cur, in.Version, s.containerdVersion(ctx, nc), containerdOf(arts))
 	canDrain := d.member != nil && IsClient(d.member.Role) && d.cl != nil && d.cl.InitState == db.InitInitialized
 	drain := !kind.InPlace || in.Drain
-	nc.Step.Logf("升级类型：%s（%s）", map[bool]string{true: "原地升级", false: "疏散后升级"}[kind.InPlace], kind.Reason)
+	nc.Step.Logf("Docker upgrade strategy: drain=%t, in_place_compatible=%t", drain, kind.InPlace)
 	if drain && !canDrain && !in.AllowInterruption && !kind.InPlace {
 		err = conflict("interruption_required", "%s 不能原地升级（%s），且不是可疏散的 Nomad Client，需显式确认接受容器中断", d.node.Name, kind.Reason)
 		return err
@@ -985,7 +1038,7 @@ func (s *Service) upgradeDockerHost(ctx context.Context, t *ops.Task, nodeID str
 		return err
 	}
 	verify := func() error {
-		out, err := nc.Run(ctx, "systemctl restart docker && timeout 60 docker info >/dev/null && docker version --format '{{.Server.Version}}'")
+		out, err := nc.Run(ctx, dockerEnsureRunningScript(in.Version))
 		if err != nil {
 			return err
 		}
@@ -993,10 +1046,19 @@ func (s *Service) upgradeDockerHost(ctx context.Context, t *ops.Task, nodeID str
 			return fmt.Errorf("docker 报告的版本 %q 与期望的 %s 不一致", got, in.Version)
 		}
 		if kind.InPlace && !drain {
+			deadline := time.Now().Add(30 * time.Second)
 			for _, id := range containers {
-				state, err := nc.Run(ctx, "docker inspect -f '{{.State.Running}}' "+id)
-				if err != nil || strings.TrimSpace(state) != "true" {
-					return fmt.Errorf("容器 %s 升级后不再运行", id[:12])
+				for {
+					state, err := nc.Run(ctx, "docker inspect -f '{{.State.Running}}' "+id)
+					if err == nil && strings.TrimSpace(state) == "true" {
+						break
+					}
+					if time.Now().After(deadline) {
+						return fmt.Errorf("容器 %s 升级后未恢复运行", id[:12])
+					}
+					if err := sleep(ctx, s.poll()); err != nil {
+						return err
+					}
 				}
 			}
 			nc.Step.Logf("升级前的 %d 个容器均仍在运行且可被管理", len(containers))
@@ -1006,6 +1068,9 @@ func (s *Service) upgradeDockerHost(ctx context.Context, t *ops.Task, nodeID str
 		} else {
 			image := DefaultTestImage
 			_ = db.GetSettingJSON(ctx, s.DB.Reader, "docker.test_image", &image)
+			if image == "" {
+				image = DefaultTestImage
+			}
 			if _, err := nc.Run(ctx, "timeout 300 docker run --rm "+sshx.Quote(image)+" true"); err != nil {
 				return fmt.Errorf("测试容器 %s 拉取或启动失败：%w", image, err)
 			}
@@ -1016,10 +1081,20 @@ func (s *Service) upgradeDockerHost(ctx context.Context, t *ops.Task, nodeID str
 	if verr := verify(); verr != nil {
 		if kind.InPlace && !drain && prev != nil {
 			nc.Step.Logf("验证失败（%v），按缓存的 %s 安装包回退", verr, cur)
-			if pdir, perr := s.stageDocker(ctx, t, nc, prev, cur); perr == nil {
-				if perr = s.installDockerPackages(ctx, nc, target.Format, pdir, true); perr == nil {
-					_, _ = nc.Run(ctx, "systemctl restart docker")
+			pdir, perr := s.stageDocker(ctx, t, nc, prev, cur)
+			if perr == nil {
+				perr = s.installDockerPackages(ctx, nc, target.Format, pdir, true)
+			}
+			if perr == nil {
+				var out string
+				out, perr = nc.Run(ctx, dockerEnsureRunningScript(cur))
+				if perr == nil && strings.TrimSpace(out) != cur {
+					perr = fmt.Errorf("Docker 回退版本 %q 与期望的 %s 不一致", strings.TrimSpace(out), cur)
 				}
+			}
+			if perr != nil {
+				err = fmt.Errorf("%s 的 Docker 升级验证失败且回退失败：%w", d.node.Name, errors.Join(verr, perr))
+				return err
 			}
 			err = fmt.Errorf("%s 的 Docker 升级验证失败，已回退到 %s：%w", d.node.Name, cur, verr)
 			return err

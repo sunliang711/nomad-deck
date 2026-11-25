@@ -2,9 +2,119 @@ package nomad
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"nomad-deck/internal/sshx"
 )
+
+// TestDockerPackagePolicy verifies runtime restart suppression and cleanup after installer failure.
+func TestDockerPackagePolicy(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without host policy", true: "with host policy"}[existing], func(t *testing.T) {
+			dir := t.TempDir()
+			path, calls := filepath.Join(dir, "policy-rc.d"), filepath.Join(dir, "calls")
+			original := "#!/bin/sh\necho \"$*\" >> " + sshx.Quote(calls) + "\nexit 0\n"
+			if existing {
+				if err := os.WriteFile(path, []byte(original), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			script := "set -e\n" + dockerPackagePolicyScript(path) + `
+for service in docker docker.service docker.socket containerd containerd.service; do
+  if "$policy_path" "$service" restart; then exit 42; else test "$?" = 101; fi
+done
+"$policy_path" unrelated.service restart
+exit 9
+`
+			err := exec.Command("sh", "-c", script).Run()
+			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 9 {
+				t.Fatalf("installer exit status was lost: %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if existing {
+				if err != nil || string(got) != original {
+					t.Fatalf("host policy was not restored: %q %v", got, err)
+				}
+				log, err := os.ReadFile(calls)
+				if err != nil || strings.TrimSpace(string(log)) != "unrelated.service restart" {
+					t.Fatalf("unrelated service policy was not preserved: %s %v", log, err)
+				}
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("temporary host policy was not removed: %v", err)
+			}
+		})
+	}
+}
+
+// TestDockerEnsureRunning exercises recovery without duplicate daemon restarts.
+func TestDockerEnsureRunning(t *testing.T) {
+	for _, tc := range []struct {
+		name, running string
+		failStart     bool
+		restarts      int
+	}{
+		{name: "package already restarted daemon", running: "29.10.1"},
+		{name: "old daemon needs restart", running: "29.10.0", restarts: 1},
+		{name: "failed daemon is started"},
+		{name: "start failure is reported", failStart: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			state, calls := filepath.Join(dir, "state"), filepath.Join(dir, "calls")
+			if tc.running != "" {
+				if err := os.WriteFile(state, []byte(tc.running), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			scripts := map[string]string{
+				"systemctl": `#!/bin/sh
+echo "$*" >> "$DOCKER_TEST_CALLS"
+case "$1" in
+  start) [ "$DOCKER_TEST_FAIL" != 1 ] || exit 7
+         [ -f "$DOCKER_TEST_STATE" ] || echo 29.10.1 > "$DOCKER_TEST_STATE" ;;
+  restart) echo 29.10.1 > "$DOCKER_TEST_STATE" ;;
+esac
+`,
+				"docker": `#!/bin/sh
+[ -f "$DOCKER_TEST_STATE" ] || exit 1
+if [ "$1" = version ]; then cat "$DOCKER_TEST_STATE"; fi
+`,
+				"timeout": "#!/bin/sh\nshift\nexec \"$@\"\n",
+			}
+			for name, script := range scripts {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("sh", "-c", dockerEnsureRunningScript("29.10.1"))
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "DOCKER_TEST_STATE="+state, "DOCKER_TEST_CALLS="+calls)
+			if tc.failStart {
+				cmd.Env = append(cmd.Env, "DOCKER_TEST_FAIL=1")
+			}
+			out, err := cmd.CombinedOutput()
+			if tc.failStart {
+				if err == nil {
+					t.Fatal("daemon start failure was ignored")
+				}
+				return
+			}
+			if err != nil || strings.TrimSpace(string(out)) != "29.10.1" {
+				t.Fatalf("daemon recovery: %s %v", out, err)
+			}
+			log, err := os.ReadFile(calls)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(log), "restart docker"); got != tc.restarts {
+				t.Fatalf("daemon restarted %d times, want %d: %s", got, tc.restarts, log)
+			}
+		})
+	}
+}
 
 func TestClassifyDockerUpgrade(t *testing.T) {
 	cases := []struct {

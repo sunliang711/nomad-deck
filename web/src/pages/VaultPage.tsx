@@ -43,6 +43,7 @@ export function VaultPage() {
   const [cForm, setCForm] = useState({ name: '', mode: 'cluster', public_api_url: '', node_ids: [] as string[] });
   const [deployVer, setDeployVer] = useState('1.18.3');
   const [useProxy, setUseProxy] = useState(false);
+  const [deployConfirmSwap, setDeployConfirmSwap] = useState(false);
   const [upVer, setUpVer] = useState('');
   const [showJoin, setShowJoin] = useState(false);
   const [joinNodeId, setJoinNodeId] = useState('');
@@ -251,7 +252,7 @@ export function VaultPage() {
                         <Button
                           variant="primary"
                           onClick={() =>
-                            void apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer, use_proxy: useProxy, confirm_swap: true })
+                            void apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer, use_proxy: useProxy, confirm_swap: deployConfirmSwap })
                               .then((r) => r.task?.id && openTask(r.task.id, '部署 Vault'))
                               .catch((ex) => setErr(ex.message))
                           }
@@ -273,6 +274,9 @@ export function VaultPage() {
                       </div>
                       <label className="flex items-center gap-1.5">
                         <input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} /> 使用系统代理
+                      </label>
+                      <label className="flex items-center gap-1.5">
+                        <input type="checkbox" checked={deployConfirmSwap} onChange={(e) => setDeployConfirmSwap(e.target.checked)} /> 部署确认未加密 Swap 风险
                       </label>
                       <div className="flex flex-wrap gap-1.5">
                         <Button size="sm" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>续期证书</Button>

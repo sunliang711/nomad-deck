@@ -44,6 +44,8 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
   const [notice, setNotice] = useState('');
   const subTabRef = useRef(subTab);
   subTabRef.current = subTab;
+  const jobRequestRef = useRef(0);
+  const allocRequestRef = useRef(0);
 
   const loadNamespaces = useCallback(async () => {
     try {
@@ -120,8 +122,15 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
   }, [clusterId]);
 
   const inspectJob = async (job: any) => {
+    const request = ++jobRequestRef.current;
+    ++allocRequestRef.current;
     setSelectedJob(job);
     setSelectedAlloc(null);
+    // Hide the previous job's actions while the new detail request is in flight.
+    setJobSummary(null);
+    setJobAllocs([]);
+    setJobDeps([]);
+    setJobEvals([]);
     const ns = job.namespace || namespace;
     const jid = encodeURIComponent(job.id);
     try {
@@ -131,6 +140,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
         apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${jid}/deployments`),
         apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${jid}/evaluations`),
       ]);
+      if (request !== jobRequestRef.current) return;
       const s = sum.data || sum.summary || sum;
       setJobSummary(s);
       setJobAllocs(allocs.data || allocs.allocations || []);
@@ -142,12 +152,15 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
         setScaleCount(1);
       }
     } catch (ex: any) {
-      setErr(ex?.message || '加载 Job 详情失败');
+      if (request === jobRequestRef.current) setErr(ex?.message || '加载 Job 详情失败');
     }
   };
 
   const inspectAlloc = async (alloc: any) => {
+    const request = ++allocRequestRef.current;
     setSelectedAlloc(alloc);
+    setAllocStats(null);
+    setFsFiles([]);
     setCpuHist([]);
     setMemHist([]);
     setAllocLogs('');
@@ -161,6 +174,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
         apiGet(`/api/v1/nomad/${clusterId}/allocs/${alloc.ID}/stats`),
         apiGet(`/api/v1/nomad/${clusterId}/allocs/${alloc.ID}/fs/ls?path=`),
       ]);
+      if (request !== allocRequestRef.current) return;
       setSelectedAlloc(det.allocation || alloc);
       const stats = st.stats || st;
       setAllocStats(stats);
@@ -168,15 +182,17 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
       setMemHist([(stats?.ResourceUsage?.MemoryStats?.RSS || 0) / (1024 * 1024)]);
       setFsFiles(ls.files || ls || []);
     } catch (ex: any) {
-      setErr(ex?.message || '加载 Allocation 详情失败');
+      if (request === allocRequestRef.current) setErr(ex?.message || '加载 Allocation 详情失败');
     }
   };
 
   useEffect(() => {
     if (!selectedAlloc?.ID) return;
+    let active = true;
     const t = window.setInterval(async () => {
       try {
         const st = await apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stats`);
+        if (!active) return;
         const stats = st.stats || st;
         setAllocStats(stats);
         setCpuHist((p) => [...p.slice(-19), stats?.ResourceUsage?.CpuStats?.Percent || 0]);
@@ -185,7 +201,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
         // ignore transient polling error
       }
     }, 3000);
-    return () => window.clearInterval(t);
+    return () => { active = false; window.clearInterval(t); };
   }, [clusterId, selectedAlloc?.ID]);
 
   useEffect(() => {
@@ -415,8 +431,21 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
           )}
 
           {selectedAlloc && (
-            <Card title={`Allocation 详情：${selectedAlloc.ID}`}>
+            <Card title={`Allocation 详情：${selectedAlloc.ID}`} actions={<Button size="sm" onClick={() => void inspectAlloc(selectedAlloc)}>刷新 Allocation</Button>}>
               <div className="space-y-4 text-xs">
+                <div className="space-y-2">
+                  <div className="font-semibold">Task 事件</div>
+                  {Object.entries<any>(selectedAlloc.TaskStates || {}).map(([task, state]) => (
+                    <div key={task} className="rounded border border-slate-200 p-2 dark:border-slate-800">
+                      <div className="font-mono font-semibold">{task} · {state.State}</div>
+                      {(state.Events || []).slice(-10).reverse().map((event: any, i: number) => (
+                        <div key={i} className="mt-1 whitespace-pre-wrap break-words">
+                          <b>{event.Type}</b>：{event.DisplayMessage || event.Message || '-'}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap gap-4">
                     <Sparkline values={cpuHist} color="#10b981" label={`CPU ${(cpuHist[cpuHist.length - 1] || 0).toFixed(1)}%`} />
@@ -424,11 +453,11 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                   </div>
                   {isAdmin && logTask && (
                     <div className="flex flex-wrap gap-1.5">
-                      <Button size="sm" variant="primary" onClick={() => setTerminal({ allocId: selectedAlloc.ID, task: logTask })}>
+                      <Button size="sm" variant="primary" disabled={selectedAlloc.TaskStates?.[logTask]?.State !== 'running'} onClick={() => setTerminal({ allocId: selectedAlloc.ID, task: logTask })}>
                         <Terminal className="h-3 w-3" /> 打开交互式终端
                       </Button>
-                      <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/restart`, { task: logTask }).then(() => setNotice('已请求重启 Task')).catch((ex) => setErr(ex.message))}>重启 Task</Button>
-                      <Button size="sm" variant="danger" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stop`, {}).then(() => setNotice('已请求停止 Alloc')).catch((ex) => setErr(ex.message))}>停止 Alloc</Button>
+                      <Button size="sm" disabled={selectedAlloc.TaskStates?.[logTask]?.State !== 'running'} onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/restart`, { task: logTask }).then(() => setNotice('已请求重启 Task')).catch((ex) => setErr(ex.message))}>重启 Task</Button>
+                      <Button size="sm" variant="danger" disabled={['complete', 'failed', 'lost'].includes(selectedAlloc.ClientStatus)} onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stop`, {}).then(() => setNotice('已请求停止 Alloc')).catch((ex) => setErr(ex.message))}>停止 Alloc</Button>
                     </div>
                   )}
                 </div>

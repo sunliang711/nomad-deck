@@ -40,6 +40,9 @@ export function InfraPage() {
   const [dockerInfo, setDockerInfo] = useState<any>(null);
   const [dockerVer, setDockerVer] = useState('');
   const [dockerUseProxy, setDockerUseProxy] = useState(false);
+  const [dockerDrain, setDockerDrain] = useState(false);
+  const [dockerConfirm, setDockerConfirm] = useState(false);
+  const [dockerAllowInterruption, setDockerAllowInterruption] = useState(false);
   const [dockerCfg, setDockerCfg] = useState({
     registry_mirrors: '',
     use_system_proxy: false,
@@ -157,6 +160,10 @@ export function InfraPage() {
       const [res, defaults] = await Promise.all([apiGet(`/api/v1/nodes/${n.id}/docker`), apiGet('/api/v1/settings')]);
       setDockerVer(defaults.settings?.['defaults.docker_version'] || '');
       setDockerUseProxy(Boolean(defaults.settings?.['proxy.use_for_releases']));
+      // Nomad's Docker driver can end tasks when the daemon connection closes.
+      setDockerDrain(Boolean(res.docker?.cluster_id));
+      setDockerConfirm(false);
+      setDockerAllowInterruption(false);
       setDockerInfo(res.docker);
       const cfg = res.docker?.host_config || res.docker?.effective || {};
       setDockerCfg({
@@ -176,6 +183,9 @@ export function InfraPage() {
       const res = await apiPost(`/api/v1/nodes/${dockerNode.id}/docker/${action}`, {
         version: dockerVer.trim(),
         use_proxy: dockerUseProxy,
+        drain: dockerDrain,
+        confirm: dockerConfirm,
+        allow_interruption: dockerAllowInterruption,
       });
       if (res.task?.id) openTask(res.task.id, `Docker ${action}: ${dockerNode.name}`);
     } catch (ex: any) {
@@ -556,6 +566,19 @@ export function InfraPage() {
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={dockerUseProxy} onChange={(e) => setDockerUseProxy(e.target.checked)} />
               <span>安装/升级使用系统代理</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={dockerDrain} onChange={(e) => setDockerDrain(e.target.checked)} />
+              <span>升级前疏散 Nomad 工作负载</span>
+            </label>
+            <p className="text-slate-500">Nomad 客户端默认疏散，需有可调度的替代节点；关闭疏散时，Docker 驱动重连可能中断 Task。</p>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={dockerConfirm} onChange={(e) => setDockerConfirm(e.target.checked)} />
+              <span>确认跨主版本升级</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={dockerAllowInterruption} onChange={(e) => setDockerAllowInterruption(e.target.checked)} />
+              <span>允许无法疏散节点的容器中断</span>
             </label>
             <div className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-800">
               <div className="font-semibold">守护进程配置与镜像拉取代理</div>

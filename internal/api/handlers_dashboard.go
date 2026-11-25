@@ -8,6 +8,7 @@ import (
 	"nomad-deck/internal/cron"
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/hosts"
+	"nomad-deck/internal/selfupdate"
 	"nomad-deck/internal/version"
 )
 
@@ -196,9 +197,22 @@ func (a *API) dashboardSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	latestVersion := ""
+	updateAvailable := false
+	if a.SelfUpdate != nil {
+		if latest := a.SelfUpdate.CachedLatest(ctx); latest != nil {
+			latestVersion = latest.Version
+			if cmp, err := selfupdate.CompareSemver(latest.Version, version.Version); err == nil && cmp > 0 {
+				updateAvailable = true
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"control_plane": map[string]any{
 			"version":             version.Version,
+			"latest_version":      latestVersion,
+			"update_available":    updateAvailable,
 			"activated":           activated,
 			"maintenance_barrier": barrier,
 			"key_rotation_state":  rotState,

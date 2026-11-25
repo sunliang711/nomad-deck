@@ -1,6 +1,12 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 LDFLAGS := -s -w -X nomad-deck/internal/version.Version=$(VERSION) -X nomad-deck/internal/version.Commit=$(COMMIT)
+ifdef REPO
+LDFLAGS += -X nomad-deck/internal/version.Repo=$(REPO)
+endif
+ifdef RELEASE_PUBKEY
+LDFLAGS += -X nomad-deck/internal/version.ReleasePublicKey=$(RELEASE_PUBKEY)
+endif
 
 .PHONY: build test vet run clean it it-host it-vault-hosts it-vault it-nomad-hosts it-nomad it-integration
 

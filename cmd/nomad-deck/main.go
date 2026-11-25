@@ -31,12 +31,20 @@ const usage = `用法：
   nomad-deck [serve] [--config 路径] [--data-dir 目录] [--listen 地址]
   nomad-deck admin reset-password --username 用户名 [--password-stdin] [--config 路径] [--data-dir 目录]
   nomad-deck offline-backup decrypt [--passphrase-stdin] <备份文件>
+  nomad-deck rollback --check | --auto | --to-backup <文件> [--yes] [--config 路径] [--data-dir 目录] [--bin-dir 目录]
   nomad-deck version
 `
 
 func main() {
 	restrictUmask()
 	if err := run(os.Args[1:]); err != nil {
+		var ee *server.ExitError
+		if errors.As(err, &ee) {
+			if ee.Err != nil {
+				fmt.Fprintln(os.Stderr, "错误：", ee.Err)
+			}
+			os.Exit(ee.Code)
+		}
 		fmt.Fprintln(os.Stderr, "错误：", err)
 		os.Exit(1)
 	}
@@ -60,6 +68,8 @@ func run(args []string) error {
 		return resetPassword(args[1:])
 	case "offline-backup":
 		return offlineBackup(args, os.Stdin, os.Stdout, os.Stderr)
+	case "rollback":
+		return rollbackCmd(args, os.Stdin, os.Stdout)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return nil

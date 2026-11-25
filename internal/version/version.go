@@ -3,11 +3,17 @@ package version
 
 import "fmt"
 
-// Version and Commit are overridden with -ldflags at build time.
+// Version, Commit, Repo and ReleasePublicKey are overridden with -ldflags at build time.
 var (
-	Version = "dev"
-	Commit  = ""
+	Version          = "dev"
+	Commit           = ""
+	Repo             = "sunliang711/nomad-deck"
+	ReleasePublicKey = ""
 )
+
+// ExitCodeRestart is returned when the control plane exits after switching
+// binaries so systemd immediately restarts it with the new version.
+const ExitCodeRestart = 75
 
 // String returns a human readable version string.
 func String() string {

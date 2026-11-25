@@ -22,6 +22,7 @@ import (
 	"nomad-deck/internal/ops"
 	"nomad-deck/internal/release"
 	"nomad-deck/internal/rotation"
+	"nomad-deck/internal/selfupdate"
 	"nomad-deck/internal/vault"
 	"nomad-deck/internal/version"
 	"nomad-deck/internal/workbench"
@@ -44,6 +45,7 @@ type API struct {
 	Migration    *migration.Service
 	Backup       *backup.Service
 	Rotation     *rotation.Service
+	SelfUpdate   *selfupdate.Service
 	// jobOpExtra serves job-ops added by other components (e.g. render).
 	jobOpExtra     func(w http.ResponseWriter, r *http.Request) bool
 	Log            *slog.Logger
@@ -87,6 +89,9 @@ func (a *API) Handler() http.Handler {
 			r.Get("/audit-logs/{id}", a.getAuditLog)
 
 			r.Get("/dashboard/summary", a.dashboardSummary)
+			r.Get("/system/version", a.systemVersion)
+			r.Get("/system/self-update/result", a.getSelfUpdateResult)
+			r.Get("/system/self-update/schedule", a.getSelfUpdateSchedule)
 			r.Get("/ssh-keys", a.listSSHKeys)
 			r.Get("/nodes", a.listNodes)
 			r.Get("/nodes/{id}", a.getNode)
@@ -288,6 +293,10 @@ func (a *API) Handler() http.Handler {
 				r.Get("/backup/history", a.listBackupHistory)
 				r.Get("/backup/targets/{id}/snapshots", a.listTargetSnapshots)
 				r.Post("/backup/snapshots/import", a.importTargetSnapshot)
+				r.Post("/system/self-update", a.startSelfUpdate)
+				r.Post("/system/self-update/schedule", a.createSelfUpdateSchedule)
+				r.Delete("/system/self-update/schedule", a.cancelSelfUpdateSchedule)
+				r.Post("/system/self-update/rollback", a.rollbackSelfUpdate)
 				r.Put("/cron-jobs/{id}", a.updateCronJob)
 				r.Delete("/cron-jobs/{id}", a.deleteCronJob)
 				r.Post("/cron-jobs/{id}/run", a.runCronJob)

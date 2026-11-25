@@ -23,6 +23,10 @@ const DefaultSharedTimeout = 30 * time.Minute
 // ErrRolledBack marks a task that failed but was rolled back cleanly.
 var ErrRolledBack = errors.New("rolled back")
 
+// ErrHandover marks a task (such as system.self_update) whose process is
+// restarting so the replacement binary or rollback unit finalizes it.
+var ErrHandover = errors.New("handover to restarted process")
+
 // Spec describes a task to run.
 type Spec struct {
 	Action      string
@@ -217,6 +221,9 @@ func (e *Engine) execute(ctx context.Context, cancel context.CancelFunc, rec *db
 		}()
 		return s.Run(runCtx, task)
 	}()
+	if errors.Is(err, ErrHandover) {
+		return
+	}
 	task.closeSteps(err)
 	switch {
 	case err == nil:

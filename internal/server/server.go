@@ -33,6 +33,7 @@ import (
 	"nomad-deck/internal/ops"
 	"nomad-deck/internal/release"
 	"nomad-deck/internal/rotation"
+	"nomad-deck/internal/selfupdate"
 	"nomad-deck/internal/snapstore"
 	"nomad-deck/internal/sshx"
 	"nomad-deck/internal/vault"
@@ -43,24 +44,40 @@ import (
 // DatabaseFile is the SQLite file name inside the data directory.
 const DatabaseFile = "nomad-deck.db"
 
+// ExitError instructs main to exit with a specific status code (e.g. 75 for
+// self-update restart).
+type ExitError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return fmt.Sprintf("exit status %d", e.Code)
+}
+
 // App is an initialized control plane.
 type App struct {
-	Config   *config.Config
-	Log      *slog.Logger
-	Keys     *crypto.Keyring
-	DB       *db.DB
-	Audit    *audit.Recorder
-	Auth     *auth.Service
-	Hosts    *hosts.Service
-	Ops      *ops.Engine
-	Pool     *sshx.Pool
-	Vault    *vault.Service
-	Nomad    *nomad.Service
-	Cron     *cron.Scheduler
-	Backup   *backup.Service
-	Rotation *rotation.Service
-	API      *api.API
-	ready    atomic.Bool
+	Config     *config.Config
+	Log        *slog.Logger
+	Keys       *crypto.Keyring
+	DB         *db.DB
+	Audit      *audit.Recorder
+	Auth       *auth.Service
+	Hosts      *hosts.Service
+	Ops        *ops.Engine
+	Pool       *sshx.Pool
+	Vault      *vault.Service
+	Nomad      *nomad.Service
+	Cron       *cron.Scheduler
+	Backup     *backup.Service
+	Rotation   *rotation.Service
+	SelfUpdate *selfupdate.Service
+	API        *api.API
+	ready      atomic.Bool
+	exitCode   atomic.Int32
 }
 
 // Open initializes data directory, master keys, database and services.
@@ -146,10 +163,15 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 		AfterImport: []func(){authSvc.Revocations.RevokeAll, pool.Close}}
 	backupSvc := &backup.Service{DB: d, Keys: keys, Audit: rec, Migration: mig, Drivers: drivers, DataDir: cfg.DataDir, Log: log}
 	rotSvc := &rotation.Service{DB: d, Keys: keys, Audit: rec, Ops: engine, DataDir: cfg.DataDir, Log: log}
+	selfUpdateSvc := &selfupdate.Service{
+		DB: d, Audit: rec, Ops: engine, Proxy: proxy, DataDir: cfg.DataDir, Log: log,
+		CronIdle: sched.Idle, CronResume: sched.Reschedule,
+	}
+	selfUpdateSvc.PrepareBarrierOnOpen(ctx)
 	sched.Install(&cron.Platform{Hosts: hostSvc, Drivers: drivers, Vault: vaultSvc, Integrations: integrations, Jobs: jobSvc,
-		DataDir: cfg.DataDir, Backup: backupSvc.CronBackup, Offsite: backupSvc.OffsiteSnapshot})
+		DataDir: cfg.DataDir, Backup: backupSvc.CronBackup, Offsite: backupSvc.OffsiteSnapshot, SelfUpdateCheck: selfUpdateSvc.CronCheck})
 	app := &App{Config: cfg, Log: log, Keys: keys, DB: d, Audit: rec, Auth: authSvc, Hosts: hostSvc, Ops: engine, Pool: pool,
-		Vault: vaultSvc, Nomad: nomadSvc, Cron: sched, Backup: backupSvc, Rotation: rotSvc}
+		Vault: vaultSvc, Nomad: nomadSvc, Cron: sched, Backup: backupSvc, Rotation: rotSvc, SelfUpdate: selfUpdateSvc}
 	origins, err := AllowedOrigins(cfg)
 	if err != nil {
 		d.Close()
@@ -162,7 +184,7 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 	}
 	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc, Nomad: nomadSvc,
 		Integrations: integrations, Jobs: jobSvc, Workbench: wb, Cron: sched, Migration: mig, Backup: backupSvc, Rotation: rotSvc,
-		Log: log, AllowedOrigins: origins, TrustedProxies: trusted,
+		SelfUpdate: selfUpdateSvc, Log: log, AllowedOrigins: origins, TrustedProxies: trusted,
 		HTTPS: cfg.TLS.Mode != config.TLSModeProxy || isHTTPS(cfg), Ready: &app.ready}
 	return app, nil
 }
@@ -181,7 +203,22 @@ func (a *App) Close() error {
 // Run serves HTTP(S) until ctx is cancelled.
 func (a *App) Run(ctx context.Context) error {
 	cfg := a.Config
-	tok, err := a.Auth.PrepareSetupToken(ctx)
+	releaseLock, err := selfupdate.AcquireProcessLock(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
+
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	if a.SelfUpdate != nil {
+		a.SelfUpdate.OnRestart = func(code int) {
+			a.exitCode.Store(int32(code))
+			cancelRun()
+		}
+	}
+
+	tok, err := a.Auth.PrepareSetupToken(runCtx)
 	if err != nil {
 		return fmt.Errorf("prepare setup token: %w", err)
 	}
@@ -216,8 +253,8 @@ func (a *App) Run(ctx context.Context) error {
 		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
 	}
 
-	go a.sessionJanitor(ctx)
-	if err := a.Cron.Start(ctx); err != nil {
+	go a.sessionJanitor(runCtx)
+	if err := a.Cron.Start(runCtx); err != nil {
 		ln.Close()
 		return fmt.Errorf("start scheduler: %w", err)
 	}
@@ -236,6 +273,10 @@ func (a *App) Run(ctx context.Context) error {
 	if err := sdNotify("READY=1"); err != nil {
 		a.Log.Warn("sd_notify failed", "err", err)
 	}
+	if a.SelfUpdate != nil {
+		a.SelfUpdate.ConfirmOnStartup(runCtx)
+		go a.SelfUpdate.RunScheduler(runCtx)
+	}
 
 	select {
 	case err := <-errCh:
@@ -243,13 +284,17 @@ func (a *App) Run(ctx context.Context) error {
 			return nil
 		}
 		return err
-	case <-ctx.Done():
+	case <-runCtx.Done():
 	}
 	a.ready.Store(false)
 	_ = sdNotify("STOPPING=1")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+	err = srv.Shutdown(shutdownCtx)
+	if code := int(a.exitCode.Load()); code != 0 {
+		return &ExitError{Code: code, Err: err}
+	}
+	return err
 }
 
 func (a *App) sessionJanitor(ctx context.Context) {

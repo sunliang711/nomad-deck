@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build release archives
+        env:
+          VERSION: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ver_no_v="${VERSION#v}"
+          short_sha="${COMMIT:0:7}"
+          ldflags="-s -w -X nomad-deck/internal/version.Version=${VERSION} -X nomad-deck/internal/version.Commit=${short_sha} -X nomad-deck/internal/version.Repo=${REPO}"
+          if [ -n "${RELEASE_PUBLIC_KEY}" ]; then
+            ldflags="${ldflags} -X nomad-deck/internal/version.ReleasePublicKey=${RELEASE_PUBLIC_KEY}"
+          fi
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            stage="dist/stage-${os}-${arch}"
+            mkdir -p "${stage}"
+            CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" go build -trimpath -ldflags "${ldflags}" -o "${stage}/nomad-deck" ./cmd/nomad-deck
+            tar -C "${stage}" -czf "dist/nomad-deck_${ver_no_v}_${os}_${arch}.tar.gz" nomad-deck
+            rm -rf "${stage}"
+          done
+          (cd dist && sha256sum nomad-deck_*.tar.gz > SHA256SUMS)
+
+      - name: Sign SHA256SUMS
+        env:
+          RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
+          RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          go run ./scripts/sign-release -sign dist/SHA256SUMS
+          if [ -n "${RELEASE_PUBLIC_KEY}" ]; then
+            go run ./scripts/sign-release -verify dist/SHA256SUMS
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/nomad-deck_*.tar.gz
+            dist/SHA256SUMS
+            dist/SHA256SUMS.sig
+          generate_release_notes: true

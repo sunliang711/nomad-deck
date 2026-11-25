@@ -36,6 +36,9 @@ export function VersionPage() {
 
   useEffect(() => {
     void load(false);
+    void apiGet('/api/v1/settings')
+      .then((r) => setUseProxy(Boolean(r.settings?.['proxy.use_for_self_update'])))
+      .catch(() => {});
   }, [load]);
 
   // Poll /api/v1/system/version across exit-75 restart until target version is live.

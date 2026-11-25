@@ -101,8 +101,8 @@ export function SettingsPage() {
     }
   };
 
-  const proxyPayload = () => ({
-    enabled: Boolean(proxy.configured),
+  const proxyPayload = (enabled = true) => ({
+    enabled,
     type: proxy.type,
     host: proxy.host,
     port: Number(proxy.port),
@@ -115,7 +115,7 @@ export function SettingsPage() {
     e.preventDefault();
     setErr('');
     try {
-      await apiPut('/api/v1/settings/proxy', proxyPayload());
+      await apiPut('/api/v1/settings/proxy', proxyPayload(true));
       setNotice('系统代理设置已保存');
       await load();
     } catch (ex: any) {
@@ -123,10 +123,22 @@ export function SettingsPage() {
     }
   };
 
+  const clearProxy = async () => {
+    setErr('');
+    try {
+      await apiPut('/api/v1/settings/proxy', { enabled: false });
+      setProxyTest(null);
+      setNotice('已清空系统代理配置');
+      await load();
+    } catch (ex: any) {
+      setErr(ex?.message || '清空代理失败');
+    }
+  };
+
   const testProxy = async () => {
     setErr('');
     try {
-      const res = await apiPost('/api/v1/settings/proxy/test', proxyPayload());
+      const res = await apiPost('/api/v1/settings/proxy/test', proxyPayload(true));
       setProxyTest(res.report);
     } catch (ex: any) {
       setErr(ex?.message || '代理测试失败');
@@ -217,25 +229,22 @@ export function SettingsPage() {
       )}
 
       {tab === 'proxy' && (
-        <Card title="系统代理（HTTP / HTTPS / SOCKS5）">
+        <Card
+          title="系统代理（HTTP / HTTPS / SOCKS5）"
+          actions={<Badge tone={proxy.configured ? 'green' : 'neutral'}>{proxy.configured ? '已配置' : '未配置'}</Badge>}
+        >
           <form onSubmit={saveProxy} className="space-y-3 text-xs">
-            <label className="flex items-center gap-2 font-medium">
-              <input
-                type="checkbox"
-                disabled={!isAdmin}
-                checked={Boolean(proxy.configured)}
-                onChange={(e) => setProxy({ ...proxy, configured: e.target.checked })}
-              />
-              <span>启用系统代理</span>
-            </label>
+            <p className="text-slate-500">
+              此处仅保存系统代理地址与凭据；具体操作是否走代理，由部署、升级、自更新页面的“使用系统代理”勾选项及“版本与分发源”的默认勾选决定。
+            </p>
             <div className="grid grid-cols-3 gap-2">
               <Select label="类型" disabled={!isAdmin} value={proxy.type} onChange={(e) => setProxy({ ...proxy, type: e.target.value })}>
                 <option value="http">http</option>
                 <option value="https">https</option>
                 <option value="socks5">socks5</option>
               </Select>
-              <Input label="主机" disabled={!isAdmin} value={proxy.host} onChange={(e) => setProxy({ ...proxy, host: e.target.value })} />
-              <Input label="端口" type="number" disabled={!isAdmin} value={proxy.port} onChange={(e) => setProxy({ ...proxy, port: Number(e.target.value) })} />
+              <Input label="主机" required disabled={!isAdmin} value={proxy.host} onChange={(e) => setProxy({ ...proxy, host: e.target.value })} />
+              <Input label="端口" type="number" required disabled={!isAdmin} value={proxy.port} onChange={(e) => setProxy({ ...proxy, port: Number(e.target.value) })} />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <Input label="用户名" disabled={!isAdmin} value={proxy.username} onChange={(e) => setProxy({ ...proxy, username: e.target.value })} />
@@ -263,9 +272,12 @@ export function SettingsPage() {
               onChange={(e) => setProxy({ ...proxy, no_proxy: e.target.value })}
             />
             {isAdmin && (
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button type="submit" variant="primary">保存代理</Button>
                 <Button type="button" onClick={() => void testProxy()}>测试连通性</Button>
+                {proxy.configured && (
+                  <Button type="button" variant="danger" onClick={() => void clearProxy()}>清空代理</Button>
+                )}
               </div>
             )}
             {proxyTest && (

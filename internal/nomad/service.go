@@ -65,9 +65,10 @@ type Settings struct {
 	DisableTelemetry  bool       `json:"disable_telemetry"`
 	UI                UISettings `json:"ui"`
 	JobGCThreshold    string     `json:"job_gc_threshold,omitempty"`
-	ExecEnabled       bool       `json:"exec_enabled"`
-	CNIVersion        string     `json:"cni_version,omitempty"`
-	Version           string     `json:"version,omitempty"`
+	// ExecEnabled allows interactive terminals and job actions (default on).
+	ExecEnabled *bool  `json:"exec_enabled,omitempty"`
+	CNIVersion  string `json:"cni_version,omitempty"`
+	Version     string `json:"version,omitempty"`
 	// DockerDefaults are the cluster default Docker Engine settings.
 	DockerDefaults json.RawMessage `json:"docker_defaults,omitempty"`
 	// Consul is reserved for a future Consul integration (65-consul.hcl).
@@ -784,4 +785,13 @@ func (s *Service) DeleteUndeployed(ctx context.Context, actor audit.Actor, clust
 	}
 	return s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.delete", ResourceType: "cluster", ResourceID: clusterID,
 		ResourceName: cl.Name})
+}
+
+// ExecAllowed reports whether interactive terminals are enabled on a cluster.
+func (s *Service) ExecAllowed(ctx context.Context, clusterID string) (bool, error) {
+	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return false, err
+	}
+	return cl.Settings.ExecEnabled == nil || *cl.Settings.ExecEnabled, nil
 }

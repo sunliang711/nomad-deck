@@ -798,7 +798,8 @@ func (s *Service) UpdateSettings(ctx context.Context, actor audit.Actor, cluster
 		cl.Settings.JobGCThreshold, rollout = *in.JobGCThreshold, true
 	}
 	if in.ExecEnabled != nil {
-		cl.Settings.ExecEnabled = *in.ExecEnabled
+		v := *in.ExecEnabled
+		cl.Settings.ExecEnabled = &v
 	}
 	if in.CNIVersion != nil {
 		if *in.CNIVersion != "" && !contains(s.Releases.CNI(ctx).Versions(), *in.CNIVersion) {

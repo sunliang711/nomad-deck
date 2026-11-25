@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 
 	"nomad-deck/internal/audit"
 	"nomad-deck/internal/auth"
@@ -25,6 +26,9 @@ type Service struct {
 	Log   *slog.Logger
 	Hub   *Hub
 	stats *statsCache
+
+	exec     *execState
+	execOnce sync.Once
 }
 
 var (

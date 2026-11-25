@@ -302,6 +302,25 @@ func TestJobRoutes(t *testing.T) {
 			t.Fatalf("viewer must not call %s", p)
 		}
 	}
+	// Files, logs and terminals.
+	alloc := "/api/v1/nomad/" + cid + "/allocs/00000000-0000-0000-0000-000000000000"
+	if code, b := viewer.do("GET", alloc+"/fs/ls?path=/", nil, nil); code != 409 || errCode(b) != "not_initialized" {
+		t.Fatalf("viewer may list files: %d %v", code, b)
+	}
+	for _, p := range []string{"/fs/content/readat?path=/alloc/logs/x", "/fs/content/download?path=/x", "/exec?ticket=x"} {
+		if code, _ := viewer.do("GET", alloc+p, nil, nil); code != 403 {
+			t.Fatalf("viewer must not call %s", p)
+		}
+	}
+	if code, _ := viewer.do("POST", alloc+"/exec-ticket", map[string]any{"task": "t"}, nil); code != 403 {
+		t.Fatal("viewer cannot open terminals")
+	}
+	if code, b := root.do("GET", alloc+"/exec?ticket=x", nil, map[string]string{"Origin": "https://evil.example"}); code != 403 || errCode(b) != "origin_rejected" {
+		t.Fatalf("foreign origin: %d %v", code, b)
+	}
+	if code, b := root.do("GET", alloc+"/exec?ticket=x", nil, map[string]string{"Origin": origin}); code != 403 || errCode(b) != "ticket_invalid" {
+		t.Fatalf("unknown ticket: %d %v", code, b)
+	}
 	if code, b := root.do("GET", "/api/v1/nomad/"+cid+"/watch?topics=bogus", nil, nil); code != 400 {
 		t.Fatalf("unknown topic: %d %v", code, b)
 	}

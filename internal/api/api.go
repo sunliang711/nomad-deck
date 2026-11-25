@@ -15,6 +15,7 @@ import (
 	"nomad-deck/internal/hosts"
 	"nomad-deck/internal/integration"
 	"nomad-deck/internal/jobs"
+	"nomad-deck/internal/migration"
 	"nomad-deck/internal/netx"
 	"nomad-deck/internal/nomad"
 	"nomad-deck/internal/ops"
@@ -38,6 +39,7 @@ type API struct {
 	Jobs         *jobs.Service
 	Workbench    *workbench.Service
 	Cron         *cron.Scheduler
+	Migration    *migration.Service
 	// jobOpExtra serves job-ops added by other components (e.g. render).
 	jobOpExtra     func(w http.ResponseWriter, r *http.Request) bool
 	Log            *slog.Logger
@@ -58,7 +60,7 @@ func (a *API) Handler() http.Handler {
 	r.Get("/readyz", a.readyz)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(a.sameOrigin, a.authenticate)
+		r.Use(a.sameOrigin, a.authenticate, a.barrierGuard)
 		r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 			writeError(w, http.StatusNotFound, "not_found", "接口不存在")
 		})
@@ -266,6 +268,10 @@ func (a *API) Handler() http.Handler {
 
 				r.Put("/settings", a.putSettings)
 				r.Post("/cron-jobs", a.createCronJob)
+				r.Post("/migration/export", a.migrationExport)
+				r.Post("/migration/import/preview", a.migrationPreview)
+				r.Post("/migration/import/apply", a.migrationApply)
+				r.Post("/migration/activate", a.migrationActivate)
 				r.Put("/cron-jobs/{id}", a.updateCronJob)
 				r.Delete("/cron-jobs/{id}", a.deleteCronJob)
 				r.Post("/cron-jobs/{id}/run", a.runCronJob)

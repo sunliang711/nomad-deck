@@ -337,6 +337,17 @@ func sealChunks(dst io.Writer, src io.Reader, gcm cipher.AEAD, prefix []byte, id
 
 // WriteArchive encrypts a snapshot stream into a portable archive.
 func WriteArchive(dst io.Writer, src io.Reader, meta ArchiveMeta, passphrase string) error {
+	return SealStream(dst, src, archiveMagic, meta, passphrase)
+}
+
+// SealStream encrypts src with a passphrase (Argon2id + AES-256-GCM chunks)
+// behind a 4-byte magic. header must marshal to a JSON object; it is stored
+// authenticated but unencrypted, with "archive_id" and "nonce_prefix"
+// added.
+func SealStream(dst io.Writer, src io.Reader, magic string, header any, passphrase string) error {
+	if len(magic) != 4 {
+		return errors.New("magic must be 4 bytes")
+	}
 	if len(passphrase) < vaultbackup.MinPassphrase {
 		return fmt.Errorf("passphrase must be at least %d characters", vaultbackup.MinPassphrase)
 	}
@@ -346,11 +357,19 @@ func WriteArchive(dst io.Writer, src io.Reader, meta ArchiveMeta, passphrase str
 			return err
 		}
 	}
-	meta.ArchiveID, meta.NoncePrefix = hex.EncodeToString(aid), hex.EncodeToString(prefix)
-	hdr, _ := json.Marshal(meta)
+	raw, err := json.Marshal(header)
+	if err != nil {
+		return err
+	}
+	fields := map[string]any{}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return errors.New("header must be a JSON object")
+	}
+	fields["archive_id"], fields["nonce_prefix"] = hex.EncodeToString(aid), hex.EncodeToString(prefix)
+	hdr, _ := json.Marshal(fields)
 	t, m, p := vaultbackup.DefaultTime, vaultbackup.DefaultMemory, vaultbackup.DefaultThreads
 	w := bufio.NewWriterSize(dst, 256<<10)
-	w.WriteString(archiveMagic)
+	w.WriteString(magic)
 	w.WriteByte(1)
 	_ = binary.Write(w, binary.BigEndian, t)
 	_ = binary.Write(w, binary.BigEndian, m)
@@ -369,11 +388,26 @@ func WriteArchive(dst io.Writer, src io.Reader, meta ArchiveMeta, passphrase str
 // ReadArchive opens a portable archive; a wrong passphrase surfaces as an
 // authentication error on the first read.
 func ReadArchive(src io.ReadCloser, passphrase string) (*ArchiveMeta, io.ReadCloser, error) {
+	hdr, body, err := OpenStream(src, archiveMagic, passphrase)
+	if err != nil {
+		return nil, nil, err
+	}
+	var meta ArchiveMeta
+	if err := json.Unmarshal(hdr, &meta); err != nil {
+		body.Close()
+		return nil, nil, errors.New("archive header is malformed")
+	}
+	return &meta, body, nil
+}
+
+// OpenStream opens a stream written by SealStream and returns its header
+// JSON and the decrypting reader.
+func OpenStream(src io.ReadCloser, magic, passphrase string) ([]byte, io.ReadCloser, error) {
 	r := bufio.NewReaderSize(src, 256<<10)
 	fixed := make([]byte, 16)
-	if _, err := io.ReadFull(r, fixed); err != nil || string(fixed[:4]) != archiveMagic || fixed[4] != 1 {
+	if _, err := io.ReadFull(r, fixed); err != nil || string(fixed[:4]) != magic || fixed[4] != 1 {
 		src.Close()
-		return nil, nil, errors.New("not a NomadDeck snapshot archive")
+		return nil, nil, errors.New("not a NomadDeck archive of the expected kind")
 	}
 	t, m, p, sl := binary.BigEndian.Uint32(fixed[5:9]), binary.BigEndian.Uint32(fixed[9:13]), fixed[13], int(fixed[14])
 	if t == 0 || t > 64 || m < 8*1024 || m > 4*1024*1024 || p == 0 || sl < 8 {
@@ -396,12 +430,14 @@ func ReadArchive(src io.ReadCloser, passphrase string) (*ArchiveMeta, io.ReadClo
 		src.Close()
 		return nil, nil, err
 	}
-	var meta ArchiveMeta
-	if err := json.Unmarshal(hdr, &meta); err != nil {
+	var fields struct {
+		NoncePrefix string `json:"nonce_prefix"`
+	}
+	if err := json.Unmarshal(hdr, &fields); err != nil {
 		src.Close()
 		return nil, nil, errors.New("archive header is malformed")
 	}
-	prefix, err := hex.DecodeString(meta.NoncePrefix)
+	prefix, err := hex.DecodeString(fields.NoncePrefix)
 	if err != nil || len(prefix) != 8 {
 		src.Close()
 		return nil, nil, errors.New("archive header is malformed")
@@ -411,7 +447,7 @@ func ReadArchive(src io.ReadCloser, passphrase string) (*ArchiveMeta, io.ReadClo
 		io.Reader
 		io.Closer
 	}{r, src}
-	return &meta, chunkReader(body, passKey(passphrase, salt, t, m, p), prefix, hex.EncodeToString(hsum[:])), nil
+	return hdr, chunkReader(body, passKey(passphrase, salt, t, m, p), prefix, hex.EncodeToString(hsum[:])), nil
 }
 
 // Size returns the number of plaintext bytes written.

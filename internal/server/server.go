@@ -26,6 +26,7 @@ import (
 	"nomad-deck/internal/hosts"
 	"nomad-deck/internal/integration"
 	"nomad-deck/internal/jobs"
+	"nomad-deck/internal/migration"
 	"nomad-deck/internal/netx"
 	"nomad-deck/internal/nomad"
 	"nomad-deck/internal/ops"
@@ -121,6 +122,8 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 	sched := &cron.Scheduler{DB: d, Audit: rec, Ops: engine, Log: log}
 	sched.Install(&cron.Platform{Hosts: hostSvc, Drivers: map[string]cluster.Driver{"nomad": nomadSvc.Driver(), "vault": vaultSvc.Driver()},
 		Vault: vaultSvc, Integrations: integrations, Jobs: jobSvc, DataDir: cfg.DataDir})
+	mig := &migration.Service{DB: d, Keys: keys, Audit: rec, Ops: engine, DataDir: cfg.DataDir, Log: log, Idle: sched.Idle,
+		AfterImport: []func(){authSvc.Revocations.RevokeAll, pool.Close}}
 	app := &App{Config: cfg, Log: log, Keys: keys, DB: d, Audit: rec, Auth: authSvc, Hosts: hostSvc, Ops: engine, Pool: pool, Vault: vaultSvc, Nomad: nomadSvc, Cron: sched}
 	origins, err := AllowedOrigins(cfg)
 	if err != nil {
@@ -132,7 +135,7 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 		pr, _ := config.ParsePrefix(p)
 		trusted = append(trusted, pr)
 	}
-	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc, Nomad: nomadSvc, Integrations: integrations, Jobs: jobSvc, Workbench: wb, Cron: sched,
+	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc, Nomad: nomadSvc, Integrations: integrations, Jobs: jobSvc, Workbench: wb, Cron: sched, Migration: mig,
 		Log: log, AllowedOrigins: origins, TrustedProxies: trusted,
 		HTTPS: cfg.TLS.Mode != config.TLSModeProxy || isHTTPS(cfg), Ready: &app.ready}
 	return app, nil

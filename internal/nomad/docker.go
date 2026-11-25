@@ -70,10 +70,8 @@ func init() {
 	)
 }
 
-func nodeProxyAAD(nodeID string) string { return "nodes.docker_config_json.pull_proxy:" + nodeID }
-func clusterProxyAAD(clusterID string) string {
-	return "clusters.config_json.docker_defaults.pull_proxy:" + clusterID
-}
+func nodeProxyAAD(nodeID string) string       { return db.NodePullProxyAAD(nodeID) }
+func clusterProxyAAD(clusterID string) string { return db.ClusterPullProxyAAD(clusterID) }
 
 var (
 	reLogSize  = regexp.MustCompile(`^[1-9][0-9]{0,5}[kmg]$`)

@@ -1,0 +1,15 @@
+[Unit]
+Description=NomadDeck Control Plane Automatic Rollback
+After=nomad-deck.service
+
+[Service]
+Type=oneshot
+User=nomad-deck
+Group=nomad-deck
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/nomad-deck-control
+ExecCondition=/opt/nomad-deck-control/bin/nomad-deck.prev rollback --check
+ExecStart=/opt/nomad-deck-control/bin/nomad-deck.prev rollback --auto
+ExecStartPost=+/usr/bin/systemctl reset-failed nomad-deck.service
+ExecStartPost=+/usr/bin/systemctl start nomad-deck.service

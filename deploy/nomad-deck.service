@@ -1,0 +1,26 @@
+[Unit]
+Description=NomadDeck Control Plane
+Documentation=https://github.com/sunliang711/nomad-deck
+After=network-online.target
+Wants=network-online.target
+OnFailure=nomad-deck-rollback.service
+
+[Service]
+Type=notify
+User=nomad-deck
+Group=nomad-deck
+WorkingDirectory=/opt/nomad-deck-control
+ExecStart=/opt/nomad-deck-control/bin/nomad-deck serve --config /opt/nomad-deck-control/etc/nomad-deck.toml
+Restart=on-failure
+RestartSec=5s
+RestartForceExitStatus=75
+TimeoutStartSec=180
+TimeoutStopSec=30
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/nomad-deck-control
+
+[Install]
+WantedBy=multi-user.target

@@ -36,6 +36,7 @@ import (
 	"nomad-deck/internal/selfupdate"
 	"nomad-deck/internal/snapstore"
 	"nomad-deck/internal/sshx"
+	"nomad-deck/internal/ui"
 	"nomad-deck/internal/vault"
 	"nomad-deck/internal/version"
 	"nomad-deck/internal/workbench"
@@ -184,7 +185,7 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 	}
 	app.API = &api.API{DB: d, Auth: authSvc, Hosts: hostSvc, Proxy: proxy, Ops: engine, Releases: releases, Vault: vaultSvc, Nomad: nomadSvc,
 		Integrations: integrations, Jobs: jobSvc, Workbench: wb, Cron: sched, Migration: mig, Backup: backupSvc, Rotation: rotSvc,
-		SelfUpdate: selfUpdateSvc, Log: log, AllowedOrigins: origins, TrustedProxies: trusted,
+		SelfUpdate: selfUpdateSvc, UI: ui.Handler(), Log: log, AllowedOrigins: origins, TrustedProxies: trusted,
 		HTTPS: cfg.TLS.Mode != config.TLSModeProxy || isHTTPS(cfg), Ready: &app.ready}
 	return app, nil
 }

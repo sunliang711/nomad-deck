@@ -1,16 +1,65 @@
 # NomadDeck
 
-NomadDeck 是一个使用 Go 开发的 Nomad 与 Vault 集群可视化运维控制面，内置 Web 管理端（`go:embed` 单二进制交付）。系统通过原生 SSH/SFTP 管理集群主机生命周期，通过 Nomad / Vault HTTP API 管理集群运行态与 Job 生命周期，并支持加密托管 Vault Unseal Keys、Nomad-Vault JWT Workload Identity 联动、定时任务、全量审计日志与口令加密的一键环境迁移。
+NomadDeck 是一个独立部署的 HashiCorp 基础设施管理平台，采用 Go 单二进制架构并内嵌 React Web 管理台，覆盖宿主机纳管、Vault PKI / Secrets 运维、Nomad 集群与工作台管控，以及控制面高可用备份、迁移与自更新。
 
-服务默认监听 `0.0.0.0:8555`（HTTPS），单端口承载 Web 管理端、REST API 与 SSE。控制面支持从 GitHub Release 拉取新版本完成自更新（签名与 SHA256 校验、升级前数据库备份、原子切换、启动失败自动回退），也支持预约在新版本发布后自动升级。
+## 核心能力
 
-## 设计方案
+- **基础设施纳管（Hosts / SSH Keys）**：通过系统原生 Ed25519 SSH 密钥接入 Linux 宿主机，支持节点巡检、系统服务状态检查与容器运行时（Docker / Containerd / CNI）安装管理。
+- **Vault 集群管理**：支持在线下载、SHA256 校验与初始化 Vault 集群，提供自动解封（Auto-Unseal）与受控 Seal/Unseal/Step-Down、Raft 快照管理、PKI 引擎向导，以及 AppRole / KV v2 / Token 运维。
+- **Nomad 集群与工作台**：支持 Server/Client 全生命周期部署与动态扩缩容、Gossip 加密、mTLS 自动续期与 Vault Workload Identity 集成，并内置 Job 中心、Allocation 日志流、WebSocket 交互式终端、Volume 与 ACL 治理。
+- **安全与高可用治理**：支持控制面出口代理配置（含脱敏与连通性测试）、Cron 定时巡检与证书/备份调度、全量加密导出与迁移导入、Local / SFTP / S3 自动灾备快照、审计日志，以及基于 GitHub Release + Ed25519 签名的控制面自更新与双保险回滚。
+- **单二进制部署**：前端 React 18 + Vite 构建产物通过 `go:embed` 直接打包进单个静态 Go 可执行文件，零外部运行时依赖。
 
-完整的架构设计、数据库表结构、核心机制、API 规范、Web 页面规划与交付验收清单见：[docs/DESIGN.md](./docs/DESIGN.md)。
+## 快速构建
 
-## 参考脚本目录
+环境要求：Go 1.26+、Node.js 22+。
 
-本项目的运维流程与配置规范参考自以下本地目录中的原型脚本（仅用于研发阶段本地对照，正式对外发布前清理路径引用；本项目全新设计集群布局，不兼容既有单机脚本安装的旧节点）：
+```bash
+# 构建前端与 Go 单二进制（产物位于 bin/nomad-deck）
+make build
 
-- Nomad 参考脚本：`/Users/eagle/.local/apps/init/tools/nomad`
-- Vault 参考脚本：`/Users/eagle/.local/apps/init/tools/vault`
+# 分别构建
+make web
+make build-go
+```
+
+## 运行与配置
+
+```bash
+# 启动控制面（默认监听 0.0.0.0:8555，首次启动自动生成自签名 TLS 证书）
+./bin/nomad-deck serve
+
+# 指定配置文件或覆盖参数
+./bin/nomad-deck serve --config /opt/nomad-deck-control/etc/nomad-deck.toml
+```
+
+常用运维子命令：
+
+```bash
+./bin/nomad-deck version
+./bin/nomad-deck admin reset-password --username <name>
+./bin/nomad-deck offline-backup decrypt <backup-file>
+./bin/nomad-deck rollback --check
+./bin/nomad-deck rollback --auto
+```
+
+配置文件示例见 [deploy/nomad-deck.toml.example](deploy/nomad-deck.toml.example)，systemd 服务单元见 [deploy/nomad-deck.service](deploy/nomad-deck.service) 与 [deploy/nomad-deck-rollback.service](deploy/nomad-deck-rollback.service)。
+
+## Docker 部署
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+容器模式会自动将 `NOMAD_DECK_CONTAINER=1` 注入环境变量，数据默认持久化在 `/data`。
+
+## 开发与测试
+
+```bash
+# 前端开发服务器（代理 API 与 WebSocket 至 https://127.0.0.1:8555）
+cd web && npm run dev
+
+# 后端单元测试与静态检查
+make vet
+make test
+```

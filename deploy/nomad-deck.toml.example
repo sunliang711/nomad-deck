@@ -1,0 +1,23 @@
+# NomadDeck 控制面配置文件示例
+# 默认路径：/opt/nomad-deck-control/etc/nomad-deck.toml
+
+data_dir = "/opt/nomad-deck-control/data"
+listen = "0.0.0.0:8555"
+
+[server]
+# 反向代理或外部访问控制面时的完整 Origin，用于 Origin/CSRF 校验。
+# 留空时默认允许 listen 对应的本机与内网 Origin。
+# public_url = "https://deck.example.com"
+
+[tls]
+# 可选值：auto（首次启动自动生成自签名 ECDSA 证书）/ file（外部证书）/ proxy（由前端反代终止 TLS）
+mode = "auto"
+# cert_file = "/opt/nomad-deck-control/etc/tls.crt"
+# key_file = "/opt/nomad-deck-control/etc/tls.key"
+# trusted_proxies = ["127.0.0.1/32", "10.0.0.0/8"]
+
+[log]
+# level: debug | info | warn | error
+level = "info"
+# format: text | json
+format = "text"

@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -46,6 +47,7 @@ type API struct {
 	Backup       *backup.Service
 	Rotation     *rotation.Service
 	SelfUpdate   *selfupdate.Service
+	UI           http.Handler
 	// jobOpExtra serves job-ops added by other components (e.g. render).
 	jobOpExtra     func(w http.ResponseWriter, r *http.Request) bool
 	Log            *slog.Logger
@@ -304,6 +306,17 @@ func (a *API) Handler() http.Handler {
 				r.Post("/settings/proxy/test", a.testProxy)
 			})
 		})
+	})
+	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/api" || strings.HasPrefix(req.URL.Path, "/api/") {
+			writeError(w, http.StatusNotFound, "not_found", "API 接口不存在")
+			return
+		}
+		if a.UI != nil {
+			a.UI.ServeHTTP(w, req)
+			return
+		}
+		http.NotFound(w, req)
 	})
 	return r
 }

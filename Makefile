@@ -8,9 +8,14 @@ ifdef RELEASE_PUBKEY
 LDFLAGS += -X nomad-deck/internal/version.ReleasePublicKey=$(RELEASE_PUBKEY)
 endif
 
-.PHONY: build test vet run clean it it-host it-vault-hosts it-vault it-nomad-hosts it-nomad it-integration
+.PHONY: build build-go web test vet run clean it it-host it-vault-hosts it-vault it-nomad-hosts it-nomad it-integration
 
-build:
+build: web build-go
+
+web:
+	cd web && npm ci && npm run build
+
+build-go:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/nomad-deck ./cmd/nomad-deck
 
 test:

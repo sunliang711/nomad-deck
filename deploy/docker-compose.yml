@@ -1,0 +1,20 @@
+services:
+  nomad-deck:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: nomad-deck
+    restart: unless-stopped
+    ports:
+      - "8555:8555"
+    environment:
+      NOMAD_DECK_CONTAINER: "1"
+      NOMAD_DECK_DATA_DIR: "/data"
+      NOMAD_DECK_LISTEN: "0.0.0.0:8555"
+      # NOMAD_DECK_TLS_MODE: "auto"
+      # NOMAD_DECK_PUBLIC_URL: "https://deck.example.com"
+    volumes:
+      - nomad_deck_data:/data
+
+volumes:
+  nomad_deck_data:

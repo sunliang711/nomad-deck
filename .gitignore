@@ -19,7 +19,6 @@ master.key
 # Frontend
 /web/node_modules/
 /web/dist/
-/internal/ui/dist/
 
 # OS & editor
 .DS_Store

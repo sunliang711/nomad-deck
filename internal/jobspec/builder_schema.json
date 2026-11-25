@@ -1,0 +1,3153 @@
+{
+  "source": "https://github.com/hashicorp/nomad/tree/v1.11.2/api",
+  "types": {
+    "Action": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "command",
+          "required": true
+        },
+        {
+          "kind": "list",
+          "name": "args"
+        }
+      ],
+      "blocks": [],
+      "labels": 1
+    },
+    "Affinity": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "attribute"
+        },
+        {
+          "kind": "string",
+          "name": "value"
+        },
+        {
+          "kind": "string",
+          "name": "operator"
+        },
+        {
+          "kind": "number",
+          "name": "weight"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "CNIConfig": {
+      "attributes": [
+        {
+          "kind": "expression",
+          "name": "args"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "CSIMountOptions": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "fs_type"
+        },
+        {
+          "kind": "list",
+          "name": "mount_flags"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "CSIVolume": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "external_id",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "topology_request",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "access_mode",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "attachment_mode",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "mount_options",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "secrets",
+          "required": true
+        },
+        {
+          "kind": "expression",
+          "name": "parameters",
+          "required": true
+        },
+        {
+          "kind": "expression",
+          "name": "context",
+          "required": true
+        },
+        {
+          "kind": "number",
+          "name": "-",
+          "required": true
+        },
+        {
+          "kind": "number",
+          "name": "capacity_min",
+          "required": true
+        },
+        {
+          "kind": "number",
+          "name": "capacity_max",
+          "required": true
+        },
+        {
+          "kind": "expression",
+          "name": "capability",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "clone_id",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "snapshot_id",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "plugin_id",
+          "required": true
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "CSIVolumeCapability": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "access_mode",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "attachment_mode",
+          "required": true
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "ChangeScript": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "command",
+          "required": true
+        },
+        {
+          "kind": "list",
+          "name": "args"
+        },
+        {
+          "kind": "string",
+          "name": "timeout"
+        },
+        {
+          "kind": "bool",
+          "name": "fail_on_error",
+          "required": true
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "CheckRestart": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "limit"
+        },
+        {
+          "kind": "string",
+          "name": "grace"
+        },
+        {
+          "kind": "bool",
+          "name": "ignore_warnings"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "Constraint": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "attribute"
+        },
+        {
+          "kind": "string",
+          "name": "value"
+        },
+        {
+          "kind": "string",
+          "name": "operator"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "Consul": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "namespace"
+        },
+        {
+          "kind": "string",
+          "name": "cluster"
+        },
+        {
+          "kind": "string",
+          "name": "partition"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "ConsulConnect": {
+      "attributes": [
+        {
+          "kind": "bool",
+          "name": "native"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "gateway",
+          "type": "ConsulGateway"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "sidecar_service",
+          "type": "ConsulSidecarService"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "sidecar_task",
+          "type": "SidecarTask"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulExposeConfig": {
+      "attributes": [],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "path",
+          "type": "ConsulExposePath"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulExposePath": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "path"
+        },
+        {
+          "kind": "string",
+          "name": "protocol"
+        },
+        {
+          "kind": "number",
+          "name": "local_path_port"
+        },
+        {
+          "kind": "string",
+          "name": "listener_port"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "ConsulGateway": {
+      "attributes": [],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "proxy",
+          "type": "ConsulGatewayProxy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "ingress",
+          "type": "ConsulIngressConfigEntry"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "terminating",
+          "type": "ConsulTerminatingConfigEntry"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "mesh",
+          "type": "ConsulMeshConfigEntry"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulGatewayBindAddress": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "address"
+        },
+        {
+          "kind": "number",
+          "name": "port"
+        }
+      ],
+      "blocks": [],
+      "labels": 1
+    },
+    "ConsulGatewayProxy": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "connect_timeout"
+        },
+        {
+          "kind": "bool",
+          "name": "envoy_gateway_bind_tagged_addresses"
+        },
+        {
+          "kind": "bool",
+          "name": "envoy_gateway_no_default_bind"
+        },
+        {
+          "kind": "string",
+          "name": "envoy_dns_discovery_type"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 1,
+          "max": 0,
+          "name": "envoy_gateway_bind_addresses",
+          "type": "ConsulGatewayBindAddress"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "config",
+          "type": "_expressions"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulGatewayTLSConfig": {
+      "attributes": [
+        {
+          "kind": "bool",
+          "name": "enabled"
+        },
+        {
+          "kind": "string",
+          "name": "tls_min_version"
+        },
+        {
+          "kind": "string",
+          "name": "tls_max_version"
+        },
+        {
+          "kind": "list",
+          "name": "cipher_suites"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "sds",
+          "type": "ConsulGatewayTLSSDSConfig"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulGatewayTLSSDSConfig": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "cluster_name"
+        },
+        {
+          "kind": "string",
+          "name": "cert_resource"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "ConsulHTTPHeaderModifiers": {
+      "attributes": [
+        {
+          "kind": "list",
+          "name": "remove"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "add",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "set",
+          "type": "_strings"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulIngressConfigEntry": {
+      "attributes": [],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "tls",
+          "type": "ConsulGatewayTLSConfig"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "listener",
+          "type": "ConsulIngressListener"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulIngressListener": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "port"
+        },
+        {
+          "kind": "string",
+          "name": "protocol"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "service",
+          "type": "ConsulIngressService"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulIngressService": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "name"
+        },
+        {
+          "kind": "list",
+          "name": "hosts"
+        },
+        {
+          "kind": "number",
+          "name": "max_connections"
+        },
+        {
+          "kind": "number",
+          "name": "max_pending_requests"
+        },
+        {
+          "kind": "number",
+          "name": "max_concurrent_requests"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "tls",
+          "type": "ConsulGatewayTLSConfig"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "request_headers",
+          "type": "ConsulHTTPHeaderModifiers"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "response_headers",
+          "type": "ConsulHTTPHeaderModifiers"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulLinkedService": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "name"
+        },
+        {
+          "kind": "string",
+          "name": "ca_file"
+        },
+        {
+          "kind": "string",
+          "name": "cert_file"
+        },
+        {
+          "kind": "string",
+          "name": "key_file"
+        },
+        {
+          "kind": "string",
+          "name": "sni"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "ConsulMeshGateway": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "mode"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "ConsulProxy": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "local_service_address"
+        },
+        {
+          "kind": "number",
+          "name": "local_service_port"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "expose",
+          "type": "ConsulExposeConfig"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "upstreams",
+          "type": "ConsulUpstream"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "transparent_proxy",
+          "type": "ConsulTransparentProxy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "config",
+          "type": "_expressions"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulSidecarService": {
+      "attributes": [
+        {
+          "kind": "list",
+          "name": "tags"
+        },
+        {
+          "kind": "string",
+          "name": "port"
+        },
+        {
+          "kind": "bool",
+          "name": "disable_default_tcp_check"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "proxy",
+          "type": "ConsulProxy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "meta",
+          "type": "_strings"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulTerminatingConfigEntry": {
+      "attributes": [],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "service",
+          "type": "ConsulLinkedService"
+        }
+      ],
+      "labels": 0
+    },
+    "ConsulTransparentProxy": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "uid"
+        },
+        {
+          "kind": "number",
+          "name": "outbound_port"
+        },
+        {
+          "kind": "list",
+          "name": "exclude_inbound_ports"
+        },
+        {
+          "kind": "expression",
+          "name": "exclude_outbound_ports"
+        },
+        {
+          "kind": "list",
+          "name": "exclude_outbound_cidrs"
+        },
+        {
+          "kind": "list",
+          "name": "exclude_uids"
+        },
+        {
+          "kind": "bool",
+          "name": "no_dns"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "ConsulUpstream": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "destination_name"
+        },
+        {
+          "kind": "string",
+          "name": "destination_namespace"
+        },
+        {
+          "kind": "string",
+          "name": "destination_peer"
+        },
+        {
+          "kind": "string",
+          "name": "destination_partition"
+        },
+        {
+          "kind": "string",
+          "name": "destination_type"
+        },
+        {
+          "kind": "number",
+          "name": "local_bind_port"
+        },
+        {
+          "kind": "string",
+          "name": "datacenter"
+        },
+        {
+          "kind": "string",
+          "name": "local_bind_address"
+        },
+        {
+          "kind": "string",
+          "name": "local_bind_socket_path"
+        },
+        {
+          "kind": "string",
+          "name": "local_bind_socket_mode"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "mesh_gateway",
+          "type": "ConsulMeshGateway"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "config",
+          "type": "_expressions"
+        }
+      ],
+      "labels": 0
+    },
+    "DNSConfig": {
+      "attributes": [
+        {
+          "kind": "list",
+          "name": "servers"
+        },
+        {
+          "kind": "list",
+          "name": "searches"
+        },
+        {
+          "kind": "list",
+          "name": "options"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "DisconnectStrategy": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "lost_after"
+        },
+        {
+          "kind": "string",
+          "name": "stop_on_client_after"
+        },
+        {
+          "kind": "bool",
+          "name": "replace"
+        },
+        {
+          "kind": "string",
+          "name": "reconcile"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "DispatchPayloadConfig": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "file"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "Document": {
+      "attributes": [],
+      "blocks": [
+        {
+          "labels": 1,
+          "max": 1,
+          "name": "job",
+          "type": "Job"
+        },
+        {
+          "labels": 1,
+          "max": 0,
+          "name": "variable",
+          "type": "Variable"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "locals",
+          "type": "_expressions"
+        }
+      ],
+      "labels": 0
+    },
+    "DriverConfig": {
+      "attributes": [],
+      "blocks": [],
+      "labels": 0,
+      "map_kind": "expression"
+    },
+    "EphemeralDisk": {
+      "attributes": [
+        {
+          "kind": "bool",
+          "name": "sticky"
+        },
+        {
+          "kind": "bool",
+          "name": "migrate"
+        },
+        {
+          "kind": "number",
+          "name": "size"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "Job": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "region"
+        },
+        {
+          "kind": "string",
+          "name": "namespace"
+        },
+        {
+          "kind": "string",
+          "name": "id"
+        },
+        {
+          "kind": "string",
+          "name": "name"
+        },
+        {
+          "kind": "string",
+          "name": "type"
+        },
+        {
+          "kind": "number",
+          "name": "priority"
+        },
+        {
+          "kind": "bool",
+          "name": "all_at_once"
+        },
+        {
+          "kind": "list",
+          "name": "datacenters"
+        },
+        {
+          "kind": "string",
+          "name": "node_pool"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "constraint",
+          "type": "Constraint"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "affinity",
+          "type": "Affinity"
+        },
+        {
+          "labels": 1,
+          "max": 0,
+          "name": "group",
+          "type": "TaskGroup"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "update",
+          "type": "UpdateStrategy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "multiregion",
+          "type": "Multiregion"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "spread",
+          "type": "Spread"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "periodic",
+          "type": "PeriodicConfig"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "parameterized",
+          "type": "ParameterizedJobConfig"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "reschedule",
+          "type": "ReschedulePolicy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "migrate",
+          "type": "MigrateStrategy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "meta",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "ui",
+          "type": "JobUIConfig"
+        }
+      ],
+      "labels": 1
+    },
+    "JobUIConfig": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "description"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "link",
+          "type": "JobUILink"
+        }
+      ],
+      "labels": 0
+    },
+    "JobUILink": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "label"
+        },
+        {
+          "kind": "string",
+          "name": "url"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "LogConfig": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "max_files"
+        },
+        {
+          "kind": "number",
+          "name": "max_file_size"
+        },
+        {
+          "kind": "bool",
+          "name": "enabled"
+        },
+        {
+          "kind": "bool",
+          "name": "disabled"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "MigrateStrategy": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "max_parallel"
+        },
+        {
+          "kind": "string",
+          "name": "health_check"
+        },
+        {
+          "kind": "string",
+          "name": "min_healthy_time"
+        },
+        {
+          "kind": "string",
+          "name": "healthy_deadline"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "Multiregion": {
+      "attributes": [],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "strategy",
+          "type": "MultiregionStrategy"
+        },
+        {
+          "labels": 1,
+          "max": 0,
+          "name": "region",
+          "type": "MultiregionRegion"
+        }
+      ],
+      "labels": 0
+    },
+    "MultiregionRegion": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "count"
+        },
+        {
+          "kind": "list",
+          "name": "datacenters"
+        },
+        {
+          "kind": "string",
+          "name": "node_pool"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "meta",
+          "type": "_strings"
+        }
+      ],
+      "labels": 1
+    },
+    "MultiregionStrategy": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "max_parallel"
+        },
+        {
+          "kind": "string",
+          "name": "on_failure"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "NUMAResource": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "affinity"
+        },
+        {
+          "kind": "list",
+          "name": "devices"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "NetworkResource": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "mode"
+        },
+        {
+          "kind": "string",
+          "name": "device"
+        },
+        {
+          "kind": "string",
+          "name": "cidr"
+        },
+        {
+          "kind": "string",
+          "name": "ip"
+        },
+        {
+          "kind": "string",
+          "name": "hostname"
+        },
+        {
+          "kind": "number",
+          "name": "mbits"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "dns",
+          "type": "DNSConfig"
+        },
+        {
+          "labels": 1,
+          "max": 0,
+          "name": "port",
+          "type": "Port"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "cni",
+          "type": "CNIConfig"
+        }
+      ],
+      "labels": 0
+    },
+    "ParameterizedJobConfig": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "payload"
+        },
+        {
+          "kind": "list",
+          "name": "meta_required"
+        },
+        {
+          "kind": "list",
+          "name": "meta_optional"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "PeriodicConfig": {
+      "attributes": [
+        {
+          "kind": "bool",
+          "name": "enabled"
+        },
+        {
+          "kind": "string",
+          "name": "cron"
+        },
+        {
+          "kind": "list",
+          "name": "crons"
+        },
+        {
+          "kind": "bool",
+          "name": "prohibit_overlap"
+        },
+        {
+          "kind": "string",
+          "name": "time_zone"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "Port": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "static"
+        },
+        {
+          "kind": "number",
+          "name": "to"
+        },
+        {
+          "kind": "string",
+          "name": "host_network"
+        },
+        {
+          "kind": "bool",
+          "name": "ignore_collision"
+        }
+      ],
+      "blocks": [],
+      "labels": 1
+    },
+    "RequestedDevice": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "count"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "constraint",
+          "type": "Constraint"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "affinity",
+          "type": "Affinity"
+        }
+      ],
+      "labels": 1
+    },
+    "ReschedulePolicy": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "attempts"
+        },
+        {
+          "kind": "string",
+          "name": "interval"
+        },
+        {
+          "kind": "string",
+          "name": "delay"
+        },
+        {
+          "kind": "string",
+          "name": "delay_function"
+        },
+        {
+          "kind": "string",
+          "name": "max_delay"
+        },
+        {
+          "kind": "bool",
+          "name": "unlimited"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "Resources": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "cpu"
+        },
+        {
+          "kind": "number",
+          "name": "cores"
+        },
+        {
+          "kind": "number",
+          "name": "memory"
+        },
+        {
+          "kind": "number",
+          "name": "memory_max"
+        },
+        {
+          "kind": "number",
+          "name": "disk"
+        },
+        {
+          "kind": "number",
+          "name": "secrets"
+        },
+        {
+          "kind": "number",
+          "name": "iops"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "network",
+          "type": "NetworkResource"
+        },
+        {
+          "labels": 1,
+          "max": 0,
+          "name": "device",
+          "type": "RequestedDevice"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "numa",
+          "type": "NUMAResource"
+        }
+      ],
+      "labels": 0
+    },
+    "RestartPolicy": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "interval"
+        },
+        {
+          "kind": "number",
+          "name": "attempts"
+        },
+        {
+          "kind": "string",
+          "name": "delay"
+        },
+        {
+          "kind": "string",
+          "name": "mode"
+        },
+        {
+          "kind": "bool",
+          "name": "render_templates"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "ScalingPolicy": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "min"
+        },
+        {
+          "kind": "number",
+          "name": "max"
+        },
+        {
+          "kind": "bool",
+          "name": "enabled"
+        },
+        {
+          "kind": "string",
+          "name": "type"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "policy",
+          "type": "_expressions"
+        }
+      ],
+      "labels": 0
+    },
+    "Secret": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "provider"
+        },
+        {
+          "kind": "string",
+          "name": "path"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "config",
+          "type": "_expressions"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "env",
+          "type": "_strings"
+        }
+      ],
+      "labels": 1
+    },
+    "Service": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "name"
+        },
+        {
+          "kind": "list",
+          "name": "tags"
+        },
+        {
+          "kind": "list",
+          "name": "canary_tags"
+        },
+        {
+          "kind": "bool",
+          "name": "enable_tag_override"
+        },
+        {
+          "kind": "string",
+          "name": "port"
+        },
+        {
+          "kind": "string",
+          "name": "address_mode"
+        },
+        {
+          "kind": "string",
+          "name": "address"
+        },
+        {
+          "kind": "string",
+          "name": "task"
+        },
+        {
+          "kind": "string",
+          "name": "on_update"
+        },
+        {
+          "kind": "string",
+          "name": "provider"
+        },
+        {
+          "kind": "string",
+          "name": "cluster"
+        },
+        {
+          "kind": "string",
+          "name": "kind"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "check",
+          "type": "ServiceCheck"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "check_restart",
+          "type": "CheckRestart"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "connect",
+          "type": "ConsulConnect"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "meta",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "canary_meta",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "tagged_addresses",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "identity",
+          "type": "WorkloadIdentity"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "weights",
+          "type": "ServiceWeights"
+        }
+      ],
+      "labels": 0
+    },
+    "ServiceCheck": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "name"
+        },
+        {
+          "kind": "string",
+          "name": "type"
+        },
+        {
+          "kind": "string",
+          "name": "command"
+        },
+        {
+          "kind": "list",
+          "name": "args"
+        },
+        {
+          "kind": "string",
+          "name": "path"
+        },
+        {
+          "kind": "string",
+          "name": "protocol"
+        },
+        {
+          "kind": "string",
+          "name": "port"
+        },
+        {
+          "kind": "bool",
+          "name": "expose"
+        },
+        {
+          "kind": "string",
+          "name": "address_mode"
+        },
+        {
+          "kind": "string",
+          "name": "advertise"
+        },
+        {
+          "kind": "string",
+          "name": "interval"
+        },
+        {
+          "kind": "string",
+          "name": "timeout"
+        },
+        {
+          "kind": "string",
+          "name": "initial_status"
+        },
+        {
+          "kind": "string",
+          "name": "notes"
+        },
+        {
+          "kind": "string",
+          "name": "tls_server_name"
+        },
+        {
+          "kind": "bool",
+          "name": "tls_skip_verify"
+        },
+        {
+          "kind": "string",
+          "name": "method"
+        },
+        {
+          "kind": "string",
+          "name": "grpc_service"
+        },
+        {
+          "kind": "bool",
+          "name": "grpc_use_tls"
+        },
+        {
+          "kind": "string",
+          "name": "task"
+        },
+        {
+          "kind": "number",
+          "name": "success_before_passing"
+        },
+        {
+          "kind": "number",
+          "name": "failures_before_critical"
+        },
+        {
+          "kind": "number",
+          "name": "failures_before_warning"
+        },
+        {
+          "kind": "string",
+          "name": "body"
+        },
+        {
+          "kind": "string",
+          "name": "on_update"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "header",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "check_restart",
+          "type": "CheckRestart"
+        }
+      ],
+      "labels": 0
+    },
+    "ServiceWeights": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "passing"
+        },
+        {
+          "kind": "number",
+          "name": "warning"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "SidecarTask": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "name"
+        },
+        {
+          "kind": "string",
+          "name": "driver"
+        },
+        {
+          "kind": "string",
+          "name": "user"
+        },
+        {
+          "kind": "string",
+          "name": "kill_timeout"
+        },
+        {
+          "kind": "string",
+          "name": "shutdown_delay"
+        },
+        {
+          "kind": "string",
+          "name": "kill_signal"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "config",
+          "type": "_expressions"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "env",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "resources",
+          "type": "Resources"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "meta",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "logs",
+          "type": "LogConfig"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "volume_mount",
+          "type": "VolumeMount"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "identity",
+          "type": "WorkloadIdentity"
+        }
+      ],
+      "labels": 0
+    },
+    "Spread": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "attribute"
+        },
+        {
+          "kind": "number",
+          "name": "weight"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 1,
+          "max": 0,
+          "name": "target",
+          "type": "SpreadTarget"
+        }
+      ],
+      "labels": 0
+    },
+    "SpreadTarget": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "percent"
+        }
+      ],
+      "blocks": [],
+      "labels": 1
+    },
+    "Task": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "driver",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "user"
+        },
+        {
+          "kind": "string",
+          "name": "kill_timeout"
+        },
+        {
+          "kind": "bool",
+          "name": "leader"
+        },
+        {
+          "kind": "string",
+          "name": "shutdown_delay"
+        },
+        {
+          "kind": "string",
+          "name": "kill_signal"
+        },
+        {
+          "kind": "string",
+          "name": "kind"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "lifecycle",
+          "type": "TaskLifecycle"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "config",
+          "type": "DriverConfig"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "constraint",
+          "type": "Constraint"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "affinity",
+          "type": "Affinity"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "env",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "service",
+          "type": "Service"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "resources",
+          "type": "Resources"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "restart",
+          "type": "RestartPolicy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "meta",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "logs",
+          "type": "LogConfig"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "artifact",
+          "type": "TaskArtifact"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "vault",
+          "type": "Vault"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "consul",
+          "type": "Consul"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "template",
+          "type": "Template"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "dispatch_payload",
+          "type": "DispatchPayloadConfig"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "volume_mount",
+          "type": "VolumeMount"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "csi_plugin",
+          "type": "TaskCSIPluginConfig"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "scaling",
+          "type": "ScalingPolicy"
+        },
+        {
+          "labels": 1,
+          "max": 0,
+          "name": "secret",
+          "type": "Secret"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "identity",
+          "type": "WorkloadIdentity"
+        },
+        {
+          "labels": 1,
+          "max": 0,
+          "name": "action",
+          "type": "Action"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "schedule",
+          "type": "TaskSchedule"
+        }
+      ],
+      "labels": 1
+    },
+    "TaskArtifact": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "source"
+        },
+        {
+          "kind": "string",
+          "name": "mode"
+        },
+        {
+          "kind": "bool",
+          "name": "insecure"
+        },
+        {
+          "kind": "string",
+          "name": "destination"
+        },
+        {
+          "kind": "bool",
+          "name": "chown"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "options",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "headers",
+          "type": "_strings"
+        }
+      ],
+      "labels": 0
+    },
+    "TaskCSIPluginConfig": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "id"
+        },
+        {
+          "kind": "string",
+          "name": "type"
+        },
+        {
+          "kind": "string",
+          "name": "mount_dir"
+        },
+        {
+          "kind": "string",
+          "name": "stage_publish_base_dir"
+        },
+        {
+          "kind": "string",
+          "name": "health_timeout"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "TaskGroup": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "count"
+        },
+        {
+          "kind": "string",
+          "name": "shutdown_delay"
+        },
+        {
+          "kind": "string",
+          "name": "stop_after_client_disconnect"
+        },
+        {
+          "kind": "string",
+          "name": "max_client_disconnect"
+        },
+        {
+          "kind": "bool",
+          "name": "prevent_reschedule_on_lost"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "constraint",
+          "type": "Constraint"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "affinity",
+          "type": "Affinity"
+        },
+        {
+          "labels": 1,
+          "max": 0,
+          "name": "task",
+          "type": "Task"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "spread",
+          "type": "Spread"
+        },
+        {
+          "labels": 1,
+          "max": 0,
+          "name": "volume",
+          "type": "VolumeRequest"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "restart",
+          "type": "RestartPolicy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "disconnect",
+          "type": "DisconnectStrategy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "reschedule",
+          "type": "ReschedulePolicy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "ephemeral_disk",
+          "type": "EphemeralDisk"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "update",
+          "type": "UpdateStrategy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "migrate",
+          "type": "MigrateStrategy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "network",
+          "type": "NetworkResource"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "meta",
+          "type": "_strings"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "service",
+          "type": "Service"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "scaling",
+          "type": "ScalingPolicy"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "consul",
+          "type": "Consul"
+        }
+      ],
+      "labels": 1
+    },
+    "TaskLifecycle": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "hook",
+          "required": true
+        },
+        {
+          "kind": "bool",
+          "name": "sidecar"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "TaskSchedule": {
+      "attributes": [],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "cron",
+          "type": "TaskScheduleCron"
+        }
+      ],
+      "labels": 0
+    },
+    "TaskScheduleCron": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "start"
+        },
+        {
+          "kind": "string",
+          "name": "end"
+        },
+        {
+          "kind": "string",
+          "name": "timezone"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "Template": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "source"
+        },
+        {
+          "kind": "string",
+          "name": "destination"
+        },
+        {
+          "kind": "string",
+          "name": "data"
+        },
+        {
+          "kind": "string",
+          "name": "change_mode"
+        },
+        {
+          "kind": "string",
+          "name": "change_signal"
+        },
+        {
+          "kind": "bool",
+          "name": "once"
+        },
+        {
+          "kind": "string",
+          "name": "splay"
+        },
+        {
+          "kind": "string",
+          "name": "perms"
+        },
+        {
+          "kind": "number",
+          "name": "uid"
+        },
+        {
+          "kind": "number",
+          "name": "gid"
+        },
+        {
+          "kind": "string",
+          "name": "left_delimiter"
+        },
+        {
+          "kind": "string",
+          "name": "right_delimiter"
+        },
+        {
+          "kind": "bool",
+          "name": "env"
+        },
+        {
+          "kind": "string",
+          "name": "vault_grace"
+        },
+        {
+          "kind": "bool",
+          "name": "error_on_missing_key"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "change_script",
+          "type": "ChangeScript"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "wait",
+          "type": "WaitConfig"
+        }
+      ],
+      "labels": 0
+    },
+    "UpdateStrategy": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "stagger"
+        },
+        {
+          "kind": "number",
+          "name": "max_parallel"
+        },
+        {
+          "kind": "string",
+          "name": "health_check"
+        },
+        {
+          "kind": "string",
+          "name": "min_healthy_time"
+        },
+        {
+          "kind": "string",
+          "name": "healthy_deadline"
+        },
+        {
+          "kind": "string",
+          "name": "progress_deadline"
+        },
+        {
+          "kind": "number",
+          "name": "canary"
+        },
+        {
+          "kind": "bool",
+          "name": "auto_revert"
+        },
+        {
+          "kind": "bool",
+          "name": "auto_promote"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "Variable": {
+      "attributes": [
+        {
+          "kind": "expression",
+          "name": "type"
+        },
+        {
+          "kind": "expression",
+          "name": "default"
+        },
+        {
+          "kind": "string",
+          "name": "description"
+        }
+      ],
+      "blocks": [],
+      "labels": 1
+    },
+    "Vault": {
+      "attributes": [
+        {
+          "kind": "list",
+          "name": "policies"
+        },
+        {
+          "kind": "string",
+          "name": "role"
+        },
+        {
+          "kind": "string",
+          "name": "namespace"
+        },
+        {
+          "kind": "string",
+          "name": "cluster"
+        },
+        {
+          "kind": "bool",
+          "name": "env"
+        },
+        {
+          "kind": "bool",
+          "name": "disable_file"
+        },
+        {
+          "kind": "string",
+          "name": "change_mode"
+        },
+        {
+          "kind": "string",
+          "name": "change_signal"
+        },
+        {
+          "kind": "bool",
+          "name": "allow_token_expiration"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "VolumeMount": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "volume"
+        },
+        {
+          "kind": "string",
+          "name": "destination"
+        },
+        {
+          "kind": "bool",
+          "name": "read_only"
+        },
+        {
+          "kind": "string",
+          "name": "propagation_mode"
+        },
+        {
+          "kind": "string",
+          "name": "selinux_label"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "VolumeRequest": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "type"
+        },
+        {
+          "kind": "string",
+          "name": "source"
+        },
+        {
+          "kind": "bool",
+          "name": "read_only"
+        },
+        {
+          "kind": "bool",
+          "name": "sticky"
+        },
+        {
+          "kind": "string",
+          "name": "access_mode"
+        },
+        {
+          "kind": "string",
+          "name": "attachment_mode"
+        },
+        {
+          "kind": "bool",
+          "name": "per_alloc"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "mount_options",
+          "type": "CSIMountOptions"
+        }
+      ],
+      "labels": 1
+    },
+    "WaitConfig": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "min",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "max",
+          "required": true
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "WorkloadIdentity": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "name"
+        },
+        {
+          "kind": "list",
+          "name": "aud"
+        },
+        {
+          "kind": "string",
+          "name": "change_mode"
+        },
+        {
+          "kind": "string",
+          "name": "change_signal"
+        },
+        {
+          "kind": "bool",
+          "name": "env"
+        },
+        {
+          "kind": "bool",
+          "name": "file"
+        },
+        {
+          "kind": "string",
+          "name": "filepath"
+        },
+        {
+          "kind": "string",
+          "name": "service_name"
+        },
+        {
+          "kind": "string",
+          "name": "ttl"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "_expressions": {
+      "attributes": [],
+      "blocks": [],
+      "labels": 0,
+      "map_kind": "expression"
+    },
+    "_strings": {
+      "attributes": [],
+      "blocks": [],
+      "labels": 0,
+      "map_kind": "string"
+    },
+    "driver.docker": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "image",
+          "required": true
+        },
+        {
+          "kind": "bool",
+          "name": "advertise_ipv6_address"
+        },
+        {
+          "kind": "list",
+          "name": "args"
+        },
+        {
+          "kind": "bool",
+          "name": "auth_soft_fail"
+        },
+        {
+          "kind": "list",
+          "name": "cap_add"
+        },
+        {
+          "kind": "list",
+          "name": "cap_drop"
+        },
+        {
+          "kind": "string",
+          "name": "cgroupns"
+        },
+        {
+          "kind": "string",
+          "name": "command"
+        },
+        {
+          "kind": "string",
+          "name": "cpuset_cpus"
+        },
+        {
+          "kind": "bool",
+          "name": "cpu_hard_limit"
+        },
+        {
+          "kind": "number",
+          "name": "cpu_cfs_period"
+        },
+        {
+          "kind": "number",
+          "name": "container_exists_attempts"
+        },
+        {
+          "kind": "list",
+          "name": "dns_search_domains"
+        },
+        {
+          "kind": "list",
+          "name": "dns_options"
+        },
+        {
+          "kind": "list",
+          "name": "dns_servers"
+        },
+        {
+          "kind": "list",
+          "name": "entrypoint"
+        },
+        {
+          "kind": "list",
+          "name": "extra_hosts"
+        },
+        {
+          "kind": "bool",
+          "name": "force_pull"
+        },
+        {
+          "kind": "list",
+          "name": "group_add"
+        },
+        {
+          "kind": "string",
+          "name": "hostname"
+        },
+        {
+          "kind": "bool",
+          "name": "init"
+        },
+        {
+          "kind": "bool",
+          "name": "interactive"
+        },
+        {
+          "kind": "string",
+          "name": "ipc_mode"
+        },
+        {
+          "kind": "string",
+          "name": "ipv4_address"
+        },
+        {
+          "kind": "string",
+          "name": "ipv6_address"
+        },
+        {
+          "kind": "string",
+          "name": "isolation"
+        },
+        {
+          "kind": "expression",
+          "name": "labels"
+        },
+        {
+          "kind": "string",
+          "name": "load"
+        },
+        {
+          "kind": "string",
+          "name": "mac_address"
+        },
+        {
+          "kind": "number",
+          "name": "memory_hard_limit"
+        },
+        {
+          "kind": "list",
+          "name": "network_aliases"
+        },
+        {
+          "kind": "string",
+          "name": "network_mode"
+        },
+        {
+          "kind": "number",
+          "name": "oom_score_adj"
+        },
+        {
+          "kind": "string",
+          "name": "runtime"
+        },
+        {
+          "kind": "number",
+          "name": "pids_limit"
+        },
+        {
+          "kind": "string",
+          "name": "pid_mode"
+        },
+        {
+          "kind": "list",
+          "name": "ports"
+        },
+        {
+          "kind": "expression",
+          "name": "port_map"
+        },
+        {
+          "kind": "bool",
+          "name": "privileged"
+        },
+        {
+          "kind": "string",
+          "name": "image_pull_timeout"
+        },
+        {
+          "kind": "bool",
+          "name": "readonly_rootfs"
+        },
+        {
+          "kind": "list",
+          "name": "security_opt"
+        },
+        {
+          "kind": "number",
+          "name": "shm_size"
+        },
+        {
+          "kind": "expression",
+          "name": "sysctl"
+        },
+        {
+          "kind": "bool",
+          "name": "tty"
+        },
+        {
+          "kind": "expression",
+          "name": "ulimit"
+        },
+        {
+          "kind": "string",
+          "name": "uts_mode"
+        },
+        {
+          "kind": "string",
+          "name": "userns_mode"
+        },
+        {
+          "kind": "list",
+          "name": "volumes"
+        },
+        {
+          "kind": "string",
+          "name": "volume_driver"
+        },
+        {
+          "kind": "string",
+          "name": "work_dir"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "auth",
+          "type": "driver.docker.auth"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "devices",
+          "type": "driver.docker.devices"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "healthchecks",
+          "type": "driver.docker.healthchecks"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "logging",
+          "type": "driver.docker.logging"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "mount",
+          "type": "driver.docker.mount"
+        },
+        {
+          "labels": 0,
+          "max": 0,
+          "name": "mounts",
+          "type": "driver.docker.mounts"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "storage_opt",
+          "type": "_strings"
+        }
+      ],
+      "labels": 0
+    },
+    "driver.docker.auth": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "username"
+        },
+        {
+          "kind": "string",
+          "name": "password"
+        },
+        {
+          "kind": "string",
+          "name": "email"
+        },
+        {
+          "kind": "string",
+          "name": "server_address"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.docker.devices": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "host_path"
+        },
+        {
+          "kind": "string",
+          "name": "container_path"
+        },
+        {
+          "kind": "string",
+          "name": "cgroup_permissions"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.docker.healthchecks": {
+      "attributes": [
+        {
+          "kind": "bool",
+          "name": "disable"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.docker.logging": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "type"
+        },
+        {
+          "kind": "string",
+          "name": "driver"
+        },
+        {
+          "kind": "expression",
+          "name": "config"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.docker.mount": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "type"
+        },
+        {
+          "kind": "string",
+          "name": "target"
+        },
+        {
+          "kind": "string",
+          "name": "source"
+        },
+        {
+          "kind": "bool",
+          "name": "readonly"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "bind_options",
+          "type": "driver.docker.mount.bind_options"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "tmpfs_options",
+          "type": "driver.docker.mount.tmpfs_options"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "volume_options",
+          "type": "driver.docker.mount.volume_options"
+        }
+      ],
+      "labels": 0
+    },
+    "driver.docker.mount.bind_options": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "propagation"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.docker.mount.tmpfs_options": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "size"
+        },
+        {
+          "kind": "number",
+          "name": "mode"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.docker.mount.volume_options": {
+      "attributes": [
+        {
+          "kind": "bool",
+          "name": "no_copy"
+        },
+        {
+          "kind": "expression",
+          "name": "labels"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "driver_config",
+          "type": "driver.docker.mount.volume_options.driver_config"
+        }
+      ],
+      "labels": 0
+    },
+    "driver.docker.mount.volume_options.driver_config": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "name"
+        },
+        {
+          "kind": "expression",
+          "name": "options"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.docker.mounts": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "type"
+        },
+        {
+          "kind": "string",
+          "name": "target"
+        },
+        {
+          "kind": "string",
+          "name": "source"
+        },
+        {
+          "kind": "bool",
+          "name": "readonly"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "bind_options",
+          "type": "driver.docker.mounts.bind_options"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "tmpfs_options",
+          "type": "driver.docker.mounts.tmpfs_options"
+        },
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "volume_options",
+          "type": "driver.docker.mounts.volume_options"
+        }
+      ],
+      "labels": 0
+    },
+    "driver.docker.mounts.bind_options": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "propagation"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.docker.mounts.tmpfs_options": {
+      "attributes": [
+        {
+          "kind": "number",
+          "name": "size"
+        },
+        {
+          "kind": "number",
+          "name": "mode"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.docker.mounts.volume_options": {
+      "attributes": [
+        {
+          "kind": "bool",
+          "name": "no_copy"
+        },
+        {
+          "kind": "expression",
+          "name": "labels"
+        }
+      ],
+      "blocks": [
+        {
+          "labels": 0,
+          "max": 1,
+          "name": "driver_config",
+          "type": "driver.docker.mounts.volume_options.driver_config"
+        }
+      ],
+      "labels": 0
+    },
+    "driver.docker.mounts.volume_options.driver_config": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "name"
+        },
+        {
+          "kind": "expression",
+          "name": "options"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.exec": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "command",
+          "required": true
+        },
+        {
+          "kind": "list",
+          "name": "args"
+        },
+        {
+          "kind": "string",
+          "name": "pid_mode"
+        },
+        {
+          "kind": "string",
+          "name": "ipc_mode"
+        },
+        {
+          "kind": "list",
+          "name": "cap_add"
+        },
+        {
+          "kind": "list",
+          "name": "cap_drop"
+        },
+        {
+          "kind": "string",
+          "name": "work_dir"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.java": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "class"
+        },
+        {
+          "kind": "string",
+          "name": "class_path"
+        },
+        {
+          "kind": "string",
+          "name": "jar_path"
+        },
+        {
+          "kind": "list",
+          "name": "jvm_options"
+        },
+        {
+          "kind": "list",
+          "name": "args"
+        },
+        {
+          "kind": "string",
+          "name": "pid_mode"
+        },
+        {
+          "kind": "string",
+          "name": "ipc_mode"
+        },
+        {
+          "kind": "list",
+          "name": "cap_add"
+        },
+        {
+          "kind": "list",
+          "name": "cap_drop"
+        },
+        {
+          "kind": "string",
+          "name": "work_dir"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.qemu": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "image_path",
+          "required": true
+        },
+        {
+          "kind": "string",
+          "name": "emulator"
+        },
+        {
+          "kind": "string",
+          "name": "machine_type"
+        },
+        {
+          "kind": "string",
+          "name": "drive_interface"
+        },
+        {
+          "kind": "string",
+          "name": "accelerator"
+        },
+        {
+          "kind": "bool",
+          "name": "graceful_shutdown"
+        },
+        {
+          "kind": "bool",
+          "name": "guest_agent"
+        },
+        {
+          "kind": "list",
+          "name": "args"
+        },
+        {
+          "kind": "expression",
+          "name": "port_map"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "driver.raw_exec": {
+      "attributes": [
+        {
+          "kind": "string",
+          "name": "command",
+          "required": true
+        },
+        {
+          "kind": "list",
+          "name": "args"
+        },
+        {
+          "kind": "string",
+          "name": "cgroup_v2_override"
+        },
+        {
+          "kind": "expression",
+          "name": "cgroup_v1_override"
+        },
+        {
+          "kind": "number",
+          "name": "oom_score_adj"
+        },
+        {
+          "kind": "string",
+          "name": "work_dir"
+        },
+        {
+          "kind": "list",
+          "name": "denied_envvars"
+        }
+      ],
+      "blocks": [],
+      "labels": 0
+    },
+    "ConsulMeshConfigEntry": {
+      "attributes": [],
+      "blocks": [],
+      "labels": 0,
+      "map_kind": "expression"
+    }
+  },
+  "version": "nomad-1.11.2"
+}

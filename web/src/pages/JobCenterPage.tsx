@@ -4,6 +4,7 @@ import { apiDelete, apiDownload, apiGet, apiPost, fmtTime, openSSE } from '../li
 import { useAuth } from '../lib/auth';
 import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Select, TermLabel, statusTone } from '../components/UI';
 import { CodeEditor } from '../components/CodeEditor';
+import { VisualJobBuilder, type VisualJobBuilderHandle } from '../components/VisualJobBuilder';
 
 const sampleHCL = `job "hello" {
   datacenters = ["dc1"]
@@ -35,22 +36,15 @@ export function JobCenterPage() {
   const [editMode, setEditMode] = useState<'hcl' | 'visual' | 'json'>('hcl');
   const [hcl, setHcl] = useState(sampleHCL);
   const [jobVariables, setJobVariables] = useState<Record<string, string>>({});
-  const [visual, setVisual] = useState({
-    id: 'hello',
-    namespace: 'default',
-    type: 'service',
-    datacenters: 'dc1',
-    group: 'app',
-    count: 1,
-    task: 'server',
-    image: 'nginx:alpine',
-    cpu: 100,
-    memory: 128,
-    extra_hcl: '',
-  });
+  const visualRef = useRef<VisualJobBuilderHandle>(null);
+  const [visualReady, setVisualReady] = useState(false);
+  const [modeBusy, setModeBusy] = useState(false);
+  const modeRequestRef = useRef(0);
+  const formatCacheRef = useRef<{ hcl: string; variables: Record<string, string>; json: string } | null>(null);
   const [composeText, setComposeText] = useState('');
   const [showCompose, setShowCompose] = useState(false);
   const [plan, setPlan] = useState<any>(null);
+  const planRequestRef = useRef(0);
   const [revisions, setRevisions] = useState<any[]>([]);
   const [selectedJobId, setSelectedJobId] = useState('');
   const [tplName, setTplName] = useState('');
@@ -100,50 +94,69 @@ export function JobCenterPage() {
     });
   }, [clusterId, loadJobs]);
 
-  const syncVisualToHCL = async () => {
-    if (!clusterId) return;
+  // clearPlan also invalidates an in-flight preview when its draft or target changes.
+  const clearPlan = () => { planRequestRef.current++; setPlan(null); };
+
+  // changeMode flushes the current tree and refuses conversions that would drop JSON fields.
+  const changeMode = async (next: 'hcl' | 'visual' | 'json') => {
+    if (next === editMode) return;
+    if (!isAdmin) { setEditMode(next); return; }
+    const request = ++modeRequestRef.current;
+    setModeBusy(true);
+    clearPlan();
     setErr('');
     try {
-      const spec = {
-        job: {
-          id: visual.id,
-          namespace: visual.namespace,
-          type: visual.type,
-          datacenters: visual.datacenters.split(',').map((s) => s.trim()).filter(Boolean),
-          groups: [
-            {
-              name: visual.group,
-              count: String(visual.count),
-              tasks: [
-                {
-                  name: visual.task,
-                  driver: 'docker',
-                  config: { image: visual.image },
-                  resources: { cpu: String(visual.cpu), memory: String(visual.memory) },
-                },
-              ],
-            },
-          ],
-          extra_hcl: visual.extra_hcl,
-        },
-      };
-      const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/render`, spec);
-      if (res.hcl) setHcl(res.hcl);
-      setNotice('已由可视化配置渲染为 HCL');
+      let current = hcl;
+      if (editMode === 'visual' && visualRef.current) current = (await visualRef.current.flush()).hcl;
+      if (next === 'json') {
+        const parsed = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/validate`, { input_type: 'hcl', hcl: current, variables: jobVariables, namespace });
+        if (request !== modeRequestRef.current) return;
+        formatCacheRef.current = { hcl: current, variables: jobVariables, json: JSON.stringify(parsed.job) };
+        setHcl(JSON.stringify(parsed.job, null, 2));
+      } else if (editMode === 'json') {
+        const job = JSON.parse(hcl);
+        const cached = formatCacheRef.current;
+        if (cached && cached.json === JSON.stringify(job)) {
+          setHcl(cached.hcl);
+          setJobVariables(cached.variables);
+        } else {
+          const parsed = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/json-to-visual`, { job_json: job });
+          if (request !== modeRequestRef.current) return;
+          if (!parsed.lossless || !parsed.hcl) throw new Error('该 JSON 含有无法完整转换的字段，请继续使用 JSON 编辑，避免丢失配置');
+          setHcl(parsed.hcl);
+          setJobVariables({});
+        }
+      } else {
+        if (request !== modeRequestRef.current) return;
+        setHcl(current);
+      }
+      if (request !== modeRequestRef.current) return;
+      if (next === 'visual') setVisualReady(false);
+      setEditMode(next);
     } catch (ex: any) {
-      setErr(ex?.message || '渲染 HCL 失败');
+      if (request === modeRequestRef.current) setErr(ex?.message || '无法切换编辑模式');
+    } finally {
+      if (request === modeRequestRef.current) setModeBusy(false);
     }
   };
 
   // Preserve the authoritative JSON definition and variables when no HCL source exists.
-  const jobInput = () => editMode === 'json'
-    ? { input_type: 'json', job_json: JSON.parse(hcl), namespace, edit_mode: 'json' }
-    : { input_type: 'hcl', hcl, variables: jobVariables, namespace, edit_mode: editMode };
+  const jobInput = async () => {
+    let current = hcl;
+    if (editMode === 'visual' && visualRef.current) {
+      const result = await visualRef.current.flush();
+      if (!result.valid) throw new Error(result.diagnostics.map((issue) => issue.message).join('；') || '请先完成积木配置');
+      current = result.hcl;
+    }
+    return editMode === 'json'
+      ? { input_type: 'json', job_json: JSON.parse(current), namespace, edit_mode: 'json' }
+      : { input_type: 'hcl', hcl: current, variables: jobVariables, namespace, edit_mode: 'hcl' };
+  };
 
   const validateJob = async () => {
     setErr('');
     try {
-      await apiPost(`/api/v1/nomad/${clusterId}/job-ops/validate`, jobInput());
+      await apiPost(`/api/v1/nomad/${clusterId}/job-ops/validate`, await jobInput());
       setNotice('校验通过');
     } catch (ex: any) {
       setErr(ex?.message || '校验失败');
@@ -154,8 +167,10 @@ export function JobCenterPage() {
     if (!clusterId) return;
     setErr('');
     try {
-      const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/plan`, jobInput());
-      setPlan(res.plan);
+      const input = await jobInput();
+      const request = ++planRequestRef.current;
+      const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/plan`, input);
+      if (request === planRequestRef.current) setPlan(res.plan);
     } catch (ex: any) {
       setErr(ex?.message || 'Plan 失败');
     }
@@ -166,7 +181,7 @@ export function JobCenterPage() {
     setErr('');
     try {
       await apiPost(`/api/v1/nomad/${clusterId}/job-ops/apply`, { plan_id: plan.plan_id });
-      setPlan(null);
+      clearPlan();
       setNotice('Job Apply 提交成功');
       await loadJobs();
     } catch (ex: any) {
@@ -176,9 +191,12 @@ export function JobCenterPage() {
 
   const loadJobForEdit = async (j: any) => {
     const request = ++editRequestRef.current;
+    modeRequestRef.current++;
+    setModeBusy(false);
+    formatCacheRef.current = null;
     const ns = j.namespace || namespace;
     setSelectedJobId(j.id);
-    setPlan(null);
+    clearPlan();
     setHcl('');
     setJobVariables({});
     setErr('');
@@ -212,10 +230,10 @@ export function JobCenterPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={clusterId} onChange={(e) => setClusterId(e.target.value)}>
+          <Select value={clusterId} disabled={modeBusy || editMode === 'visual' && !visualReady} onChange={(e) => { setClusterId(e.target.value); clearPlan(); }}>
             {clusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
-          <Input value={namespace} onChange={(e) => setNamespace(e.target.value)} placeholder="Namespace" />
+          <Input value={namespace} onChange={(e) => { setNamespace(e.target.value); clearPlan(); }} placeholder="Namespace" />
         </div>
         <div className="flex gap-2">
           <Button size="sm" onClick={() => void loadJobs()}><RefreshCw className="h-3.5 w-3.5" /> 刷新</Button>
@@ -236,7 +254,7 @@ export function JobCenterPage() {
       <ErrorAlert message={err} onClose={() => setErr('')} />
       {notice && <div className="rounded bg-emerald-50 px-3.5 py-2 text-xs text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200">{notice}</div>}
 
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+      <div className={editMode === 'visual' ? 'grid grid-cols-1 gap-5 2xl:grid-cols-[220px_minmax(0,1fr)]' : 'grid grid-cols-1 gap-5 xl:grid-cols-3'}>
         <Card title="集群 Jobs & 模板">
           <div className="space-y-4 text-xs">
             <div className="space-y-1.5">
@@ -306,7 +324,7 @@ export function JobCenterPage() {
                   <div key={t.id} className="flex items-center justify-between rounded border border-slate-200 p-1.5 dark:border-slate-800">
                     <span>{t.name}</span>
                     <div className="flex gap-1">
-                      <Button size="sm" onClick={() => { setHcl(t.hcl || ''); setEditMode('hcl'); setJobVariables({}); setPlan(null); }}>载入</Button>
+                      <Button size="sm" onClick={() => { setHcl(t.hcl || ''); setEditMode('hcl'); setJobVariables({}); clearPlan(); }}>载入</Button>
                       {isAdmin && (
                         <Button
                           size="sm"
@@ -329,16 +347,16 @@ export function JobCenterPage() {
         </Card>
 
         <Card
-          className="xl:col-span-2"
+          className={editMode === 'visual' ? '' : 'xl:col-span-2'}
           title={<TermLabel term="双模式 Job 编排工作台" tip="支持编写 Nomad HCL（HashiCorp Configuration Language）、表单可视化编排或 JSON 定义，提交前可做语法校验和变更比对。" />}
           actions={
             isAdmin && (
               <div className="flex flex-wrap gap-1.5">
                 <Button size="sm" onClick={() => setShowCompose(true)}>Compose 导入</Button>
-                <Button size="sm" onClick={() => void validateJob()}>
+                <Button size="sm" disabled={modeBusy || editMode === 'visual' && !visualReady} onClick={() => void validateJob()}>
                   <TermLabel term="Validate" tip="调用 Nomad API 校验 HCL/JSON 语法、驱动字段与参数合法性，不改动运行状态。" />
                 </Button>
-                <Button size="sm" variant="primary" onClick={() => void runPlan()}>
+                <Button size="sm" variant="primary" disabled={modeBusy || editMode === 'visual' && !visualReady} onClick={() => void runPlan()}>
                   <TermLabel term="Plan Diff" tip="预演调度变更与滚动影响范围（Plan Dry-Run），确认无误后再提交部署。" />
                 </Button>
               </div>
@@ -349,34 +367,21 @@ export function JobCenterPage() {
             <SectionTabs
               tabs={[
                 { id: 'hcl', label: '原生 HCL 编辑器', tip: 'Nomad 原生 HashiCorp Configuration Language 声明式任务定义。' },
-                { id: 'visual', label: '可视化编排' },
+                ...(isAdmin ? [{ id: 'visual', label: '可视化编排' }] : []),
                 { id: 'json', label: 'JSON 定义' },
               ]}
               active={editMode}
-              onChange={(m) => { setEditMode(m as any); setPlan(null); }}
+              onChange={(m) => { void changeMode(m as 'hcl' | 'visual' | 'json'); }}
             />
 
-            {editMode === 'visual' && (
-              <div className="space-y-3 rounded border border-slate-200 p-3 dark:border-slate-800">
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  <Input label="Job ID" value={visual.id} onChange={(e) => setVisual({ ...visual, id: e.target.value })} />
-                  <Input label="Namespace" value={visual.namespace} onChange={(e) => setVisual({ ...visual, namespace: e.target.value })} />
-                  <Select label="类型" value={visual.type} onChange={(e) => setVisual({ ...visual, type: e.target.value })}>
-                    <option value="service">service</option>
-                    <option value="batch">batch</option>
-                    <option value="system">system</option>
-                  </Select>
-                  <Input label="Group" value={visual.group} onChange={(e) => setVisual({ ...visual, group: e.target.value })} />
-                  <Input label="Count" type="number" value={visual.count} onChange={(e) => setVisual({ ...visual, count: Number(e.target.value) })} />
-                  <Input label="Docker 镜像" value={visual.image} onChange={(e) => setVisual({ ...visual, image: e.target.value })} />
-                  <Input label="CPU (MHz)" type="number" value={visual.cpu} onChange={(e) => setVisual({ ...visual, cpu: Number(e.target.value) })} />
-                  <Input label="Memory (MiB)" type="number" value={visual.memory} onChange={(e) => setVisual({ ...visual, memory: Number(e.target.value) })} />
-                </div>
-                <Button size="sm" variant="primary" onClick={() => void syncVisualToHCL()}>生成右侧 HCL</Button>
+            <div className={editMode === 'visual' ? 'grid items-start gap-3 2xl:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)]' : ''}>
+              {editMode === 'visual' && <VisualJobBuilder ref={visualRef} clusterId={clusterId} source={hcl} readOnly={!isAdmin}
+                onSourceChange={(value) => { setHcl(value); clearPlan(); }} onValidityChange={(valid) => { setVisualReady(valid); if (!valid) clearPlan(); }} />}
+              <div className="min-w-0 space-y-2">
+                {editMode === 'visual' && <div className="font-semibold">实时 HCL 预览</div>}
+                <CodeEditor value={hcl} onChange={(value) => { setHcl(value); clearPlan(); }} readOnly={!isAdmin || editMode === 'visual'} height={editMode === 'visual' ? '700px' : '340px'} />
               </div>
-            )}
-
-            <CodeEditor value={hcl} onChange={(value) => { setHcl(value); setPlan(null); }} readOnly={!isAdmin} height="340px" />
+            </div>
 
             {isAdmin && (
               <div className="flex flex-wrap items-center gap-2">
@@ -388,7 +393,7 @@ export function JobCenterPage() {
                 />
                 <Button
                   size="sm"
-                  disabled={editMode === 'json'}
+                  disabled={modeBusy || editMode === 'json' || editMode === 'visual' && !visualReady}
                   onClick={() =>
                     tplName &&
                     void apiPost('/api/v1/job-templates', { name: tplName, edit_mode: 'hcl', hcl })
@@ -455,7 +460,7 @@ export function JobCenterPage() {
                     if (r.hcl) setHcl(r.hcl);
                     setEditMode('hcl');
                     setJobVariables({});
-                    setPlan(null);
+                    clearPlan();
                     setShowCompose(false);
                     setNotice('已转换为 Nomad HCL');
                   })

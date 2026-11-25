@@ -287,6 +287,30 @@ func (a *API) jobOp(w http.ResponseWriter, r *http.Request) {
 			}
 			a.Log.Error("job export", "err", err)
 		}
+	case "hcl-tree":
+		var in struct {
+			HCL string `json:"hcl"`
+		}
+		if !decodeJSON(w, r, &in) {
+			return
+		}
+		doc, err := jobs.ParseHCLTree(in.HCL)
+		if err != nil {
+			a.writeErr(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"document": doc, "schema": jobspec.BuilderSchema})
+	case "hcl-tree-render":
+		var in jobspec.HCLDocument
+		if !decodeJSON(w, r, &in) {
+			return
+		}
+		res, err := jobs.RenderHCLTree(&in)
+		if err != nil {
+			a.writeErr(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 	case "render":
 		var in jobspec.JobSpec
 		if !decodeJSON(w, r, &in) {

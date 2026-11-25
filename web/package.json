@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:builder": "node --experimental-strip-types --test test/hclBuilder.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.7.1",

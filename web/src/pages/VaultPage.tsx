@@ -30,6 +30,8 @@ export function VaultPage() {
   const [kvPath, setKvPath] = useState('');
   const [kvKeys, setKvKeys] = useState<string[]>([]);
   const [kvItem, setKvItem] = useState<{ path: string; data: string; cas: number } | null>(null);
+  const [showKVMount, setShowKVMount] = useState(false);
+  const [kvMountForm, setKvMountForm] = useState({ path: '', description: '' });
   const [gateView, setGateView] = useState<any>(null);
   const [err, setErr] = useState('');
   const [notice, setNotice] = useState('');
@@ -77,6 +79,12 @@ export function VaultPage() {
       ]);
       setCustodyData(clRes.custody || null);
       setStatus(stRes.status);
+      // Keep the summary in sync with live status after initialization and maintenance.
+      setClusters((prev) => prev.map((c) => c.id === selectedId ? {
+        ...c, ...clRes.cluster,
+        health_status: stRes.status.health_status,
+        init_state: stRes.status.init_state,
+      } : c));
       setSnapshots(snRes.snapshots || []);
       setGens(gRes.generations || []);
     } catch (ex: any) {
@@ -298,7 +306,7 @@ export function VaultPage() {
                             <div className="font-mono text-slate-500">{n.api_addr || n.advertise_addr}</div>
                           </td>
                           <td className="py-2 pr-3">
-                            <Badge tone={n.sealed ? 'red' : 'green'}>{n.sealed ? 'Sealed' : 'Unsealed'}</Badge>
+                            <Badge tone={n.sealed == null ? 'neutral' : n.sealed ? 'red' : 'green'}>{n.sealed == null ? 'Unknown' : n.sealed ? 'Sealed' : 'Unsealed'}</Badge>
                             <span className="ml-1.5 text-slate-500">{n.service_status}</span>
                           </td>
                           <td className="py-2 pr-3">{n.raft_role} {n.is_voter ? '(voter)' : ''}</td>
@@ -554,6 +562,9 @@ export function VaultPage() {
 
               <Card title="KV v2 Secret 浏览">
                 <div className="space-y-3 text-xs">
+                  {isAdmin && (
+                    <Button size="sm" onClick={() => setShowKVMount(true)}>启用 KV v2 挂载</Button>
+                  )}
                   <div className="flex gap-2">
                     <Select value={kvMount} onChange={(e) => setKvMount(e.target.value)}>
                       {mounts.map((m: any) => (
@@ -571,6 +582,15 @@ export function VaultPage() {
                       列出
                     </Button>
                   </div>
+                  {isAdmin && (
+                    <Button
+                      size="sm"
+                      disabled={!kvMount || !kvPath.trim()}
+                      onClick={() => setKvItem({ path: kvPath.trim().replace(/^\/+|\/+$/g, ''), data: '{}', cas: 0 })}
+                    >
+                      新建 Secret
+                    </Button>
+                  )}
                   <div className="flex flex-wrap gap-1.5">
                     {kvKeys.map((k) => (
                       <Button
@@ -611,9 +631,10 @@ export function VaultPage() {
                               data: parsed,
                               cas: kvItem.cas,
                             })
-                              .then(() => {
-                                setNotice('KV 已更新');
-                                setKvItem((cur) => (cur ? { ...cur, cas: cur.cas + 1 } : null));
+                              .then((r) => {
+                                setNotice(kvItem.cas === 0 ? 'Secret 已创建' : 'KV 已更新');
+                                // Vault returns the authoritative version, including after deleted versions.
+                                setKvItem((cur) => (cur ? { ...cur, cas: Number(r.result?.version ?? cur.cas + 1) } : null));
                               })
                               .catch((ex) => setErr(ex.message));
                           } catch {
@@ -665,6 +686,33 @@ export function VaultPage() {
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setShowCreate(false)}>取消</Button>
             <Button type="submit" variant="primary">创建</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={showKVMount} title="启用 KV v2 挂载" onClose={() => setShowKVMount(false)}>
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void apiPost(`/api/v1/vault/${selectedId}/kv/mounts`, kvMountForm)
+              .then(async () => {
+                await loadManage();
+                setKvMount(kvMountForm.path.trim().replace(/^\/+|\/+$/g, ''));
+                setKvItem(null);
+                setKvKeys([]);
+                setKvPath('');
+                setShowKVMount(false);
+                setNotice('KV v2 挂载已启用');
+              })
+              .catch((ex) => setErr(ex.message));
+          }}
+        >
+          <Input label="挂载路径" required value={kvMountForm.path} onChange={(e) => setKvMountForm({ ...kvMountForm, path: e.target.value })} />
+          <Input label="挂载描述" value={kvMountForm.description} onChange={(e) => setKvMountForm({ ...kvMountForm, description: e.target.value })} />
+          <div className="flex justify-end gap-2">
+            <Button type="button" onClick={() => setShowKVMount(false)}>取消</Button>
+            <Button type="submit" variant="primary">启用挂载</Button>
           </div>
         </form>
       </Modal>

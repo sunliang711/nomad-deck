@@ -84,6 +84,12 @@ func TestVaultClusterAPI(t *testing.T) {
 	if code, _ := viewer.do("GET", "/api/v1/vault/"+id+"/kv/item?mount=secret&path=a", nil, nil); code != 403 {
 		t.Fatal("viewer cannot read KV data")
 	}
+	if code, _ := viewer.do("POST", "/api/v1/vault/"+id+"/kv/mounts", map[string]any{"path": "secret"}, nil); code != 403 {
+		t.Fatal("viewer cannot enable KV mounts")
+	}
+	if code, b := root.do("POST", "/api/v1/vault/"+id+"/kv/mounts", map[string]any{"path": "secret"}, nil); code != 409 || errCode(b) != "not_initialized" {
+		t.Fatalf("mount before initialization: %d %v", code, b)
+	}
 	if code, _ := root.do("DELETE", "/api/v1/clusters/"+id, nil, nil); code != 204 {
 		t.Fatal("an undeployed cluster can be deleted")
 	}

@@ -991,6 +991,25 @@ func (a *API) vaultKVMounts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"mounts": ms})
 }
 
+// vaultEnableKVMount creates a KV v2 engine after admin authorization.
+func (a *API) vaultEnableKVMount(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Path        string `json:"path"`
+		Description string `json:"description"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if _, ok := a.vaultCluster(w, r); !ok {
+		return
+	}
+	if err := a.Vault.EnableKVMount(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.Path, in.Description); err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
 func (a *API) vaultKVList(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.vaultCluster(w, r); !ok {
 		return

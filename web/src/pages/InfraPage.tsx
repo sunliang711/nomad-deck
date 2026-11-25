@@ -39,6 +39,7 @@ export function InfraPage() {
   const [dockerNode, setDockerNode] = useState<any>(null);
   const [dockerInfo, setDockerInfo] = useState<any>(null);
   const [dockerVer, setDockerVer] = useState('');
+  const [dockerUseProxy, setDockerUseProxy] = useState(false);
   const [dockerCfg, setDockerCfg] = useState({
     registry_mirrors: '',
     use_system_proxy: false,
@@ -172,6 +173,7 @@ export function InfraPage() {
     try {
       const res = await apiPost(`/api/v1/nodes/${dockerNode.id}/docker/${action}`, {
         version: dockerVer.trim(),
+        use_proxy: dockerUseProxy,
       });
       if (res.task?.id) openTask(res.task.id, `Docker ${action}: ${dockerNode.name}`);
     } catch (ex: any) {
@@ -549,6 +551,10 @@ export function InfraPage() {
                 <Button onClick={() => void runDockerAction('adopt')}>转为托管</Button>
               )}
             </div>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={dockerUseProxy} onChange={(e) => setDockerUseProxy(e.target.checked)} />
+              <span>安装/升级使用系统代理</span>
+            </label>
             <div className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-800">
               <div className="font-semibold">守护进程配置与镜像拉取代理</div>
               <Input

@@ -234,6 +234,25 @@ func (s *Service) KVMounts(ctx context.Context, clusterID string) ([]KVMount, er
 	return out, nil
 }
 
+// EnableKVMount creates a KV v2 engine for secrets managed through the UI.
+func (s *Service) EnableKVMount(ctx context.Context, actor audit.Actor, clusterID, path, description string) error {
+	path = strings.Trim(strings.TrimSpace(path), "/")
+	if len(path) > 255 || !reMountPath.MatchString(path) || len(description) > 500 {
+		return badRequest("KV 挂载路径或描述不合法")
+	}
+	c, cl, err := s.bizClient(ctx, clusterID)
+	if err != nil {
+		return err
+	}
+	err = vaultErr(c.Request(ctx, "POST", "sys/mounts/"+escapePath(path), map[string]any{
+		"type": "kv", "description": description, "options": map[string]string{"version": "2"},
+	}, nil))
+	// Mount metadata is safe to audit; secret values are never included.
+	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "vault.kv_mount_enable", ResourceType: "cluster", ResourceID: clusterID,
+		ResourceName: cl.Name, Summary: map[string]any{"path": path}, Err: err})
+	return err
+}
+
 func (s *Service) kvTarget(ctx context.Context, clusterID, mount, path string, needPath bool) (*Client, *cluster, string, string, bool, error) {
 	mount = strings.Trim(mount, "/")
 	if !reMountPath.MatchString(mount) {

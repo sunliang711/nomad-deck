@@ -485,16 +485,23 @@ func TestServiceSnapshotRestore(t *testing.T) {
 	e.mustSucceed(s.Restore(ctx, testActor, id, imp.ID, RestoreInput{}))
 }
 
+// TestServiceBusinessAndDoctor covers KV creation, CAS and Vault governance.
 func TestServiceBusinessAndDoctor(t *testing.T) {
 	e := newSvcEnv(t, 1)
 	ctx := context.Background()
 	s := e.s
 	id := e.cluster.ID
 	e.mustSucceed(s.Init(ctx, testActor, id, InitInput{KeyShares: 1, KeyThreshold: 1}))
-	clu, _ := s.loadCluster(ctx, s.DB.Reader, id)
-	admin, _, _ := s.adminClient(ctx, clu)
-	if err := admin.Request(ctx, "POST", "sys/mounts/apps/prod/kv", map[string]any{"type": "kv", "options": map[string]any{"version": "2"}}, nil); err != nil {
+	for _, path := range []string{"", "../sys", "apps//kv", "apps/../sys"} {
+		if err := s.EnableKVMount(ctx, testActor, id, path, ""); err == nil {
+			t.Fatalf("invalid mount accepted: %q", path)
+		}
+	}
+	if err := s.EnableKVMount(ctx, testActor, id, "apps/prod/kv", "application secrets"); err != nil {
 		t.Fatal(err)
+	}
+	if err := s.EnableKVMount(ctx, testActor, id, "apps/prod/kv", ""); err == nil {
+		t.Fatal("duplicate mount must be rejected")
 	}
 	mounts, err := s.KVMounts(ctx, id)
 	if err != nil || len(mounts) != 1 || mounts[0].Path != "apps/prod/kv" || mounts[0].Version != 2 {

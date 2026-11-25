@@ -270,6 +270,7 @@ func (a *API) Handler() http.Handler {
 				r.Delete("/vault/{id}/auth", a.vaultDisableAuth)
 				r.Put("/vault/{id}/policies/{name}", a.vaultPutPolicy)
 				r.Delete("/vault/{id}/policies/{name}", a.vaultDeletePolicy)
+				r.Post("/vault/{id}/kv/mounts", a.vaultEnableKVMount)
 				r.Get("/vault/{id}/kv/item", a.vaultKVRead)
 				r.Put("/vault/{id}/kv/item", a.vaultKVWrite)
 				r.Delete("/vault/{id}/kv/item", a.vaultKVDelete)

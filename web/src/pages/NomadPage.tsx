@@ -34,6 +34,9 @@ export function NomadPage() {
   const [cForm, setCForm] = useState({ name: '', mode: 'cluster', region: 'global', datacenter: 'dc1', public_api_url: '', members: [] as Array<{ node_id: string; role: string; advertise_addr: string }> });
   const [deployVer, setDeployVer] = useState('1.11.1');
   const [upVer, setUpVer] = useState('');
+  const [showJoin, setShowJoin] = useState(false);
+  const [joinNodeId, setJoinNodeId] = useState('');
+  const [joinRole, setJoinRole] = useState('server_client');
   const [useProxy, setUseProxy] = useState(false);
   const [snapPass, setSnapPass] = useState('');
   const [snapFile, setSnapFile] = useState<File | null>(null);
@@ -209,7 +212,7 @@ export function NomadPage() {
                 </Card>
               )}
 
-              <Card title="集群成员节点">
+              <Card title="集群成员节点" actions={isAdmin && <Button size="sm" onClick={() => { setJoinNodeId(''); setShowJoin(true); }}>扩容节点</Button>}>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead>
@@ -373,6 +376,34 @@ export function NomadPage() {
           )}
         </div>
       )}
+
+      <Modal open={showJoin} title="扩容 Nomad 节点" onClose={() => setShowJoin(false)}>
+        <form
+          className="space-y-3 text-xs"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { role: joinRole, use_proxy: useProxy })
+              .then((r) => { setShowJoin(false); if (r.task?.id) openTask(r.task.id, '扩容 Nomad 节点'); })
+              .catch((ex) => setErr(ex.message));
+          }}
+        >
+          <ErrorAlert message={err} onClose={() => setErr('')} />
+          <Select label="待加入主机" required value={joinNodeId} onChange={(e) => setJoinNodeId(e.target.value)}>
+            <option value="">选择主机</option>
+            {nodes.filter((n) => !clusterNodes.some((m: any) => m.node_id === n.id)).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.host})</option>)}
+          </Select>
+          <Select label="节点角色" value={joinRole} onChange={(e) => setJoinRole(e.target.value)}>
+            <option value="server_client">server_client</option>
+            <option value="server">server</option>
+            <option value="client">client</option>
+          </Select>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} />使用系统代理</label>
+          <div className="flex justify-end gap-2">
+            <Button type="button" onClick={() => setShowJoin(false)}>取消</Button>
+            <Button type="submit" variant="primary">确认扩容</Button>
+          </div>
+        </form>
+      </Modal>
 
       <Modal open={showCreate} title="新建 Nomad 集群" onClose={() => setShowCreate(false)}>
         <form

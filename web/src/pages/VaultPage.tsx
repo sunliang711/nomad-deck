@@ -42,6 +42,9 @@ export function VaultPage() {
   const [deployVer, setDeployVer] = useState('1.18.3');
   const [useProxy, setUseProxy] = useState(false);
   const [upVer, setUpVer] = useState('');
+  const [showJoin, setShowJoin] = useState(false);
+  const [joinNodeId, setJoinNodeId] = useState('');
+  const [confirmSwap, setConfirmSwap] = useState(false);
   const [snapPass, setSnapPass] = useState('');
   const [snapFile, setSnapFile] = useState<File | null>(null);
   const [pwAction, setPwAction] = useState<{ title: string; run: (pw: string) => Promise<void> } | null>(null);
@@ -286,7 +289,7 @@ export function VaultPage() {
                 )}
               </div>
 
-              <Card title="节点成员状态">
+              <Card title="节点成员状态" actions={isAdmin && <Button size="sm" onClick={() => { setJoinNodeId(''); setConfirmSwap(false); setShowJoin(true); }}>扩容节点</Button>}>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead>
@@ -713,6 +716,31 @@ export function VaultPage() {
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setShowKVMount(false)}>取消</Button>
             <Button type="submit" variant="primary">启用挂载</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={showJoin} title="扩容 Vault 节点" onClose={() => setShowJoin(false)}>
+        <form
+          className="space-y-3 text-xs"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { use_proxy: useProxy, confirm_swap: confirmSwap })
+              .then((r) => { setShowJoin(false); if (r.task?.id) openTask(r.task.id, '扩容 Vault 节点'); })
+              .catch((ex) => setErr(ex.message));
+          }}
+        >
+          <ErrorAlert message={err} onClose={() => setErr('')} />
+          <Select label="待加入主机" required value={joinNodeId} onChange={(e) => setJoinNodeId(e.target.value)}>
+            <option value="">选择主机</option>
+            {nodes.filter((n) => !clusterNodes.some((m: any) => m.node_id === n.id)).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.host})</option>)}
+          </Select>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} />使用系统代理</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={confirmSwap} onChange={(e) => setConfirmSwap(e.target.checked)} />确认未加密 Swap 风险</label>
+          <p className="text-slate-500">加入主机使用集群当前版本，完成 Raft 加入与解封后核对投票成员状态。</p>
+          <div className="flex justify-end gap-2">
+            <Button type="button" onClick={() => setShowJoin(false)}>取消</Button>
+            <Button type="submit" variant="primary">确认扩容</Button>
           </div>
         </form>
       </Modal>

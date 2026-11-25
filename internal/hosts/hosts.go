@@ -477,9 +477,6 @@ func (s *Service) probe(ctx context.Context, n *db.Node) (*TestResult, error) {
 		_ = db.UpdateNodeStatus(ctx, s.DB.Writer, n.ID, "offline", s.DB.Now())
 		return nil, &auth.Error{Status: 502, Code: "probe_failed", Message: "环境探测失败：" + err.Error()}
 	}
-	if p.MachineID != "" && s.LocalMachineID != "" && p.MachineID == s.LocalMachineID {
-		return nil, conflict("control_plane_host", "该主机是 NomadDeck 控制面宿主机本身，不能纳管为集群节点")
-	}
 	if p.MachineID != "" {
 		if other, err := db.GetNodeByMachineID(ctx, s.DB.Reader, p.MachineID); err == nil && other.ID != n.ID {
 			return nil, conflict("duplicate_host", "该主机已以“%s”登记（machine-id 相同）。请为已有主机添加地址别名，而不是重复登记；若为克隆虚拟机，请重新生成 /etc/machine-id", other.Name)
@@ -492,7 +489,13 @@ func (s *Service) probe(ctx context.Context, n *db.Node) (*TestResult, error) {
 		}
 		return nil, err
 	}
-	return &TestResult{Node: n, Probe: p, Warnings: Warnings(n, p)}, nil
+	return &TestResult{Node: n, Probe: p, Warnings: WarningsForHost(n, p, s.IsControlPlaneHost(n))}, nil
+}
+
+// IsControlPlaneHost reports whether n shares the same /etc/machine-id as the
+// NomadDeck control plane host.
+func (s *Service) IsControlPlaneHost(n *db.Node) bool {
+	return s != nil && n != nil && n.MachineID != "" && s.LocalMachineID != "" && n.MachineID == s.LocalMachineID
 }
 
 func applyProbe(n *db.Node, p *sshx.ProbeResult) {
@@ -512,7 +515,18 @@ const MaxClockSkew = 30 * time.Second
 
 // Warnings lists preflight problems found by a probe.
 func Warnings(n *db.Node, p *sshx.ProbeResult) []string {
+	return WarningsForHost(n, p, false)
+}
+
+// WarningsForHost lists preflight problems and co-location cautions found by a probe.
+func WarningsForHost(n *db.Node, p *sshx.ProbeResult, isControlPlaneHost bool) []string {
 	var w []string
+	if isControlPlaneHost {
+		w = append(w, "该主机与 NomadDeck 控制面同机：若控制面以 Docker 容器运行，请勿在本页重启/重装该主机 Docker；加入多节点集群时 advertise_addr 请填写真实内网 IP 而非 127.0.0.1")
+	}
+	if n != nil && (n.Host == "127.0.0.1" || strings.EqualFold(n.Host, "localhost") || n.Host == "::1") {
+		w = append(w, "当前主机 SSH 地址为回环地址，组建跨机集群时成员 advertise_addr 不应使用回环地址")
+	}
 	if !p.SudoReady {
 		w = append(w, "当前用户没有免密 sudo 权限，请在 sudoers 中为该用户配置 NOPASSWD")
 	}

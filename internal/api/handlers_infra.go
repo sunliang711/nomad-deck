@@ -128,6 +128,7 @@ type nodeView struct {
 	MemTotalBytes      int64             `json:"mem_total_bytes"`
 	MemUsedBytes       int64             `json:"mem_used_bytes"`
 	MemPercent         float64           `json:"mem_percent"`
+	IsControlPlaneHost bool              `json:"is_control_plane_host"`
 	Status             string            `json:"status"`
 	LastCheckedAt      any               `json:"last_checked_at"`
 	Labels             map[string]string `json:"labels"`
@@ -136,14 +137,15 @@ type nodeView struct {
 	UpdatedAt          any               `json:"updated_at"`
 }
 
-func nodeOf(n *db.Node) nodeView {
+func (a *API) nodeOf(n *db.Node) nodeView {
 	v := nodeView{ID: n.ID, Name: n.Name, Host: n.Host, SSHPort: n.SSHPort, SSHUser: n.SSHUser, SSHKeyID: n.SSHKeyID,
 		UseSudo: n.UseSudo, SudoReady: n.SudoReady, SELinuxMode: n.SELinuxMode, SwapEnabled: n.SwapEnabled,
 		OSFamily: n.OSFamily, OSCodename: n.OSCodename, PackageManager: n.PackageManager, DockerMode: n.DockerMode,
 		DockerStatus: n.DockerStatus, DockerVersion: n.DockerVersion, MachineID: n.MachineID, TimeSync: n.TimeSync,
 		ClockSkewMS: n.ClockSkewMS, HostKeyFingerprint: n.HostKeyFingerprint, OSInfo: n.OSInfo, Arch: n.Arch,
 		CPUCores: n.CPUCores, CPUPercent: n.CPUPercent, MemTotalBytes: n.MemTotalBytes, MemUsedBytes: n.MemUsedBytes, MemPercent: n.MemPercent,
-		Status: n.Status, LastCheckedAt: fmtTime(n.LastCheckedAt), Notes: n.Notes,
+		IsControlPlaneHost: a.Hosts.IsControlPlaneHost(n),
+		Status:             n.Status, LastCheckedAt: fmtTime(n.LastCheckedAt), Notes: n.Notes,
 		CreatedAt: fmtTime(n.CreatedAt), UpdatedAt: fmtTime(n.UpdatedAt)}
 	_ = json.Unmarshal([]byte(n.AddressAliasesJSON), &v.AddressAliases)
 	_ = json.Unmarshal([]byte(n.LabelsJSON), &v.Labels)
@@ -161,7 +163,7 @@ func (a *API) listNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]nodeView, 0, len(nodes))
 	for _, n := range nodes {
-		out = append(out, nodeOf(n))
+		out = append(out, a.nodeOf(n))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": out})
 }
@@ -180,7 +182,7 @@ func (a *API) getNode(w http.ResponseWriter, r *http.Request) {
 	if !json.Valid(probe) {
 		probe = []byte("{}")
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"node": nodeOf(n), "probe": probe})
+	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(n), "probe": probe})
 }
 
 func (a *API) createNode(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +195,7 @@ func (a *API) createNode(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"node": nodeOf(n)})
+	writeJSON(w, http.StatusCreated, map[string]any{"node": a.nodeOf(n)})
 }
 
 func (a *API) updateNode(w http.ResponseWriter, r *http.Request) {
@@ -206,7 +208,7 @@ func (a *API) updateNode(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"node": nodeOf(n)})
+	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(n)})
 }
 
 func (a *API) deleteNode(w http.ResponseWriter, r *http.Request) {
@@ -253,7 +255,7 @@ func (a *API) testNode(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"node": nodeOf(res.Node), "probe": res.Probe, "warnings": res.Warnings})
+	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(res.Node), "probe": res.Probe, "warnings": res.Warnings})
 }
 
 func (a *API) refreshNodeMetrics(w http.ResponseWriter, r *http.Request) {
@@ -262,7 +264,7 @@ func (a *API) refreshNodeMetrics(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"node": nodeOf(n)})
+	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(n)})
 }
 
 func (a *API) refreshAllNodeMetrics(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +280,7 @@ func (a *API) refreshAllNodeMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]nodeView, 0, len(nodes))
 	for _, n := range nodes {
-		out = append(out, nodeOf(n))
+		out = append(out, a.nodeOf(n))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": out, "ok": okCount, "failed": failCount})
 }

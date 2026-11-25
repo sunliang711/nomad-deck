@@ -3,7 +3,7 @@ import { Activity, Copy, KeyRound, Plus, RefreshCw, Server as ServerIcon, Trash2
 import { apiDelete, apiGet, apiPost, apiPut, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, PasswordConfirmModal, SecretInput, SectionTabs, Select, TermLabel, statusTone } from '../components/UI';
+import { Badge, Button, Card, EmptyState, ErrorAlert, InfoTip, Input, Modal, PasswordConfirmModal, SecretInput, SectionTabs, Select, TermLabel, statusTone } from '../components/UI';
 
 export function InfraPage() {
   const { isAdmin } = useAuth();
@@ -353,9 +353,15 @@ export function InfraPage() {
                     return (
                     <tr key={n.id}>
                       <td className="py-2.5 pr-3">
-                        <div className="flex items-center gap-1.5 font-medium">
+                        <div className="flex flex-wrap items-center gap-1.5 font-medium">
                           <ServerIcon className="h-3.5 w-3.5 text-slate-400" />
                           <span>{n.name}</span>
+                          {n.is_control_plane_host && (
+                            <span className="inline-flex items-center gap-0.5">
+                              <Badge tone="amber">控制面同机</Badge>
+                              <InfoTip text="该主机与 NomadDeck 控制面同机：若控制面运行在 Docker 容器中，请勿在本页重装或重启 Docker；组成多节点集群时 advertise_addr 请填写真实内网 IP 而非 127.0.0.1。" />
+                            </span>
+                          )}
                         </div>
                         <div className="font-mono text-slate-500">
                           {n.ssh_user}@{n.host}:{n.ssh_port}

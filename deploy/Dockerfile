@@ -17,9 +17,11 @@ RUN rm -rf ./internal/ui/dist
 COPY --from=web-builder /src/internal/ui/dist ./internal/ui/dist
 ARG VERSION=dev
 ARG COMMIT=none
+ARG BUILD_DATE=
 ARG REPO=
 ARG RELEASE_PUBKEY=
 RUN LDFLAGS="-s -w -X nomad-deck/internal/version.Version=${VERSION} -X nomad-deck/internal/version.Commit=${COMMIT}" \
+  && if [ -n "${BUILD_DATE}" ]; then LDFLAGS="${LDFLAGS} -X nomad-deck/internal/version.BuildDate=${BUILD_DATE}"; fi \
   && if [ -n "${REPO}" ]; then LDFLAGS="${LDFLAGS} -X nomad-deck/internal/version.Repo=${REPO}"; fi \
   && if [ -n "${RELEASE_PUBKEY}" ]; then LDFLAGS="${LDFLAGS} -X nomad-deck/internal/version.ReleasePublicKey=${RELEASE_PUBKEY}"; fi \
   && CGO_ENABLED=0 go build -trimpath -ldflags "${LDFLAGS}" -o /out/nomad-deck ./cmd/nomad-deck

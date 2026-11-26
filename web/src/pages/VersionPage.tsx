@@ -1,31 +1,35 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, Clock, Loader2, RefreshCw, RotateCcw, UploadCloud, XCircle } from 'lucide-react';
-import { apiDelete, apiGet, apiPost, apiPut, fmtTime, openSSE } from '../lib/api';
+import { Link } from 'react-router-dom';
+import { Loader2, RefreshCw, RotateCcw } from 'lucide-react';
+import { api, apiDelete, apiGet, apiPost, apiPut, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
-import { useToast } from '../components/Toast';
+import {
+  formatDurationZh,
+  upgradeStage,
+  VersionCheckTimeoutError,
+  waitForVersion,
+  type UpgradeStage,
+} from '../lib/selfUpdate';
+import { useTaskProgress } from '../lib/useTaskProgress';
 import { useConfirm } from '../components/ConfirmDialog';
-import { Badge, Button, Card, ErrorAlert, Input, Modal, PageHeader, StatusBadge } from '../components/UI';
+import { ScheduleModal } from '../components/ScheduleModal';
+import { useToast } from '../components/Toast';
+import { UpgradeProgress } from '../components/UpgradeProgress';
+import { Badge, Button, Card, ErrorAlert, Modal, PageHeader, StatusBadge } from '../components/UI';
 
-type UpgradeStage = 'resolve' | 'download' | 'verify' | 'install' | 'restart' | 'confirm' | 'done';
-type UpdatePhase = 'idle' | 'submitting' | 'unknown' | 'updating' | 'restarting' | 'verifying' | 'complete' | 'failed' | 'timeout';
+type UpdatePhase =
+  | 'idle'
+  | 'submitting'
+  | 'unknown'
+  | 'updating'
+  | 'restarting'
+  | 'verifying'
+  | 'complete'
+  | 'failed'
+  | 'timeout';
 
-interface DownloadProgress {
-  stage: string;
-  done?: number;
-  total?: number;
-}
-
-const UPGRADE_STEPS: Array<{ key: Exclude<UpgradeStage, 'done'>; title: string; detail: string }> = [
-  { key: 'resolve', title: '查找版本', detail: '查询 GitHub Release 并核对当前平台程序包' },
-  { key: 'download', title: '下载程序包', detail: '下载对应架构归档与 SHA256 校验文件' },
-  { key: 'verify', title: '安全校验与试运行', detail: '验证 Ed25519 签名、SHA-256 与试运行新版本' },
-  { key: 'install', title: '备份数据库并切换版本', detail: '在线备份数据文件并原子切换可执行软链' },
-  { key: 'restart', title: '重启控制面服务', detail: '页面会短暂断开，托管中的 Nomad / Vault 集群不受影响' },
-  { key: 'confirm', title: '确认新版本', detail: '等待重启后的控制面报告目标版本号' },
-];
-
-const mib = (bytes: number) => `${(bytes / (1 << 20)).toFixed(1)} MiB`;
+const hasTime = (value?: string | null) => Boolean(value && !value.startsWith('0001'));
 
 export function VersionPage() {
   const { isAdmin } = useAuth();
@@ -34,300 +38,258 @@ export function VersionPage() {
   const askConfirm = useConfirm();
 
   const [info, setInfo] = useState<any>(null);
-  const [schedule, setSchedule] = useState<any>(null);
   const [useProxy, setUseProxy] = useState(false);
-  const [targetVer, setTargetVer] = useState('latest');
-  const [waitSec, setWaitSec] = useState(300);
-  const [intervalSec, setIntervalSec] = useState(20);
   const [checking, setChecking] = useState(false);
-  const [schedBusy, setSchedBusy] = useState(false);
-  const [cancelingSched, setCancelingSched] = useState(false);
+  const [checkError, setCheckError] = useState('');
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const [rollbackBusy, setRollbackBusy] = useState(false);
-  const [err, setErr] = useState('');
   const [nowMs, setNowMs] = useState(() => Date.now());
 
-  // 立即更新向导（参考 proxystack-web UpgradeProgress 体验）
+  // 预约升级状态
+  const [schedule, setSchedule] = useState<any>(null);
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [scheduleError, setScheduleError] = useState('');
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [scheduleUnreachable, setScheduleUnreachable] = useState(false);
+
+  // 立即更新 / 回退模态窗状态
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
+  const [updateError, setUpdateError] = useState('');
   const [updateTarget, setUpdateTarget] = useState('');
   const [updateTaskId, setUpdateTaskId] = useState('');
-  const [updateError, setUpdateError] = useState('');
   const [lastStage, setLastStage] = useState<UpgradeStage>('resolve');
-  const [progress, setProgress] = useState<DownloadProgress | null>(null);
-  const [downloadSpeed, setDownloadSpeed] = useState(0);
 
-  const speedSampleRef = useRef<{ at: number; done: number } | null>(null);
-  const sseCloseRef = useRef<(() => void) | null>(null);
-  const pollStopRef = useRef<(() => void) | null>(null);
+  const submitCtrlRef = useRef<AbortController | null>(null);
+  const probeCtrlRef = useRef<AbortController | null>(null);
+  const reloadTimerRef = useRef<number | undefined>(undefined);
+  const scheduleReloadTimerRef = useRef<number | undefined>(undefined);
+  const prevScheduleActiveRef = useRef(false);
+  const scheduleStatusRef = useRef('');
+  scheduleStatusRef.current = schedule?.status || '';
 
-  const load = useCallback(
-    async (refresh = false, proxy?: boolean) => {
-      if (refresh) setChecking(true);
-      setErr('');
+  const scheduleActive = schedule?.status === 'waiting' || schedule?.status === 'upgrading';
+  const scheduleFinished = Boolean(schedule && !scheduleActive && schedule.status !== 'idle');
+
+  const clearUpgradeSchedule = useCallback(async () => {
+    try {
+      const r = await apiDelete('/api/v1/system/self-update/schedule');
+      if (r?.schedule) setSchedule(r.schedule);
+    } catch {
+      // 清除已结束预约失败时不阻断后续检查操作。
+    }
+  }, []);
+
+  const checkUpdate = useCallback(
+    async (proxyOverride?: boolean, clearFinished = false) => {
+      setChecking(true);
+      setCheckError('');
+      if (clearFinished && isAdmin) {
+        await clearUpgradeSchedule();
+      }
       try {
-        const q = new URLSearchParams();
-        if (refresh) q.set('refresh', 'true');
-        if (proxy !== undefined) q.set('use_proxy', String(proxy));
-        const [vRes, sRes] = await Promise.all([
-          apiGet(`/api/v1/system/version${q.toString() ? `?${q.toString()}` : ''}`),
-          apiGet('/api/v1/system/self-update/schedule'),
-        ]);
-        setInfo(vRes.system);
-        setSchedule(sRes.schedule);
-        if (refresh) toast.success('版本检查已完成');
+        const q = new URLSearchParams({ refresh: 'true' });
+        if (proxyOverride !== undefined) q.set('use_proxy', String(proxyOverride));
+        const res = await apiGet(`/api/v1/system/version?${q.toString()}`);
+        setInfo(res.system);
+        setCheckedAt(new Date());
       } catch (ex: any) {
-        setErr(ex?.message || '获取版本信息失败');
+        setCheckedAt(new Date());
+        setCheckError(ex?.message || '检查新版本失败');
       } finally {
-        if (refresh) setChecking(false);
+        setChecking(false);
       }
     },
-    [toast],
+    [clearUpgradeSchedule, isAdmin],
   );
 
-  useEffect(() => {
-    void load(false);
-    void apiGet('/api/v1/settings')
-      .then((r) => setUseProxy(Boolean(r.settings?.['proxy.use_for_self_update'])))
-      .catch(() => {});
-  }, [load]);
+  const loadSchedule = useCallback(async () => {
+    try {
+      const res = await apiGet('/api/v1/system/self-update/schedule');
+      setScheduleUnreachable(false);
+      const next = res.schedule;
+      const wasActive = prevScheduleActiveRef.current;
+      prevScheduleActiveRef.current = next?.status === 'waiting' || next?.status === 'upgrading';
+      setSchedule(next);
+      if (wasActive && next?.status === 'completed' && scheduleReloadTimerRef.current === undefined) {
+        scheduleReloadTimerRef.current = window.setTimeout(() => window.location.reload(), 1200);
+      }
+      return next;
+    } catch {
+      setScheduleUnreachable(scheduleStatusRef.current === 'upgrading');
+      return undefined;
+    }
+  }, []);
 
+  // 页面加载：读取系统信息、代理偏好和预约状态；若当前无进行中的预约，自动检查一次新版本。
   useEffect(() => {
-    if (schedule?.status !== 'waiting' && schedule?.status !== 'upgrading') return;
+    let mounted = true;
+    void (async () => {
+      try {
+        const [vRes, sRes, setRes] = await Promise.all([
+          apiGet('/api/v1/system/version'),
+          apiGet('/api/v1/system/self-update/schedule'),
+          apiGet('/api/v1/settings').catch(() => ({ settings: {} })),
+        ]);
+        if (!mounted) return;
+        setInfo(vRes.system);
+        if (vRes.system?.latest?.checked_at) {
+          const parsed = new Date(vRes.system.latest.checked_at);
+          if (!Number.isNaN(parsed.getTime())) setCheckedAt(parsed);
+        }
+        const sc = sRes.schedule;
+        setSchedule(sc);
+        const activeNow = sc?.status === 'waiting' || sc?.status === 'upgrading';
+        prevScheduleActiveRef.current = activeNow;
+        setUseProxy(Boolean(setRes?.settings?.['proxy.use_for_self_update']));
+        if (!activeNow) {
+          void checkUpdate();
+        }
+      } catch (ex: any) {
+        if (mounted) setCheckError(ex?.message || '获取版本信息失败');
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+    // 仅在挂载时初始化加载一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 预约等待/升级期间每秒推进倒计时，每 5 秒同步后台预约状态。
+  useEffect(() => {
+    if (!scheduleActive) return;
     const tick = window.setInterval(() => setNowMs(Date.now()), 1000);
     const poll = window.setInterval(() => {
-      void apiGet('/api/v1/system/self-update/schedule')
-        .then((r) => setSchedule(r.schedule))
-        .catch(() => {});
+      void loadSchedule();
     }, 5000);
     return () => {
       window.clearInterval(tick);
       window.clearInterval(poll);
     };
-  }, [schedule?.status]);
+  }, [loadSchedule, scheduleActive]);
 
   useEffect(
     () => () => {
-      sseCloseRef.current?.();
-      pollStopRef.current?.();
+      submitCtrlRef.current?.abort();
+      submitCtrlRef.current = null;
+      probeCtrlRef.current?.abort();
+      probeCtrlRef.current = null;
+      if (reloadTimerRef.current !== undefined) window.clearTimeout(reloadTimerRef.current);
+      if (scheduleReloadTimerRef.current !== undefined) window.clearTimeout(scheduleReloadTimerRef.current);
     },
     [],
   );
 
-  const handleToggleProxy = async (next: boolean) => {
-    setUseProxy(next);
-    if (!isAdmin) return;
-    try {
-      await apiPut('/api/v1/settings', { 'proxy.use_for_self_update': next });
-      toast.success(next ? '已保存：自更新与版本检查默认走代理' : '已保存：自更新与版本检查直连');
-    } catch (ex: any) {
-      toast.error(ex?.message || '保存代理设置失败');
-    }
-  };
+  const stopUpdateMonitor = useCallback(() => {
+    probeCtrlRef.current?.abort();
+    probeCtrlRef.current = null;
+  }, []);
+
+  const startUpdateMonitor = useCallback(
+    (targetVersion: string) => {
+      stopUpdateMonitor();
+      const ctrl = new AbortController();
+      probeCtrlRef.current = ctrl;
+      void waitForVersion({
+        targetVersion,
+        signal: ctrl.signal,
+        probe: async (signal) => {
+          const resp = await fetch('/api/v1/system/version', { credentials: 'same-origin', signal });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const json = await resp.json();
+          const cur = json?.system?.current_version;
+          if (!cur) throw new Error('system version unavailable');
+          return cur;
+        },
+        onReachable: () => {
+          setUpdatePhase((prev) => (prev === 'restarting' ? 'verifying' : prev));
+        },
+        onUnavailable: () => {
+          setUpdatePhase((prev) => (prev !== 'complete' ? 'restarting' : prev));
+        },
+      })
+        .then(() => {
+          if (probeCtrlRef.current !== ctrl) return;
+          probeCtrlRef.current = null;
+          setUpdatePhase('complete');
+          reloadTimerRef.current = window.setTimeout(() => window.location.reload(), 1200);
+        })
+        .catch((cause) => {
+          if (ctrl.signal.aborted || probeCtrlRef.current !== ctrl) return;
+          probeCtrlRef.current = null;
+          if (cause instanceof VersionCheckTimeoutError) {
+            setUpdateError(`等待 ${targetVersion} 启动超时，请检查服务状态后手动刷新页面`);
+            setUpdatePhase('timeout');
+          } else {
+            setUpdateError('检查更新结果失败，请手动刷新页面');
+            setUpdatePhase('failed');
+          }
+        });
+    },
+    [stopUpdateMonitor],
+  );
+
+  // 立即更新模态窗的任务进度订阅
+  const updateTask = useTaskProgress(updateTaskId || null, {
+    onRestartStage: () => {
+      if (!updateTarget) return;
+      setUpdatePhase('restarting');
+      startUpdateMonitor(updateTarget);
+    },
+    onDone: (status, errMsg) => {
+      if (updatePhase === 'complete') return;
+      if (status && status !== 'success' && status !== 'succeeded') {
+        stopUpdateMonitor();
+        setUpdateError(errMsg || '更新任务失败，请查看任务日志');
+        setUpdatePhase('failed');
+      } else if (updateTarget) {
+        setUpdatePhase('restarting');
+        startUpdateMonitor(updateTarget);
+      }
+    },
+    onError: (stageWhenClosed) => {
+      if ((stageWhenClosed === 'restart' || stageWhenClosed === 'install') && updateTarget) {
+        setUpdatePhase('restarting');
+        startUpdateMonitor(updateTarget);
+      }
+    },
+  });
+
+  // 预约升级自动进入 upgrading 时的内联进度订阅
+  const scheduleTaskId = schedule?.status === 'upgrading' ? schedule.task_id || null : null;
+  const scheduleTask = useTaskProgress(scheduleTaskId, {
+    onDone: () => {
+      void loadSchedule();
+    },
+  });
 
   const liveStage: UpgradeStage = useMemo(() => {
-    if (updatePhase === 'restarting') return 'restart';
-    if (updatePhase === 'verifying') return 'confirm';
-    if (updatePhase === 'complete') return 'done';
-    if (updatePhase === 'timeout') return 'confirm';
-    if (updatePhase === 'updating') {
-      const s = progress?.stage;
-      if (s === 'resolve' || s === 'download' || s === 'verify' || s === 'install' || s === 'restart') {
-        return s;
-      }
-      return 'resolve';
+    switch (updatePhase) {
+      case 'updating':
+        return upgradeStage(updateTask.progress?.stage) ?? 'resolve';
+      case 'restarting':
+        return 'restart';
+      case 'verifying':
+        return 'confirm';
+      case 'complete':
+        return 'done';
+      case 'timeout':
+        return 'confirm';
+      default:
+        return 'resolve';
     }
-    return 'resolve';
-  }, [progress?.stage, updatePhase]);
+  }, [updatePhase, updateTask.progress?.stage]);
 
   useEffect(() => {
     if (updatePhase !== 'failed') setLastStage(liveStage);
   }, [liveStage, updatePhase]);
 
   const effectiveStage = updatePhase === 'failed' ? lastStage : liveStage;
-
-  const startVersionProbe = useCallback((expectedVersion: string) => {
-    pollStopRef.current?.();
-    let cancelled = false;
-    const deadline = Date.now() + 5 * 60 * 1000;
-    const norm = (v: string) => v.trim().replace(/^v/, '');
-
-    const timer = window.setInterval(async () => {
-      if (cancelled) return;
-      if (Date.now() > deadline) {
-        window.clearInterval(timer);
-        setUpdateError(`等待 ${expectedVersion || '新版本'} 启动超时（5 分钟），请检查服务状态后刷新页面`);
-        setUpdatePhase('timeout');
-        return;
-      }
-      try {
-        const res = await fetch('/api/v1/system/version', { credentials: 'same-origin' });
-        if (!res.ok) return;
-        const j = await res.json();
-        const cur = j?.system?.current_version;
-        if (!cur) return;
-        setUpdatePhase((prev) => (prev === 'restarting' ? 'verifying' : prev));
-        if (!expectedVersion || norm(cur) === norm(expectedVersion)) {
-          window.clearInterval(timer);
-          setUpdatePhase('complete');
-          window.setTimeout(() => window.location.reload(), 1200);
-        }
-      } catch {
-        // 控制面正在退出重启时连接报错是正常的。
-        setUpdatePhase((prev) => (prev === 'verifying' ? 'restarting' : prev));
-      }
-    }, 1500);
-
-    pollStopRef.current = () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  const attachUpdateStream = useCallback(
-    (taskId: string, expectedVersion: string) => {
-      sseCloseRef.current?.();
-      let handedOver = false;
-      const close = openSSE(`/api/v1/operations/${taskId}/stream`, {
-        onEvent: (ev, data) => {
-          if (ev === 'progress' && data?.progress) {
-            const p = data.progress as DownloadProgress;
-            if (p.stage === 'download' && typeof p.done === 'number') {
-              const now = Date.now();
-              const prev = speedSampleRef.current;
-              if (prev && p.done > prev.done && now > prev.at) {
-                const instant = ((p.done - prev.done) * 1000) / (now - prev.at);
-                setDownloadSpeed((s) => (s ? s * 0.6 + instant * 0.4 : instant));
-              }
-              speedSampleRef.current = { at: now, done: p.done };
-            }
-            if (p.stage === 'restart') {
-              handedOver = true;
-              setUpdatePhase('restarting');
-              startVersionProbe(expectedVersion);
-            }
-            setProgress(p);
-          } else if (ev === 'done' && data) {
-            close();
-            if (data.status === 'failed' || data.status === 'cancelled') {
-              setUpdateError(data.error || '自更新任务失败，请查看任务日志');
-              setUpdatePhase('failed');
-            } else {
-              handedOver = true;
-              setUpdatePhase('restarting');
-              startVersionProbe(expectedVersion);
-            }
-          }
-        },
-        onError: () => {
-          if (handedOver || lastStage === 'restart' || lastStage === 'install') {
-            setUpdatePhase('restarting');
-            startVersionProbe(expectedVersion);
-          }
-        },
-      });
-      sseCloseRef.current = close;
-    },
-    [lastStage, startVersionProbe],
-  );
-
-  const startUpgrade = async () => {
-    const ver = targetVer.trim() || 'latest';
-    const displayTarget = ver === 'latest' && info?.latest?.version ? info.latest.version : ver;
-    if (
-      !(await askConfirm(`确认立即原地升级控制面到 ${displayTarget} 吗？升级前会自动备份数据库，重启期间页面将短暂断开。`, {
-        title: '发起控制面自更新',
-        confirmText: '确认升级',
-      }))
-    ) {
-      return;
-    }
-    setErr('');
-    setUpdateError('');
-    setUpdateTaskId('');
-    setProgress(null);
-    setDownloadSpeed(0);
-    speedSampleRef.current = null;
-    setLastStage('resolve');
-    setUpdateTarget(displayTarget);
-    setUpdatePhase('submitting');
-
-    try {
-      const res = await apiPost('/api/v1/system/self-update', {
-        target_version: ver,
-        use_proxy: useProxy,
-      });
-      const tid = res.task?.id || '';
-      const resolvedExpected =
-        ver === 'latest' ? info?.latest?.version || '' : ver.startsWith('v') ? ver : `v${ver}`;
-      setUpdateTaskId(tid);
-      setUpdatePhase('updating');
-      if (tid) {
-        attachUpdateStream(tid, resolvedExpected);
-      } else {
-        setUpdatePhase('restarting');
-        startVersionProbe(resolvedExpected);
-      }
-    } catch (ex: any) {
-      if (ex instanceof TypeError) {
-        setUpdatePhase('unknown');
-      } else {
-        setUpdateError(ex?.message || '发起自更新失败');
-        setUpdatePhase('failed');
-      }
-    }
-  };
-
-  const createSchedule = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErr('');
-    setSchedBusy(true);
-    try {
-      const res = await apiPost('/api/v1/system/self-update/schedule', {
-        target_version: targetVer.trim() || 'latest',
-        wait_seconds: Number(waitSec),
-        interval_seconds: Number(intervalSec),
-        use_proxy: useProxy,
-      });
-      setSchedule(res.schedule);
-      toast.success('已创建预约升级计划');
-    } catch (ex: any) {
-      toast.error(ex?.message || '创建预约升级失败');
-    } finally {
-      setSchedBusy(false);
-    }
-  };
-
-  const manualRollback = async () => {
-    const target = info?.manual_rollback?.target_version;
-    if (
-      !(await askConfirm(`确认将控制面回退到上一版本 ${target} 吗？`, {
-        title: '确认版本回退',
-        confirmText: '确认回退',
-        danger: true,
-      }))
-    ) {
-      return;
-    }
-    setErr('');
-    setRollbackBusy(true);
-    try {
-      const res = await apiPost('/api/v1/system/self-update/rollback');
-      setUpdateError('');
-      setUpdateTarget(target || '上一版本');
-      setUpdateTaskId(res.task?.id || '');
-      setProgress(null);
-      setLastStage('restart');
-      setUpdatePhase('restarting');
-      if (target) startVersionProbe(target);
-    } catch (ex: any) {
-      toast.error(ex?.message || '回退失败');
-    } finally {
-      setRollbackBusy(false);
-    }
-  };
-
-  const modalVisible = updatePhase !== 'idle';
-  const modalClosable = ['failed', 'timeout', 'unknown'].includes(updatePhase);
-  const modalTitle = {
+  const updateBusy = !['idle', 'failed', 'timeout'].includes(updatePhase);
+  const updateModalVisible = updatePhase !== 'idle';
+  const updateModalClosable = ['failed', 'timeout', 'unknown'].includes(updatePhase);
+  const updateModalTitle = {
     idle: '',
     submitting: `更新到 ${updateTarget}`,
     unknown: '更新状态待确认',
@@ -339,17 +301,174 @@ export function VersionPage() {
     timeout: '确认更新超时',
   }[updatePhase];
 
-  const activeStepIdx =
-    effectiveStage === 'done'
-      ? UPGRADE_STEPS.length
-      : Math.max(0, UPGRADE_STEPS.findIndex((s) => s.key === effectiveStage));
+  const handleToggleProxy = async (next: boolean) => {
+    setUseProxy(next);
+    if (!isAdmin) return;
+    try {
+      await apiPut('/api/v1/settings', { 'proxy.use_for_self_update': next });
+      toast.success(next ? '已保存：版本检查与自更新走系统代理' : '已保存：版本检查与自更新直连');
+    } catch (ex: any) {
+      toast.error(ex?.message || '保存代理设置失败');
+    }
+  };
 
-  const downloadPercent =
-    progress?.stage === 'download' && progress.total && progress.total > 0
-      ? Math.min(100, Math.round(((progress.done || 0) / progress.total) * 100))
-      : null;
+  const runImmediateUpdate = async () => {
+    const latestVer = info?.latest?.version;
+    if (!info?.update_available || !latestVer || updateBusy) return;
+    if (scheduleActive) {
+      setCheckError('请先取消正在进行的预约升级');
+      return;
+    }
+    if (!info.available) {
+      setCheckError(info.unavailable_reason || '当前环境不支持原地自更新');
+      return;
+    }
+    const ok = await askConfirm(
+      `下载并校验 ${latestVer} 后将自动备份数据库、替换程序并重启控制面，页面会短暂断开，托管中的 Nomad / Vault 集群不受影响。继续？`,
+      { title: `更新到 ${latestVer}`, confirmText: '立即更新' },
+    );
+    if (!ok) return;
 
-  const schedWaitPercent = useMemo(() => {
+    setCheckError('');
+    setUpdateError('');
+    setUpdateTarget(latestVer);
+    setUpdateTaskId('');
+    setLastStage('resolve');
+    setUpdatePhase('submitting');
+
+    const ctrl = new AbortController();
+    submitCtrlRef.current = ctrl;
+    try {
+      const res = await api('/api/v1/system/self-update', {
+        method: 'POST',
+        body: JSON.stringify({ target_version: latestVer, use_proxy: useProxy }),
+        signal: ctrl.signal,
+      });
+      if (submitCtrlRef.current !== ctrl) return;
+      submitCtrlRef.current = null;
+      const tid = res?.task?.id || '';
+      setUpdateTaskId(tid);
+      setUpdatePhase('updating');
+    } catch (ex: any) {
+      if (ctrl.signal.aborted || submitCtrlRef.current !== ctrl) return;
+      submitCtrlRef.current = null;
+      if (ex instanceof TypeError) {
+        setUpdatePhase('unknown');
+      } else {
+        setUpdateError(ex?.message || '发起更新失败');
+        setUpdatePhase('failed');
+      }
+    }
+  };
+
+  const handleCreateSchedule = async (payload: {
+    target_version: string;
+    wait_seconds: number;
+    interval_seconds: number;
+  }) => {
+    setScheduleBusy(true);
+    setScheduleError('');
+    try {
+      const res = await apiPost('/api/v1/system/self-update/schedule', {
+        ...payload,
+        use_proxy: useProxy,
+      });
+      setSchedule(res.schedule);
+      prevScheduleActiveRef.current = true;
+      setScheduleModalOpen(false);
+    } catch (ex: any) {
+      setScheduleError(ex?.message || '预约升级失败');
+    } finally {
+      setScheduleBusy(false);
+    }
+  };
+
+  const handleCancelSchedule = async () => {
+    setScheduleBusy(true);
+    try {
+      const res = await apiDelete('/api/v1/system/self-update/schedule');
+      setSchedule(res.schedule);
+      prevScheduleActiveRef.current = false;
+    } catch (ex: any) {
+      setCheckError(ex?.message || '取消预约升级失败');
+    } finally {
+      setScheduleBusy(false);
+    }
+  };
+
+  const handleManualRollback = async () => {
+    const target = info?.manual_rollback?.target_version;
+    if (!target) return;
+    const ok = await askConfirm(`确认将控制面回退到上一版本 ${target} 吗？`, {
+      title: '确认版本回退',
+      confirmText: '确认回退',
+      danger: true,
+    });
+    if (!ok) return;
+
+    setRollbackBusy(true);
+    try {
+      const res = await apiPost('/api/v1/system/self-update/rollback');
+      setUpdateError('');
+      setUpdateTarget(target);
+      setUpdateTaskId(res?.task?.id || '');
+      setLastStage('restart');
+      setUpdatePhase('restarting');
+      startUpdateMonitor(target);
+    } catch (ex: any) {
+      toast.error(ex?.message || '版本回退失败');
+    } finally {
+      setRollbackBusy(false);
+    }
+  };
+
+  const closeUpdateModal = () => {
+    if (!updateModalClosable) return;
+    stopUpdateMonitor();
+    setUpdatePhase('idle');
+    setUpdateError('');
+  };
+
+  // 预约状态展示视图（对齐 proxystack-web SystemView.vue）
+  const scheduleStage: UpgradeStage = scheduleUnreachable
+    ? 'restart'
+    : upgradeStage(scheduleTask.progress?.stage) ?? 'resolve';
+
+  const scheduleView = useMemo(() => {
+    if (!schedule) return { border: 'border-l-indigo-500', tone: 'blue' as const, label: '' };
+    const isLatest = schedule.target_version === 'latest';
+    const ver = schedule.resolved_version || schedule.target_version;
+    switch (schedule.status) {
+      case 'waiting':
+        return {
+          border: 'border-l-indigo-500',
+          tone: 'blue' as const,
+          label: isLatest ? '等待新版本发布' : `等待 ${schedule.target_version} 发布`,
+        };
+      case 'upgrading':
+        return {
+          border: 'border-l-indigo-500',
+          tone: 'blue' as const,
+          label: `正在升级到 ${ver}`,
+        };
+      case 'completed':
+        return {
+          border: 'border-l-emerald-500',
+          tone: 'green' as const,
+          label: `已升级到 ${ver}`,
+        };
+      case 'timed_out':
+        return isLatest
+          ? { border: 'border-l-indigo-500', tone: 'blue' as const, label: '等待结束，没有发布新版本' }
+          : { border: 'border-l-amber-500', tone: 'amber' as const, label: `等待结束，${schedule.target_version} 没有发布` };
+      case 'cancelled':
+        return { border: 'border-l-slate-400', tone: 'neutral' as const, label: '已取消' };
+      default:
+        return { border: 'border-l-rose-500', tone: 'red' as const, label: '升级失败' };
+    }
+  }, [schedule]);
+
+  const scheduleWaitPercent = useMemo(() => {
     if (!schedule || schedule.status !== 'waiting') return 0;
     const start = Date.parse(schedule.created_at);
     const end = Date.parse(schedule.deadline_at);
@@ -357,159 +476,306 @@ export function VersionPage() {
     return Math.min(100, Math.max(0, Math.round(((nowMs - start) / (end - start)) * 100)));
   }, [nowMs, schedule]);
 
-  const schedRemainSec = schedule?.deadline_at
-    ? Math.max(0, Math.round((Date.parse(schedule.deadline_at) - nowMs) / 1000))
-    : 0;
+  const scheduleRemaining = useMemo(() => {
+    if (!schedule?.deadline_at) return '0 秒';
+    const sec = Math.max(0, Math.round((Date.parse(schedule.deadline_at) - nowMs) / 1000));
+    return formatDurationZh(sec);
+  }, [nowMs, schedule?.deadline_at]);
+
+  const scheduleNextCheck = useMemo(() => {
+    if (!schedule?.next_check_at) return '';
+    const next = Date.parse(schedule.next_check_at);
+    if (!Number.isFinite(next) || next <= 0) return '';
+    const sec = Math.round((next - nowMs) / 1000);
+    return sec > 0 ? `${sec} 秒后` : '马上';
+  }, [nowMs, schedule?.next_check_at]);
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="版本与升级"
-        subtitle="检查 NomadDeck 官方 Release 更新、实时进度自更新或预约升级与版本回退"
-        actions={
-          <Button onClick={() => void load(true, useProxy)} loading={checking}>
-            {!checking && <RefreshCw className="h-4 w-4" />}
-            <span>{checking ? '检查中...' : '检查更新'}</span>
-          </Button>
-        }
+        subtitle="检查 NomadDeck 控制面 Release 更新、实时进度升级、预约升级或回退上一版本"
       />
 
-      <ErrorAlert message={err} onClose={() => setErr('')} />
+      <Card title="系统信息">
+        {info ? (
+          <dl className="divide-y divide-slate-100 dark:divide-slate-800 text-xs sm:text-sm">
+            <div className="grid grid-cols-[100px_1fr] sm:grid-cols-[130px_1fr] py-2 gap-3">
+              <dt className="text-slate-500 dark:text-slate-400">提交</dt>
+              <dd className="font-mono text-slate-800 dark:text-slate-200">{info.commit || 'dev'}</dd>
+            </div>
+            <div className="grid grid-cols-[100px_1fr] sm:grid-cols-[130px_1fr] py-2 gap-3">
+              <dt className="text-slate-500 dark:text-slate-400">构建时间</dt>
+              <dd className="font-mono text-slate-800 dark:text-slate-200">{info.build_date || '-'}</dd>
+            </div>
+            <div className="grid grid-cols-[100px_1fr] sm:grid-cols-[130px_1fr] py-2 gap-3">
+              <dt className="text-slate-500 dark:text-slate-400">运行环境</dt>
+              <dd className="font-mono text-slate-800 dark:text-slate-200">
+                {[info.go_version, info.platform].filter(Boolean).join(' · ') || '-'}
+              </dd>
+            </div>
+            <div className="grid grid-cols-[100px_1fr] sm:grid-cols-[130px_1fr] py-2 gap-3">
+              <dt className="text-slate-500 dark:text-slate-400">发布通道</dt>
+              <dd className="flex flex-wrap items-center gap-2 text-slate-800 dark:text-slate-200">
+                <span>{info.channel === 'prerelease' ? '预发布（prerelease）' : '正式版（stable）'}</span>
+                <Link to="/settings" className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
+                  前往系统设置调整
+                </Link>
+              </dd>
+            </div>
+          </dl>
+        ) : (
+          <div className="flex items-center gap-2 py-4 text-xs text-slate-500">
+            <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />
+            <span>正在加载系统信息…</span>
+          </div>
+        )}
+      </Card>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Card title="当前与最新版本">
-          <div className="space-y-3 text-sm">
-            <div className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
-              <span className="text-slate-500">当前运行版本</span>
-              <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">{info?.current_version || '-'}</span>
-            </div>
-            <div className="flex items-center justify-between py-1 border-b border-slate-100 dark:border-slate-800">
-              <span className="text-slate-500">GitHub 最新版本</span>
-              <span className="font-mono font-semibold inline-flex items-center gap-2">
-                <span>{info?.latest?.version || '尚未检查'}</span>
-                {info?.update_available && <Badge tone="green">可升级</Badge>}
-              </span>
-            </div>
-            <div className="flex items-center justify-between py-1">
-              <span className="text-slate-500">自更新可用性</span>
-              <Badge tone={info?.available ? 'green' : 'amber'}>
-                {info?.available ? '支持原地自更新' : '已禁用'}
-              </Badge>
-            </div>
-            {!info?.available && info?.unavailable_reason && (
-              <div className="rounded-xl bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
-                {info.unavailable_reason}
+      <Card title="版本与升级">
+        <div className="space-y-4">
+          {/* 双栏版本对比框 */}
+          <div className="flex flex-col md:flex-row md:items-stretch gap-3">
+            <div className="flex-1 rounded-xl border border-slate-200/80 bg-slate-50/70 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/60">
+              <span className="block text-xs text-slate-500 dark:text-slate-400">当前版本</span>
+              <div className="my-1 flex flex-wrap items-center gap-2 min-h-[30px]">
+                <strong className="text-lg font-mono font-semibold text-slate-900 dark:text-slate-100">
+                  {info?.current_version ?? '…'}
+                </strong>
+                {info?.dev_mode ? (
+                  <Badge tone="amber">开发模式</Badge>
+                ) : info && !info.available ? (
+                  <Badge tone="amber">不可自更新</Badge>
+                ) : info?.available ? (
+                  <Badge tone="green">支持自更新</Badge>
+                ) : null}
               </div>
-            )}
-            {info?.latest?.notes && (
-              <pre className="max-h-48 overflow-auto rounded-xl bg-slate-50 border border-slate-200/70 p-3 font-mono text-xs whitespace-pre-wrap dark:bg-slate-950 dark:border-slate-800">
+            </div>
+
+            <div className="hidden md:flex items-center text-lg text-slate-400 dark:text-slate-500 select-none" aria-hidden="true">
+              →
+            </div>
+
+            <div className="flex-1 rounded-xl border border-slate-200/80 bg-slate-50/70 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/60">
+              <span className="block text-xs text-slate-500 dark:text-slate-400">最新版本</span>
+              <div className="my-1 flex flex-wrap items-center gap-2 min-h-[30px]">
+                {checking ? (
+                  <span className="inline-flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />
+                    <span>正在检查…</span>
+                  </span>
+                ) : checkError && !info?.latest ? (
+                  <span className="text-sm font-medium text-rose-600 dark:text-rose-400">检查失败</span>
+                ) : info?.latest ? (
+                  <>
+                    <strong className="text-lg font-mono font-semibold text-slate-900 dark:text-slate-100">
+                      {info.latest.version}
+                    </strong>
+                    {info.update_available ? <Badge tone="green">有新版本</Badge> : <Badge tone="neutral">已是最新</Badge>}
+                  </>
+                ) : (
+                  <span className="text-sm text-slate-400 dark:text-slate-500">未检查</span>
+                )}
+              </div>
+              {checkedAt && !checking && (
+                <span className="block text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                  检查于 {checkedAt.toLocaleTimeString('zh-CN', { hour12: false })}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* 操作按钮栏 + 代理开关 */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {isAdmin && info?.update_available && info?.latest?.version && (
+                <Button
+                  variant="primary"
+                  loading={updateBusy}
+                  disabled={updateBusy || !info?.available || scheduleActive}
+                  onClick={() => void runImmediateUpdate()}
+                >
+                  立即更新到 {info.latest.version}
+                </Button>
+              )}
+              <Button
+                loading={checking}
+                disabled={updateBusy || scheduleActive}
+                onClick={() => void checkUpdate(useProxy, scheduleFinished)}
+              >
+                {!checking && <RefreshCw className="h-3.5 w-3.5" />}
+                <span>重新检查</span>
+              </Button>
+              {isAdmin && (
+                <Button
+                  disabled={updateBusy || !info?.available || scheduleActive}
+                  onClick={() => {
+                    setScheduleError('');
+                    setScheduleModalOpen(true);
+                  }}
+                >
+                  预约升级
+                </Button>
+              )}
+            </div>
+
+            <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 select-none cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useProxy}
+                disabled={!isAdmin || updateBusy}
+                onChange={(e) => void handleToggleProxy(e.target.checked)}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>使用系统代理访问 GitHub（自动保存）</span>
+            </label>
+          </div>
+
+          <ErrorAlert message={checkError} onClose={() => setCheckError('')} />
+
+          {info && !info.available && info.unavailable_reason && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-3.5 py-2.5 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+              {info.unavailable_reason}，「立即更新」和「预约升级」仅在正式部署环境中可用。
+            </div>
+          )}
+
+          {/* 更新说明（发现新版本时默认展开） */}
+          {info?.update_available && info?.latest?.notes && (
+            <details
+              open
+              className="rounded-xl border border-slate-200/80 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-950/60"
+            >
+              <summary className="cursor-pointer px-4 py-2.5 text-xs font-semibold text-slate-800 dark:text-slate-200 select-none">
+                {info.latest.version} 更新说明
+              </summary>
+              <pre className="border-t border-slate-200/70 dark:border-slate-800 px-4 py-3 text-xs leading-relaxed whitespace-pre-wrap font-sans text-slate-700 dark:text-slate-300 max-h-60 overflow-auto">
                 {info.latest.notes}
               </pre>
-            )}
-          </div>
-        </Card>
+            </details>
+          )}
 
-        <Card title="发起升级 / 预约升级">
-          <div className="space-y-4 text-xs">
-            {info && !info.available && (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-slate-600 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
-                当前构建未启用自更新（缺少发布验签公钥），以下原地升级与预约升级操作已锁定；如需更新请使用安装脚本或替换二进制文件。
-              </div>
-            )}
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={useProxy} onChange={(e) => void handleToggleProxy(e.target.checked)} />
-              <span>使用系统代理访问 GitHub Release（自动保存）</span>
-            </label>
-            <Input
-              label="目标版本（latest 或具体版本号，如 v1.2.0）"
-              disabled={info ? !info.available : false}
-              value={targetVer}
-              onChange={(e) => setTargetVer(e.target.value)}
-            />
-            {isAdmin && (
-              <Button variant="primary" loading={modalVisible} disabled={!info?.available || modalVisible} onClick={() => void startUpgrade()}>
-                <UploadCloud className="h-3.5 w-3.5" />
-                <span>立即升级</span>
-              </Button>
-            )}
-
-            <form onSubmit={createSchedule} className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
-              <div className="font-semibold text-sm text-slate-800 dark:text-slate-100">预约升级（等待新版本发布后自动升级）</div>
-              <div className="grid grid-cols-2 gap-3">
-                <Input label="等待时长（秒）" type="number" disabled={info ? !info.available : false} value={waitSec} onChange={(e) => setWaitSec(Number(e.target.value))} />
-                <Input label="检查间隔（秒）" type="number" disabled={info ? !info.available : false} value={intervalSec} onChange={(e) => setIntervalSec(Number(e.target.value))} />
-              </div>
-              {isAdmin && (
-                <div className="flex gap-2">
-                  <Button type="submit" loading={schedBusy} disabled={!info?.available || schedule?.status === 'waiting'}>创建预约升级</Button>
-                  {schedule?.status === 'waiting' && (
-                    <Button
-                      variant="danger"
-                      loading={cancelingSched}
-                      onClick={async () => {
-                        setCancelingSched(true);
-                        try {
-                          const r = await apiDelete('/api/v1/system/self-update/schedule');
-                          setSchedule(r.schedule);
-                          toast.success('已取消预约升级');
-                        } catch (ex: any) {
-                          toast.error(ex?.message || '取消预约失败');
-                        } finally {
-                          setCancelingSched(false);
-                        }
-                      }}
-                    >
+          {/* 预约升级内联卡片（参考 proxystack-web） */}
+          {schedule && schedule.status !== 'idle' && (
+            <div
+              className={`rounded-xl border border-slate-200/90 border-l-[3px] ${scheduleView.border} bg-white px-4 py-3.5 space-y-2.5 dark:border-slate-800 dark:bg-slate-900/70`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <strong className="text-sm text-slate-900 dark:text-slate-100">预约升级</strong>
+                <Badge tone={scheduleView.tone}>{scheduleView.label}</Badge>
+                <div className="ml-auto flex items-center gap-3">
+                  {isAdmin && schedule.status === 'waiting' && (
+                    <Button size="sm" loading={scheduleBusy} onClick={() => void handleCancelSchedule()}>
                       取消预约
                     </Button>
                   )}
-                </div>
-              )}
-              {schedule && (
-                <div className="rounded-xl bg-slate-50 border border-slate-200/70 p-3 space-y-2 dark:bg-slate-950 dark:border-slate-800">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span>状态：</span>
-                      <StatusBadge value={schedule.status} />
-                      <span className="font-mono">目标：{schedule.target_version}</span>
-                    </div>
-                    {schedule.task_id && (
-                      <button
-                        type="button"
-                        onClick={() => openTask(schedule.task_id, '预约自更新任务')}
-                        className="text-indigo-600 dark:text-indigo-400 hover:underline font-medium"
-                      >
-                        查看任务日志
-                      </button>
-                    )}
-                  </div>
-                  {schedule.status === 'waiting' && (
-                    <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                      <div className="h-full bg-indigo-500 transition-all duration-500" style={{ width: `${schedWaitPercent}%` }} />
-                    </div>
+                  {schedule.task_id && (
+                    <button
+                      type="button"
+                      onClick={() => openTask(schedule.task_id, '预约自更新任务')}
+                      className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
+                    >
+                      查看任务
+                    </button>
                   )}
-                  <div className="text-slate-500 flex flex-wrap gap-x-3 gap-y-1">
-                    {schedule.status === 'waiting' && <span>剩余约 {schedRemainSec} 秒</span>}
-                    <span>截止：{fmtTime(schedule.deadline_at)}</span>
-                    {schedule.message && <span>{schedule.message}</span>}
+                  {isAdmin && scheduleFinished && (
+                    <button
+                      type="button"
+                      disabled={scheduleBusy}
+                      onClick={() => void clearUpgradeSchedule()}
+                      className="text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                    >
+                      清除
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {schedule.status === 'waiting' ? (
+                <>
+                  <div className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                    <div
+                      className="h-full bg-indigo-500 transition-all duration-500 animate-pulse"
+                      style={{ width: `${scheduleWaitPercent}%` }}
+                    />
                   </div>
+                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                    <span>目标：{schedule.target_version === 'latest' ? '最新正式版' : schedule.target_version}</span>
+                    <span>剩余 {scheduleRemaining}（截止 {fmtTime(schedule.deadline_at)}）</span>
+                    <span>
+                      每 {formatDurationZh(schedule.interval_seconds)}检查一次
+                      {scheduleNextCheck ? `，下次 ${scheduleNextCheck}` : ''}
+                    </span>
+                    {hasTime(schedule.last_checked_at) && <span>上次检查 {fmtTime(schedule.last_checked_at)}</span>}
+                  </div>
+                  {schedule.resolved_version && schedule.target_version === 'latest' && (
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      目前最新为 {schedule.resolved_version}，不比当前版本新，继续等待。
+                    </p>
+                  )}
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    控制面在后台检查，不需要保持页面打开。
+                  </p>
+                </>
+              ) : schedule.status === 'upgrading' ? (
+                <>
+                  <UpgradeProgress
+                    stage={scheduleStage}
+                    progress={scheduleTask.progress}
+                    speed={scheduleTask.speed}
+                    target={schedule.resolved_version || schedule.target_version}
+                  />
+                  {scheduleUnreachable && (
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      控制面正在重启，恢复后页面自动刷新。
+                    </p>
+                  )}
+                </>
+              ) : (
+                <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                  <span>目标：{schedule.target_version === 'latest' ? '最新正式版' : schedule.target_version}</span>
+                  {hasTime(schedule.finished_at) && <span>结束于 {fmtTime(schedule.finished_at)}</span>}
                 </div>
               )}
-            </form>
-          </div>
-        </Card>
-      </div>
+
+              {schedule.message && (
+                <p
+                  className={`text-xs ${
+                    schedule.status === 'failed' || schedule.status === 'waiting'
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  {schedule.message}
+                </p>
+              )}
+            </div>
+          )}
+
+          <p className="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+            更新只替换控制面服务本身，托管中的 Nomad / Vault 集群不受影响。如勾选「使用系统代理」，版本检查与下载会经由「系统设置 → 代理」；替换前会校验 Ed25519 签名与 SHA-256、试运行新程序并在线备份数据库，保留上一版本。
+          </p>
+        </div>
+      </Card>
 
       <Card title="上次自更新与手动回退">
         <div className="space-y-3 text-xs">
           {info?.last_result ? (
-            <div className="rounded-xl bg-slate-50 border border-slate-200/70 p-3.5 space-y-1.5 dark:bg-slate-950 dark:border-slate-800">
-              <div>
-                状态：<StatusBadge value={info.last_result.state} />{' '}
-                <span className="ml-2 font-mono">
+            <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5 space-y-2 dark:border-slate-800 dark:bg-slate-950/60">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-slate-500 dark:text-slate-400">状态：</span>
+                <StatusBadge value={info.last_result.state} />
+                <span className="font-mono font-medium text-slate-800 dark:text-slate-200">
                   {info.last_result.from_version} → {info.last_result.to_version}
                 </span>
+                {info.last_result.finished_at && (
+                  <span className="text-slate-400 dark:text-slate-500 tabular-nums">
+                    {fmtTime(info.last_result.finished_at)}
+                  </span>
+                )}
               </div>
-              {info.last_result.error_message && <div className="text-rose-600">{info.last_result.error_message}</div>}
+              {info.last_result.error_message && (
+                <div className="text-rose-600 dark:text-rose-400 break-words">{info.last_result.error_message}</div>
+              )}
               {info.last_result.task_id && (
                 <div>
                   <Button size="sm" onClick={() => openTask(info.last_result.task_id, '控制面自更新日志')}>
@@ -519,115 +785,41 @@ export function VersionPage() {
               )}
             </div>
           ) : (
-            <div className="text-slate-500">暂无自更新记录</div>
+            <div className="text-slate-500 dark:text-slate-400">暂无自更新记录</div>
           )}
 
           {isAdmin &&
             (info?.manual_rollback?.available ? (
-              <Button variant="danger" loading={rollbackBusy} onClick={() => void manualRollback()}>
+              <Button variant="danger" loading={rollbackBusy} onClick={() => void handleManualRollback()}>
                 <RotateCcw className="h-3.5 w-3.5" />
                 <span>回退到 {info.manual_rollback.target_version}</span>
               </Button>
-            ) : (
-              <div className="text-slate-500">{info?.manual_rollback?.unavailable_note}</div>
-            ))}
+            ) : info?.manual_rollback?.unavailable_note ? (
+              <div className="text-slate-500 dark:text-slate-400">{info.manual_rollback.unavailable_note}</div>
+            ) : null)}
         </div>
       </Card>
 
+      <ScheduleModal
+        open={scheduleModalOpen}
+        currentVersion={info?.current_version}
+        suggestedVersion={info?.update_available ? info?.latest?.version : undefined}
+        busy={scheduleBusy}
+        error={scheduleError}
+        onClearError={() => setScheduleError('')}
+        onClose={() => !scheduleBusy && setScheduleModalOpen(false)}
+        onSubmit={handleCreateSchedule}
+      />
+
       <Modal
-        open={modalVisible}
-        title={modalTitle}
-        busy={!modalClosable}
-        dismissible={modalClosable}
-        onClose={() => {
-          if (!modalClosable) return;
-          sseCloseRef.current?.();
-          pollStopRef.current?.();
-          setUpdatePhase('idle');
-          setUpdateError('');
-        }}
-      >
-        <div className="space-y-4">
-          {updatePhase === 'unknown' ? (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/60 dark:text-amber-200 leading-relaxed">
-              没有收到提交结果，可能是网络短暂中断或控制面正在重启。请在后台任务列表确认是否已创建自更新任务，再决定是否重试。
-            </div>
-          ) : (
-            <ol className="space-y-3">
-              {UPGRADE_STEPS.map((step, idx) => {
-                const isFailedHere = (updatePhase === 'failed' || updatePhase === 'timeout') && idx === activeStepIdx;
-                const isDone = effectiveStage === 'done' || idx < activeStepIdx;
-                const isActive = !isFailedHere && idx === activeStepIdx;
-
-                return (
-                  <li key={step.key} className="flex items-start gap-3">
-                    <div className="mt-0.5 shrink-0">
-                      {isFailedHere ? (
-                        <XCircle className="h-4 w-4 text-rose-500" />
-                      ) : isDone ? (
-                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                      ) : isActive ? (
-                        <Loader2 className="h-4 w-4 text-indigo-500 animate-spin" />
-                      ) : (
-                        <Clock className="h-4 w-4 text-slate-300 dark:text-slate-700" />
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div
-                        className={`text-xs font-semibold ${
-                          isFailedHere
-                            ? 'text-rose-600 dark:text-rose-400'
-                            : isActive
-                            ? 'text-indigo-700 dark:text-indigo-300'
-                            : isDone
-                            ? 'text-slate-800 dark:text-slate-100'
-                            : 'text-slate-400 dark:text-slate-500'
-                        }`}
-                      >
-                        {step.title}
-                      </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                        {step.key === 'resolve' && updateTarget ? `目标版本：${updateTarget}` : step.detail}
-                      </div>
-                      {step.key === 'download' && isActive && progress?.stage === 'download' && (
-                        <div className="pt-1 space-y-1">
-                          <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                            <div
-                              className="h-full bg-indigo-600 transition-all duration-200"
-                              style={{ width: `${downloadPercent ?? 100}%` }}
-                            />
-                          </div>
-                          <div className="text-[11px] text-slate-500 tabular-nums">
-                            {progress.total && progress.total > 0
-                              ? `${mib(progress.done || 0)} / ${mib(progress.total)} (${downloadPercent}%)`
-                              : `已下载 ${mib(progress.done || 0)}`}
-                            {downloadSpeed > 0 && ` · ${mib(downloadSpeed)}/s`}
-                            {downloadSpeed > 0 && progress.total && progress.total > (progress.done || 0)
-                              ? ` · 剩余约 ${Math.max(1, Math.ceil((progress.total - (progress.done || 0)) / downloadSpeed))} 秒`
-                              : ''}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-          )}
-
-          {updatePhase === 'complete' && (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-200">
-              已更新到 {updateTarget}，正在刷新页面...
-            </div>
-          )}
-
-          {updateError && (
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-800 dark:border-rose-900 dark:bg-rose-950/60 dark:text-rose-200 break-words">
-              {updateError}
-            </div>
-          )}
-
-          <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+        open={updateModalVisible}
+        title={updateModalTitle}
+        size="md"
+        busy={!updateModalClosable}
+        dismissible={updateModalClosable}
+        onClose={closeUpdateModal}
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
             {updateTaskId ? (
               <Button size="sm" onClick={() => openTask(updateTaskId, '控制面自更新日志')}>
                 查看任务日志
@@ -642,21 +834,46 @@ export function VersionPage() {
                 刷新页面
               </Button>
             )}
-            {modalClosable && (
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={() => {
-                  sseCloseRef.current?.();
-                  pollStopRef.current?.();
-                  setUpdatePhase('idle');
-                  setUpdateError('');
-                }}
-              >
+            {updateModalClosable && (
+              <Button size="sm" variant="primary" onClick={closeUpdateModal}>
                 关闭
               </Button>
             )}
           </div>
+        }
+      >
+        <div className="space-y-4">
+          {updatePhase === 'unknown' ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/60 dark:text-amber-200 leading-relaxed">
+              没有收到提交结果，可能是网络中断或控制面正在重启。请在后台任务中确认是否已创建自更新任务，再决定是否重试。
+            </div>
+          ) : (
+            <>
+              <UpgradeProgress
+                stage={effectiveStage}
+                failed={updatePhase === 'failed' || updatePhase === 'timeout'}
+                progress={updateTask.progress}
+                speed={updateTask.speed}
+                target={updateTarget}
+              />
+              {updatePhase === 'complete' && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-200">
+                  已更新到 {updateTarget}，正在刷新页面…
+                </div>
+              )}
+              {updateError && (
+                <div
+                  className={`rounded-xl border px-3.5 py-2.5 text-xs break-words ${
+                    updatePhase === 'timeout'
+                      ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/60 dark:text-amber-200'
+                      : 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/60 dark:text-rose-200'
+                  }`}
+                >
+                  {updateError}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </Modal>
     </div>

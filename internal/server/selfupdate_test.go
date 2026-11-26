@@ -48,4 +48,9 @@ func TestSelfUpdateRoutesAndRBAC(t *testing.T) {
 	if code, body := root.do("POST", "/api/v1/system/self-update/rollback", nil, nil); code != 409 {
 		t.Fatalf("POST /system/self-update/rollback got %d %v", code, body)
 	}
+	if code, body := root.do("DELETE", "/api/v1/system/self-update/schedule", nil, nil); code != 200 {
+		t.Fatalf("DELETE /system/self-update/schedule got %d %v", code, body)
+	} else if sc, ok := body["schedule"].(map[string]any); !ok || sc["status"] != "idle" {
+		t.Fatalf("expected idle schedule on idempotent DELETE, got %v", body)
+	}
 }

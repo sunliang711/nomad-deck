@@ -499,3 +499,61 @@ func TestResolveReleaseFiltersPrereleaseOnStable(t *testing.T) {
 		t.Fatalf("prerelease channel resolve: %+v err=%v", info, err)
 	}
 }
+
+func TestScheduledLatestKeepsWaitingAndCancelClearsFinished(t *testing.T) {
+	ctx := context.Background()
+	fs, pub, priv := newFakeReleaseServer(t)
+	fs.addRelease("v1.0.0", false, priv)
+	svc, _, _ := setupUpdateLayout(t, "v1.0.0", pub, fs.srv.URL)
+
+	sc, err := svc.CreateSchedule(ctx, audit.Actor{Name: "root"}, ScheduleInput{
+		TargetVersion: "latest", WaitSeconds: 60, IntervalSeconds: 5,
+	})
+	if err != nil || sc.Status != SchedWaiting {
+		t.Fatalf("CreateSchedule: %+v err=%v", sc, err)
+	}
+
+	// First check when latest == current must stay waiting and record resolved_version with empty error message.
+	svc.pollScheduleOnce(ctx, sc)
+	got, err := svc.GetSchedule(ctx)
+	if err != nil || got == nil {
+		t.Fatalf("GetSchedule: %v", err)
+	}
+	if got.Status != SchedWaiting || got.ResolvedVersion != "v1.0.0" || got.Message != "" {
+		t.Fatalf("expected waiting with resolved_version=v1.0.0 and empty message, got %+v", got)
+	}
+
+	// Simulate deadline reached -> timed_out with latest timeout message, then clear back to idle.
+	past := got.CreatedAt.Add(-time.Minute)
+	got.DeadlineAt = past
+	if err := db.PutSettingJSON(ctx, svc.DB.Writer, SettingSchedule, got, db.FormatTime(svc.DB.Now())); err != nil {
+		t.Fatal(err)
+	}
+	svc.stepSchedule(ctx)
+	timedOut, _ := svc.GetSchedule(ctx)
+	if timedOut.Status != SchedTimedOut || timedOut.Message != "等待期内没有发布比当前更新的版本" {
+		t.Fatalf("expected timed_out with latest message, got %+v", timedOut)
+	}
+
+	cleared, err := svc.CancelSchedule(ctx, audit.Actor{Name: "root"})
+	if err != nil || cleared.Status != SchedIdle {
+		t.Fatalf("expected CancelSchedule to clear finished schedule to idle, got %+v err=%v", cleared, err)
+	}
+}
+
+func TestScheduledSpecificCurrentCompletesImmediately(t *testing.T) {
+	ctx := context.Background()
+	fs, pub, _ := newFakeReleaseServer(t)
+	svc, _, _ := setupUpdateLayout(t, "v1.0.0", pub, fs.srv.URL)
+
+	if _, err := svc.CreateSchedule(ctx, audit.Actor{Name: "root"}, ScheduleInput{
+		TargetVersion: "v1.0.0", WaitSeconds: 60, IntervalSeconds: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc.stepSchedule(ctx)
+	got, err := svc.GetSchedule(ctx)
+	if err != nil || got.Status != SchedCompleted || got.ResolvedVersion != "v1.0.0" {
+		t.Fatalf("expected completed immediately for satisfied target, got %+v err=%v", got, err)
+	}
+}

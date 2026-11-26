@@ -31,6 +31,7 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
           COMMIT: ${{ github.sha }}
+          BUILD_DATE: ${{ github.event.head_commit.timestamp }}
           REPO: ${{ github.repository }}
           RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
         run: |
@@ -38,11 +39,12 @@ jobs:
           mkdir -p dist
           ver_no_v="${VERSION#v}"
           short_sha="${COMMIT:0:7}"
+          build_date="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
           if [ -z "${RELEASE_PUBLIC_KEY}" ]; then
             echo "RELEASE_PUBLIC_KEY variable must be set for release builds" >&2
             exit 1
           fi
-          ldflags="-s -w -X nomad-deck/internal/version.Version=${VERSION} -X nomad-deck/internal/version.Commit=${short_sha} -X nomad-deck/internal/version.Repo=${REPO} -X nomad-deck/internal/version.ReleasePublicKey=${RELEASE_PUBLIC_KEY}"
+          ldflags="-s -w -X nomad-deck/internal/version.Version=${VERSION} -X nomad-deck/internal/version.Commit=${short_sha} -X nomad-deck/internal/version.BuildDate=${build_date} -X nomad-deck/internal/version.Repo=${REPO} -X nomad-deck/internal/version.ReleasePublicKey=${RELEASE_PUBLIC_KEY}"
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os="${target%/*}"
             arch="${target#*/}"

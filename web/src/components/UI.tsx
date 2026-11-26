@@ -61,7 +61,7 @@ const statusLabels: Record<string, string> = {
   pending: '等待中', waiting: '等待中', upgrading: '升级中', warn: '需关注', sealed: '已密封',
   init_in_doubt: '初始化待核对', needs_reconcile: '需核对', partial_success: '部分成功',
   timeout: '已超时', failed: '失败', failure: '失败', offline: '离线', unreachable: '无法连接',
-  fail: '异常', rolled_back: '已回退', anomaly: '异常', timed_out: '已超时', disabled: '已停用',
+  fail: '异常', rolled_back: '已回退', anomaly: '异常', timed_out: '已超时', cancelled: '已取消', idle: '空闲', disabled: '已停用',
   inactive: '未运行', interrupted: '已中断', sync: '同步', async: '异步', applied: '已应用', draft: '草稿', drifted: '已漂移', skipped: '已跳过',
 };
 

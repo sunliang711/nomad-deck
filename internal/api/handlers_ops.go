@@ -106,7 +106,11 @@ func (a *API) getOperation(w http.ResponseWriter, r *http.Request) {
 			RemoteUnit: s.RemoteUnit, ExitCode: s.ExitCode, StartedAt: fmtTime(s.StartedAt), FinishedAt: fmtTime(s.FinishedAt),
 			ErrorMessage: s.ErrorMessage})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"operation": taskOf(t), "steps": sv})
+	var prog *ops.Progress
+	if a.Ops != nil && a.Ops.Hub != nil {
+		prog = a.Ops.Hub.LatestProgress(id)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"operation": taskOf(t), "steps": sv, "progress": prog})
 }
 
 // streamOperation replays the task's step logs and then streams live events
@@ -178,6 +182,11 @@ func (a *API) streamOperation(w http.ResponseWriter, r *http.Request) {
 	}
 	switch t.Status {
 	case db.TaskPending, db.TaskRunning:
+		if p := a.Ops.Hub.LatestProgress(id); p != nil {
+			if !send(ops.Event{Type: "progress", Progress: p}) {
+				return
+			}
+		}
 	default:
 		send(ops.Event{Type: "done", Status: t.Status, Error: t.ErrorMessage})
 		return

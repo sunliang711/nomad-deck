@@ -24,14 +24,19 @@ type Event struct {
 // Hub fans out task events to subscribers. Slow subscribers are dropped
 // (their channel is closed) instead of blocking the task.
 type Hub struct {
-	mu   sync.Mutex
-	subs map[string]map[chan Event]struct{}
-	done map[string]bool
+	mu       sync.Mutex
+	subs     map[string]map[chan Event]struct{}
+	progress map[string]*Progress
+	done     map[string]bool
 }
 
 // NewHub creates a hub.
 func NewHub() *Hub {
-	return &Hub{subs: map[string]map[chan Event]struct{}{}, done: map[string]bool{}}
+	return &Hub{
+		subs:     map[string]map[chan Event]struct{}{},
+		progress: map[string]*Progress{},
+		done:     map[string]bool{},
+	}
 }
 
 // Subscribe returns an event channel for a task and an unsubscribe func.
@@ -69,6 +74,10 @@ func (h *Hub) Subscribe(taskID string) (<-chan Event, func()) {
 func (h *Hub) Publish(taskID string, ev Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if ev.Type == "progress" && ev.Progress != nil {
+		cp := *ev.Progress
+		h.progress[taskID] = &cp
+	}
 	for ch := range h.subs[taskID] {
 		select {
 		case ch <- ev:
@@ -80,6 +89,17 @@ func (h *Hub) Publish(taskID string, ev Event) {
 	if len(h.subs[taskID]) == 0 {
 		delete(h.subs, taskID)
 	}
+}
+
+// LatestProgress returns the last published progress snapshot for an active task.
+func (h *Hub) LatestProgress(taskID string) *Progress {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if p := h.progress[taskID]; p != nil {
+		cp := *p
+		return &cp
+	}
+	return nil
 }
 
 // Finish publishes a done event and closes all subscriptions of a task.
@@ -94,6 +114,7 @@ func (h *Hub) Finish(taskID string, status, errMsg string) {
 		close(ch)
 	}
 	delete(h.subs, taskID)
+	delete(h.progress, taskID)
 	h.done[taskID] = true
 	if len(h.done) > 10000 {
 		h.done = map[string]bool{taskID: true}

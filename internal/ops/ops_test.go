@@ -187,13 +187,20 @@ func TestRecoverMarksUnfinishedTasks(t *testing.T) {
 func TestHubDeliversAndFinishes(t *testing.T) {
 	h := NewHub()
 	ch, _ := h.Subscribe("t")
+	h.Publish("t", Event{Type: "progress", Progress: &Progress{Stage: "download", Done: 512, Total: 2048}})
+	if p := h.LatestProgress("t"); p == nil || p.Stage != "download" || p.Done != 512 || p.Total != 2048 {
+		t.Fatalf("latest progress: %+v", p)
+	}
 	h.Publish("t", Event{Type: "log", Data: "x"})
 	h.Finish("t", "success", "")
+	if p := h.LatestProgress("t"); p != nil {
+		t.Fatalf("progress after finish must be cleared, got %+v", p)
+	}
 	var types []string
 	for ev := range ch {
 		types = append(types, ev.Type)
 	}
-	if strings.Join(types, ",") != "log,done" {
+	if strings.Join(types, ",") != "progress,log,done" {
 		t.Fatalf("events: %v", types)
 	}
 	late, _ := h.Subscribe("t")

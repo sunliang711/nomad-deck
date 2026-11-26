@@ -88,6 +88,10 @@ type Service struct {
 type VersionView struct {
 	CurrentVersion    string          `json:"current_version"`
 	Commit            string          `json:"commit,omitempty"`
+	BuildDate         string          `json:"build_date,omitempty"`
+	GoVersion         string          `json:"go_version,omitempty"`
+	Platform          string          `json:"platform,omitempty"`
+	DevMode           bool            `json:"dev_mode"`
 	Channel           string          `json:"channel"`
 	Available         bool            `json:"available"`
 	UnavailableReason string          `json:"unavailable_reason,omitempty"`
@@ -308,9 +312,14 @@ func (s *Service) LastResult(ctx context.Context) (*UpdateResult, error) {
 func (s *Service) VersionInfo(ctx context.Context, refresh bool, useProxy *bool) (*VersionView, error) {
 	s.defaults()
 	avail, reason := s.Availability()
+	_, semErr := ParseSemver(s.CurrentVersion)
 	v := &VersionView{
 		CurrentVersion:    s.CurrentVersion,
 		Commit:            version.Commit,
+		BuildDate:         version.BuildDate,
+		GoVersion:         runtime.Version(),
+		Platform:          s.GOOS + "/" + s.GOARCH,
+		DevMode:           semErr != nil,
 		Channel:           s.channel(ctx),
 		Available:         avail,
 		UnavailableReason: reason,
@@ -839,7 +848,7 @@ func (s *Service) ConfirmOnStartup(ctx context.Context) {
 		keep := db.IntSetting(ctx, s.DB.Reader, SettingBackupRetention, defaultBackupRetention)
 		PrunePreUpgradeBackups(s.DataDir, keep)
 		s.pruneOldBinaries(res.TargetBinary, res.PrevBinary)
-		s.markScheduleDone(ctx, res.TaskID, SchedCompleted, "")
+		s.markScheduleDone(ctx, res.TaskID, SchedCompleted, "已升级到 "+res.ToVersion)
 		_ = s.Audit.Record(ctx, nil, audit.Event{
 			Actor: audit.Actor{Name: "system"}, Action: "system.self_update_confirmed", ResourceType: "control_plane",
 			OperationTaskID: res.TaskID,
@@ -991,6 +1000,7 @@ func (s *Service) ManualRollback(ctx context.Context, actor audit.Actor) (*db.Op
 			if err != nil {
 				return err
 			}
+			t.EmitProgress("install", 0, 0)
 			curBin, err := s.ensurePrevBinary()
 			if err != nil {
 				st2.Finish(err, nil)
@@ -1032,6 +1042,7 @@ func (s *Service) ManualRollback(ctx context.Context, actor audit.Actor) (*db.Op
 				OperationTaskID: t.ID,
 				Summary:         map[string]any{"from_version": s.CurrentVersion, "to_version": targetVer},
 			})
+			t.EmitProgress("restart", 0, 0)
 			st2.Logf("版本已回退到 %s，控制面即将以退出码 75 重启", targetVer)
 			lowerBarrier = false
 			keepUpdating = true

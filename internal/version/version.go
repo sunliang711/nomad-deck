@@ -3,10 +3,11 @@ package version
 
 import "fmt"
 
-// Version, Commit, Repo and ReleasePublicKey are overridden with -ldflags at build time.
+// Version, Commit, BuildDate, Repo and ReleasePublicKey are overridden with -ldflags at build time.
 var (
 	Version          = "dev"
 	Commit           = ""
+	BuildDate        = ""
 	Repo             = "sunliang711/nomad-deck"
 	ReleasePublicKey = ""
 )

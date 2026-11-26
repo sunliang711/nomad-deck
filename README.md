@@ -17,10 +17,14 @@ NomadDeck 是一个独立部署的 HashiCorp 基础设施管理平台，采用 G
 ```bash
 # 安装最新版本
 curl -fsSL https://raw.githubusercontent.com/sunliang711/nomad-deck/main/scripts/install.sh | sudo bash
+```
 
+```bash
 # 安装指定版本
 curl -fsSL https://raw.githubusercontent.com/sunliang711/nomad-deck/main/scripts/install.sh | sudo bash -s -- --version v0.1.0
+```
 
+```bash
 # 卸载服务（保留 /opt/nomad-deck-control/etc 与 data 数据目录）
 curl -fsSL https://raw.githubusercontent.com/sunliang711/nomad-deck/main/scripts/install.sh | sudo bash -s -- --uninstall
 ```

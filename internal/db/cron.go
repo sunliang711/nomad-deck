@@ -13,24 +13,30 @@ const (
 	RunRunning = "running"
 	RunSuccess = "success"
 	RunFailed  = "failed"
+	RunTimeout = "timeout"
 	RunSkipped = "skipped"
 )
 
 // CronJob is a platform scheduled job.
 type CronJob struct {
-	ID            string    `json:"id"`
-	JobKey        string    `json:"job_key"`
-	Name          string    `json:"name"`
-	CronExpr      string    `json:"cron_expr"`
-	OverlapPolicy string    `json:"overlap_policy"`
-	MisfirePolicy string    `json:"misfire_policy"`
-	Enabled       bool      `json:"enabled"`
-	PayloadJSON   string    `json:"-"`
-	IsBuiltin     bool      `json:"is_builtin"`
-	LastRunAt     time.Time `json:"last_run_at"`
-	LastStatus    string    `json:"last_status"`
-	NextRunAt     time.Time `json:"next_run_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	JobKey         string    `json:"job_key"`
+	Name           string    `json:"name"`
+	ScheduleType   string    `json:"schedule_type"`
+	CronExpr       string    `json:"cron_expr"`
+	Timezone       string    `json:"timezone"`
+	TimeoutSeconds int       `json:"timeout_seconds"`
+	OverlapPolicy  string    `json:"overlap_policy"`
+	MisfirePolicy  string    `json:"misfire_policy"`
+	Enabled        bool      `json:"enabled"`
+	PayloadJSON    string    `json:"-"`
+	ConfigJSON     string    `json:"-"`
+	IsBuiltin      bool      `json:"is_builtin"`
+	LastRunAt      time.Time `json:"last_run_at"`
+	LastStatus     string    `json:"last_status"`
+	LastSummary    string    `json:"last_summary"`
+	NextRunAt      time.Time `json:"next_run_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // CronRun is one execution of a scheduled job.
@@ -44,20 +50,28 @@ type CronRun struct {
 	Status          string    `json:"status"`
 	Summary         string    `json:"summary"`
 	DetailLog       string    `json:"detail_log,omitempty"`
+	DurationMS      int64     `json:"duration_ms"`
 	StartedAt       time.Time `json:"started_at"`
 	FinishedAt      time.Time `json:"finished_at"`
 }
 
-const cronCols = `id, job_key, name, cron_expr, overlap_policy, misfire_policy, enabled, payload_json, is_builtin,
-	COALESCE(last_run_at, ''), last_status, COALESCE(next_run_at, ''), updated_at`
+const cronCols = `id, job_key, name, schedule_type, cron_expr, timezone, timeout_seconds, overlap_policy, misfire_policy, enabled,
+	payload_json, config_json, is_builtin, COALESCE(last_run_at, ''), last_status, last_summary, COALESCE(next_run_at, ''), updated_at`
 
 func scanCron(row interface{ Scan(...any) error }) (*CronJob, error) {
 	var j CronJob
 	var enabled, builtin int
 	var last, next, updated string
-	if err := row.Scan(&j.ID, &j.JobKey, &j.Name, &j.CronExpr, &j.OverlapPolicy, &j.MisfirePolicy, &enabled, &j.PayloadJSON,
-		&builtin, &last, &j.LastStatus, &next, &updated); err != nil {
+	if err := row.Scan(&j.ID, &j.JobKey, &j.Name, &j.ScheduleType, &j.CronExpr, &j.Timezone, &j.TimeoutSeconds,
+		&j.OverlapPolicy, &j.MisfirePolicy, &enabled, &j.PayloadJSON, &j.ConfigJSON,
+		&builtin, &last, &j.LastStatus, &j.LastSummary, &next, &updated); err != nil {
 		return nil, err
+	}
+	if j.ScheduleType == "" {
+		j.ScheduleType = "cron"
+	}
+	if j.TimeoutSeconds <= 0 {
+		j.TimeoutSeconds = 600
 	}
 	j.Enabled, j.IsBuiltin = enabled == 1, builtin == 1
 	j.LastRunAt, j.NextRunAt, j.UpdatedAt = ParseTime(last), ParseTime(next), ParseTime(updated)
@@ -66,18 +80,30 @@ func scanCron(row interface{ Scan(...any) error }) (*CronJob, error) {
 
 // InsertCronJob stores a new job; an existing job_key is reported as ErrUnique.
 func InsertCronJob(ctx context.Context, q Querier, j *CronJob) error {
-	_, err := q.ExecContext(ctx, `INSERT INTO cron_jobs(id, job_key, name, cron_expr, overlap_policy, misfire_policy, enabled,
-		payload_json, is_builtin, next_run_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		j.ID, j.JobKey, j.Name, j.CronExpr, j.OverlapPolicy, j.MisfirePolicy, boolInt(j.Enabled), orDefault(j.PayloadJSON, "{}"),
+	timeoutSec := j.TimeoutSeconds
+	if timeoutSec <= 0 {
+		timeoutSec = 600
+	}
+	_, err := q.ExecContext(ctx, `INSERT INTO cron_jobs(id, job_key, name, schedule_type, cron_expr, timezone, timeout_seconds,
+		overlap_policy, misfire_policy, enabled, payload_json, config_json, is_builtin, next_run_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		j.ID, j.JobKey, j.Name, orDefault(j.ScheduleType, "cron"), j.CronExpr, j.Timezone, timeoutSec,
+		j.OverlapPolicy, j.MisfirePolicy, boolInt(j.Enabled), orDefault(j.PayloadJSON, "{}"), orDefault(j.ConfigJSON, "{}"),
 		boolInt(j.IsBuiltin), nullTime(j.NextRunAt), FormatTime(j.UpdatedAt))
 	return mapUnique(err)
 }
 
 // UpdateCronJob saves the editable fields of a job.
 func UpdateCronJob(ctx context.Context, q Querier, j *CronJob) error {
-	_, err := q.ExecContext(ctx, `UPDATE cron_jobs SET name = ?, cron_expr = ?, overlap_policy = ?, misfire_policy = ?, enabled = ?,
-		payload_json = ?, next_run_at = ?, updated_at = ? WHERE id = ?`, j.Name, j.CronExpr, j.OverlapPolicy, j.MisfirePolicy,
-		boolInt(j.Enabled), orDefault(j.PayloadJSON, "{}"), nullTime(j.NextRunAt), FormatTime(j.UpdatedAt), j.ID)
+	timeoutSec := j.TimeoutSeconds
+	if timeoutSec <= 0 {
+		timeoutSec = 600
+	}
+	_, err := q.ExecContext(ctx, `UPDATE cron_jobs SET name = ?, schedule_type = ?, cron_expr = ?, timezone = ?, timeout_seconds = ?,
+		overlap_policy = ?, misfire_policy = ?, enabled = ?, payload_json = ?, config_json = ?, next_run_at = ?, updated_at = ? WHERE id = ?`,
+		j.Name, orDefault(j.ScheduleType, "cron"), j.CronExpr, j.Timezone, timeoutSec,
+		j.OverlapPolicy, j.MisfirePolicy, boolInt(j.Enabled), orDefault(j.PayloadJSON, "{}"), orDefault(j.ConfigJSON, "{}"),
+		nullTime(j.NextRunAt), FormatTime(j.UpdatedAt), j.ID)
 	return err
 }
 
@@ -87,9 +113,10 @@ func SetCronNext(ctx context.Context, q Querier, id string, next time.Time) erro
 	return err
 }
 
-// SetCronLast records the latest run outcome.
-func SetCronLast(ctx context.Context, q Querier, id, status string, at time.Time) error {
-	_, err := q.ExecContext(ctx, `UPDATE cron_jobs SET last_run_at = ?, last_status = ? WHERE id = ?`, FormatTime(at), status, id)
+// SetCronLast records the latest run outcome and summary.
+func SetCronLast(ctx context.Context, q Querier, id, status, summary string, at time.Time) error {
+	_, err := q.ExecContext(ctx, `UPDATE cron_jobs SET last_run_at = ?, last_status = ?, last_summary = ? WHERE id = ?`,
+		FormatTime(at), status, summary, id)
 	return err
 }
 
@@ -138,9 +165,9 @@ func DeleteCronJob(ctx context.Context, q Querier, id string) error {
 // InsertCronRun records a run; a duplicate run_key yields ErrUnique.
 func InsertCronRun(ctx context.Context, q Querier, r *CronRun) error {
 	_, err := q.ExecContext(ctx, `INSERT INTO cron_job_runs(id, cron_job_id, run_key, scheduled_for, operation_task_id, trigger_type,
-		status, summary, detail_log, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		status, summary, detail_log, duration_ms, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, r.CronJobID, r.RunKey, FormatTime(r.ScheduledFor), r.OperationTaskID, r.TriggerType, r.Status, r.Summary, r.DetailLog,
-		FormatTime(r.StartedAt), nullTime(r.FinishedAt))
+		r.DurationMS, FormatTime(r.StartedAt), nullTime(r.FinishedAt))
 	return mapUnique(err)
 }
 
@@ -151,9 +178,9 @@ func SetCronRunTask(ctx context.Context, q Querier, id, taskID string) error {
 }
 
 // FinishCronRun records a run's outcome.
-func FinishCronRun(ctx context.Context, q Querier, id, status, summary, detail string, at time.Time) error {
-	_, err := q.ExecContext(ctx, `UPDATE cron_job_runs SET status = ?, summary = ?, detail_log = ?, finished_at = ? WHERE id = ?`,
-		status, summary, detail, FormatTime(at), id)
+func FinishCronRun(ctx context.Context, q Querier, id, status, summary, detail string, durationMS int64, at time.Time) error {
+	_, err := q.ExecContext(ctx, `UPDATE cron_job_runs SET status = ?, summary = ?, detail_log = ?, duration_ms = ?, finished_at = ? WHERE id = ?`,
+		status, summary, detail, durationMS, FormatTime(at), id)
 	return err
 }
 
@@ -165,13 +192,13 @@ func FailRunningCronRuns(ctx context.Context, q Querier, at time.Time) error {
 }
 
 const runCols = `id, cron_job_id, run_key, scheduled_for, operation_task_id, trigger_type, status, summary, detail_log,
-	started_at, COALESCE(finished_at, '')`
+	duration_ms, started_at, COALESCE(finished_at, '')`
 
 func scanRun(row interface{ Scan(...any) error }) (*CronRun, error) {
 	var r CronRun
 	var sched, started, finished string
 	if err := row.Scan(&r.ID, &r.CronJobID, &r.RunKey, &sched, &r.OperationTaskID, &r.TriggerType, &r.Status, &r.Summary,
-		&r.DetailLog, &started, &finished); err != nil {
+		&r.DetailLog, &r.DurationMS, &started, &finished); err != nil {
 		return nil, err
 	}
 	r.ScheduledFor, r.StartedAt, r.FinishedAt = ParseTime(sched), ParseTime(started), ParseTime(finished)
@@ -198,6 +225,40 @@ func ListCronRuns(ctx context.Context, q Querier, jobID string, limit int) ([]*C
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// ListCronRunsPage lists a job's runs with pagination and optional failed/timeout filter.
+func ListCronRunsPage(ctx context.Context, q Querier, jobID string, failedOnly bool, page, pageSize int) ([]*CronRun, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 20
+	}
+	where := `cron_job_id = ?`
+	if failedOnly {
+		where += ` AND status IN ('failed', 'timeout')`
+	}
+	var total int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM cron_job_runs WHERE `+where, jobID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * pageSize
+	rows, err := q.QueryContext(ctx, `SELECT `+runCols+` FROM cron_job_runs WHERE `+where+` ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?`,
+		jobID, pageSize, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []*CronRun{}
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, r)
+	}
+	return out, total, rows.Err()
 }
 
 // GetCronRun loads one run.

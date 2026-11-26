@@ -138,7 +138,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
     if (!authenticated) return;
     setLoadingTasks(true);
     try {
-      const res = await apiGet<{ operations: OperationSummary[] }>('/api/v1/operations?limit=50');
+      const res = await apiGet<{ operations: OperationSummary[] }>('/api/v1/operations?limit=100');
       const list = res.operations || [];
       tasksRef.current = list;
       setTasks(list);
@@ -412,7 +412,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
           headerExtra={
             target.kind === 'list' ? (
               <Button size="sm" onClick={() => void refreshTasks()} loading={loadingTasks}>
-                <RefreshCw className="w-3.5 h-3.5" />
+                {!loadingTasks && <RefreshCw className="w-3.5 h-3.5" />}
                 <span>刷新</span>
               </Button>
             ) : target.kind === 'task' ? (
@@ -460,11 +460,11 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                 type="button"
                 onClick={() => {
                   close();
-                  navigate('/operations');
+                  navigate('/audit');
                 }}
                 className="inline-flex items-center gap-1 text-indigo-600 hover:underline dark:text-indigo-400 font-medium"
               >
-                <span>查看全部运维任务</span>
+                <span>前往审计日志</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </button>
               {target.kind === 'list' && unreadIds.length > 0 && (

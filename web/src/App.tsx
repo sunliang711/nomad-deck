@@ -10,7 +10,6 @@ import { NomadPage } from './pages/NomadPage';
 import { VaultPage } from './pages/VaultPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
 import { JobCenterPage } from './pages/JobCenterPage';
-import { OperationsPage } from './pages/OperationsPage';
 import { CronPage } from './pages/CronPage';
 import { AuditPage } from './pages/AuditPage';
 import { MigrationBackupPage } from './pages/MigrationBackupPage';
@@ -40,7 +39,7 @@ function AppRoutes() {
           <Route path="/vault" element={<VaultPage />} />
           <Route path="/integrations" element={<IntegrationsPage />} />
           <Route path="/jobs" element={<JobCenterPage />} />
-          <Route path="/operations" element={<OperationsPage />} />
+          <Route path="/operations" element={<Navigate to="/audit" replace />} />
           <Route path="/cron" element={<CronPage />} />
           <Route path="/audit" element={<AuditPage />} />
           <Route path="/migration-backup" element={<MigrationBackupPage />} />

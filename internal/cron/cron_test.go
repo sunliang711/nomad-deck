@@ -410,3 +410,69 @@ func TestSnapshotAndHealthJobs(t *testing.T) {
 		t.Fatalf("cert: %+v", r)
 	}
 }
+
+func TestSchedulePresetsTimeoutAndPagination(t *testing.T) {
+	ctx := context.Background()
+	d, engine := testDB(t)
+	s := newScheduler(t, d, engine)
+	if err := s.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.Register("cleanup_audit_logs", func(ctx context.Context, _ *Run) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	})
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	disableAll(t, s)
+
+	// Schedule type validation rejects mismatched cron_expr.
+	j := jobByKey(t, s, "cleanup_audit_logs")
+	if _, err := s.Update(ctx, admin, j.ID, JobInput{
+		ScheduleType: "daily",
+		CronExpr:     "0 * * * *",
+	}); err == nil {
+		t.Fatal("expected daily schedule_type to reject hourly expression")
+	}
+	tz := "Asia/Singapore"
+	timeout := 1
+	updated, err := s.Update(ctx, admin, j.ID, JobInput{
+		ScheduleType:   "daily",
+		CronExpr:       "0 4 * * *",
+		Timezone:       &tz,
+		TimeoutSeconds: &timeout,
+		Config:         json.RawMessage(`{"retention":"7d"}`),
+	})
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	if updated.ScheduleType != "daily" || updated.Timezone != "Asia/Singapore" || updated.TimeoutSeconds != 1 {
+		t.Fatalf("unexpected updated job: %+v", updated)
+	}
+
+	// PreviewSchedule returns 5 future occurrences in the requested timezone.
+	times, resolvedTZ, err := s.PreviewSchedule(ctx, SchedulePreviewRequest{
+		ScheduleType:   "weekly",
+		CronExpression: "0 5 * * 1",
+		Timezone:       "Asia/Shanghai",
+	}, 5)
+	if err != nil || len(times) != 5 || resolvedTZ != "Asia/Shanghai" {
+		t.Fatalf("PreviewSchedule: times=%d tz=%q err=%v", len(times), resolvedTZ, err)
+	}
+
+	// Timeout marks run status as timeout and failedOnly filter picks it up.
+	run, err := s.Trigger(ctx, admin, j.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := waitRun(t, s, run.ID)
+	if r.Status != db.RunTimeout {
+		t.Fatalf("expected timeout status, got %q (%+v)", r.Status, r)
+	}
+	items, total, err := s.RunsPage(ctx, j.ID, true, 1, 20)
+	if err != nil || total != 1 || len(items) != 1 || items[0].Status != db.RunTimeout {
+		t.Fatalf("RunsPage failedOnly: total=%d len=%d err=%v", total, len(items), err)
+	}
+}

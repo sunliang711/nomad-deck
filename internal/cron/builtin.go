@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -38,22 +39,34 @@ func Skip(format string, args ...any) error { return &SkipError{Reason: fmt.Spri
 
 // BuiltinDef is the default definition of a built-in job.
 type BuiltinDef struct {
-	Key  string
-	Name string
-	Expr string
+	Key          string
+	Name         string
+	Description  string
+	ScheduleType string
+	Expr         string
+	TimeoutSec   int
 }
 
 // Builtins lists the built-in jobs with their default schedules.
 var Builtins = []BuiltinDef{
-	{"cluster_health_check", "主机与集群健康巡检", "*/5 * * * *"},
-	{"cert_expiry_check", "证书临期检查", "0 8 * * *"},
-	{"vault_token_renew", "Vault 运维 Token 续租", "0 */6 * * *"},
-	{"vault_auto_unseal_watch", "Vault 自动解封巡检", "*/2 * * * *"},
-	{"raft_snapshot_backup", "集群 Raft 快照备份", "0 3 * * *"},
-	{"control_plane_backup", "控制面灾备备份", "30 1 * * *"},
-	{"self_update_check", "NomadDeck 新版本检查", "0 */6 * * *"},
-	{"cleanup_audit_logs", "审计日志清理", "0 2 * * *"},
-	{"cleanup_operation_logs", "运维任务日志清理", "30 2 * * *"},
+	{"cluster_health_check", "主机与集群健康巡检", "定时探测纳管主机在线状态、时钟偏差以及 Nomad / Vault 集群健康情况。", "cron", "*/5 * * * *", 300},
+	{"cert_expiry_check", "证书临期检查", "巡检集群 mTLS CA 与节点证书剩余有效期，触发仪表盘预警。", "cron", "0 8 * * *", 300},
+	{"vault_token_renew", "Vault 运维 Token 续租", "自动续租 Vault 运维 Token，防止托管运维权限过期。", "cron", "0 */6 * * *", 300},
+	{"vault_auto_unseal_watch", "Vault 自动解封巡检", "巡检已启用自动解封的 Vault 节点并在重启密封后自动解封。", "cron", "*/2 * * * *", 300},
+	{"raft_snapshot_backup", "集群 Raft 快照备份", "定期采集 Nomad 与 Vault 集群 Raft 状态快照并按策略清理旧快照。", "cron", "0 3 * * *", 1800},
+	{"control_plane_backup", "控制面灾备备份", "将控制面数据库与集群快照打包加密，同步至 SafeKeep 灾备目标。", "cron", "30 1 * * *", 1800},
+	{"self_update_check", "NomadDeck 新版本检查", "检查 GitHub Release 新版本并更新仪表盘新版本提示状态。", "cron", "0 */6 * * *", 300},
+	{"cleanup_audit_logs", "审计日志清理", "按保留时长清理过期的审计日志记录。", "cron", "0 2 * * *", 600},
+	{"cleanup_operation_logs", "运维任务日志清理", "按保留时长清理过期的异步运维任务日志与定时执行历史。", "cron", "30 2 * * *", 600},
+}
+
+func builtinDescription(key string) string {
+	for _, b := range Builtins {
+		if b.Key == key {
+			return b.Description
+		}
+	}
+	return ""
 }
 
 // seed inserts missing built-in jobs; existing ones keep their edits.
@@ -62,8 +75,11 @@ func (s *Scheduler) seed(ctx context.Context) error {
 		if _, err := db.GetCronJobByKey(ctx, s.DB.Reader, b.Key); err == nil {
 			continue
 		}
-		j := &db.CronJob{ID: db.NewID(), JobKey: b.Key, Name: b.Name, CronExpr: b.Expr, OverlapPolicy: "skip_if_running",
-			MisfirePolicy: "skip", Enabled: true, PayloadJSON: "{}", IsBuiltin: true, UpdatedAt: s.DB.Now()}
+		j := &db.CronJob{
+			ID: db.NewID(), JobKey: b.Key, Name: b.Name, ScheduleType: b.ScheduleType, CronExpr: b.Expr,
+			TimeoutSeconds: b.TimeoutSec, OverlapPolicy: "skip_if_running", MisfirePolicy: "skip",
+			Enabled: true, PayloadJSON: "{}", ConfigJSON: "{}", IsBuiltin: true, UpdatedAt: s.DB.Now(),
+		}
 		if err := db.InsertCronJob(ctx, s.DB.Writer, j); err != nil && !errors.Is(err, db.ErrUnique) {
 			return err
 		}
@@ -134,16 +150,15 @@ func (s *Scheduler) Install(p *Platform) {
 		return p.SelfUpdateCheck(ctx)
 	})
 	s.Register("cleanup_audit_logs", func(ctx context.Context, r *Run) (string, error) {
-		days := db.IntSetting(ctx, s.DB.Reader, "audit.retention_days", 90)
-		n, err := db.DeleteOldAuditLogs(ctx, s.DB.Writer, s.DB.Now().AddDate(0, 0, -days))
+		cutoff, label := retentionCutoff(ctx, s, r.Job, "audit.retention_days", 90)
+		n, err := db.DeleteOldAuditLogs(ctx, s.DB.Writer, cutoff)
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("清理 %d 条超过 %d 天的审计日志", n, days), nil
+		return fmt.Sprintf("清理 %d 条超过 %s 的审计日志", n, label), nil
 	})
 	s.Register("cleanup_operation_logs", func(ctx context.Context, r *Run) (string, error) {
-		days := db.IntSetting(ctx, s.DB.Reader, "ops.retention_days", 60)
-		cutoff := s.DB.Now().AddDate(0, 0, -days)
+		cutoff, label := retentionCutoff(ctx, s, r.Job, "ops.retention_days", 60)
 		ids, err := db.OldFinishedTaskIDs(ctx, s.DB.Reader, cutoff)
 		if err != nil {
 			return "", err
@@ -158,9 +173,24 @@ func (s *Scheduler) Install(p *Platform) {
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("清理 %d 个运维任务及其步骤日志、%d 条定时任务执行记录（保留 %d 天）", len(ids), runs, days), nil
+		return fmt.Sprintf("清理 %d 个运维任务及其步骤日志、%d 条定时任务执行记录（保留 %s）", len(ids), runs, label), nil
 	})
 	p.installCustom(s)
+}
+
+func retentionCutoff(ctx context.Context, s *Scheduler, j *db.CronJob, settingKey string, defaultDays int) (time.Time, string) {
+	if j != nil && strings.TrimSpace(j.ConfigJSON) != "" && j.ConfigJSON != "{}" {
+		var cfg struct {
+			Retention string `json:"retention"`
+		}
+		if json.Unmarshal([]byte(j.ConfigJSON), &cfg) == nil && strings.TrimSpace(cfg.Retention) != "" {
+			if dur, err := ParseDuration(cfg.Retention); err == nil && dur >= time.Minute {
+				return s.DB.Now().Add(-dur), strings.TrimSpace(cfg.Retention)
+			}
+		}
+	}
+	days := db.IntSetting(ctx, s.DB.Reader, settingKey, defaultDays)
+	return s.DB.Now().AddDate(0, 0, -days), fmt.Sprintf("%d 天", days)
 }
 
 func (p *Platform) healthCheck(s *Scheduler) Handler {

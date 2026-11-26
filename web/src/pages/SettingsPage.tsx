@@ -362,7 +362,7 @@ export function SettingsPage() {
         subtitle="全局调度参数、官方发行版下载源、下载代理与数据库主密钥轮换"
         actions={
           <Button onClick={() => void load()} loading={loading}>
-            <RefreshCw className="h-4 w-4" />
+            {!loading && <RefreshCw className="h-4 w-4" />}
             <span>刷新</span>
           </Button>
         }
@@ -666,7 +666,7 @@ export function SettingsPage() {
               }
               actions={
                 <Button size="sm" onClick={() => void load()} loading={loading}>
-                  <RefreshCw className="h-3.5 w-3.5" />
+                  {!loading && <RefreshCw className="h-3.5 w-3.5" />}
                   <span>刷新</span>
                 </Button>
               }

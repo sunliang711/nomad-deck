@@ -22,7 +22,7 @@ export function DashboardPage() {
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
-  const { openTask } = useOpsDrawer();
+  const { openTask, openTaskList } = useOpsDrawer();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -86,7 +86,7 @@ export function DashboardPage() {
       label: '待核对异常任务',
       value: reconcileTasks.length,
       sub: reconcileTasks.length > 0 ? '需人工确认远端实际状态' : '所有编排任务状态一致',
-      to: '/operations',
+      onClick: openTaskList,
     },
   ];
 
@@ -174,28 +174,37 @@ export function DashboardPage() {
 
       {/* KPI cards */}
       <div className="grid grid-cols-1 min-[420px]:grid-cols-2 xl:grid-cols-4 gap-4">
-        {cards.map((c) => (
-          <Link
-            key={c.label}
-            to={c.to}
-            className="group bg-white dark:bg-slate-900 rounded-2xl border border-[#e3e8f1] dark:border-slate-800 shadow-[0_3px_12px_rgba(15,23,42,0.03)] p-5 flex flex-col justify-between hover:border-indigo-300 dark:hover:border-indigo-500/40 transition"
-          >
-            <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-              <span className="font-medium group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                {c.label}
-              </span>
-              <span className="text-indigo-500 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/15 p-2 rounded-lg shrink-0">
-                {c.icon}
-              </span>
-            </div>
-            <div className="mt-3">
-              <div className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 tabular-nums">
-                {c.value}
+        {cards.map((c: any) => {
+          const cardClass =
+            'group text-left bg-white dark:bg-slate-900 rounded-2xl border border-[#e3e8f1] dark:border-slate-800 shadow-[0_3px_12px_rgba(15,23,42,0.03)] p-5 flex flex-col justify-between hover:border-indigo-300 dark:hover:border-indigo-500/40 transition';
+          const content = (
+            <>
+              <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <span className="font-medium group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                  {c.label}
+                </span>
+                <span className="text-indigo-500 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/15 p-2 rounded-lg shrink-0">
+                  {c.icon}
+                </span>
               </div>
-              <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">{c.sub}</div>
-            </div>
-          </Link>
-        ))}
+              <div className="mt-3">
+                <div className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 tabular-nums">
+                  {c.value}
+                </div>
+                <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">{c.sub}</div>
+              </div>
+            </>
+          );
+          return c.onClick ? (
+            <button key={c.label} type="button" onClick={c.onClick} className={cardClass}>
+              {content}
+            </button>
+          ) : (
+            <Link key={c.label} to={c.to} className={cardClass}>
+              {content}
+            </Link>
+          );
+        })}
       </div>
 
       {/* Clusters + Alerts */}
@@ -338,7 +347,7 @@ export function DashboardPage() {
                 >
                   <span className="flex items-center gap-2">
                     <Info className="h-4 w-4 shrink-0 text-indigo-500" />
-                    <span>尚未配置异地备份目标（SFTP / S3 / SafeKeep），生产环境建议开启定时灾备。</span>
+                    <span>尚未配置 SafeKeep 灾备目标，生产环境建议开启定时灾备。</span>
                   </span>
                   <Badge tone="blue">建议配置</Badge>
                 </Link>
@@ -353,9 +362,13 @@ export function DashboardPage() {
         <Card
           title="最近运维任务"
           actions={
-            <Link to="/operations" className="inline-flex items-center gap-0.5 text-xs text-indigo-600 hover:underline dark:text-indigo-400">
+            <button
+              type="button"
+              onClick={openTaskList}
+              className="inline-flex items-center gap-0.5 text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+            >
               全部任务 <ArrowUpRight className="h-3 w-3" />
-            </Link>
+            </button>
           }
         >
           {recentOps.length === 0 ? (

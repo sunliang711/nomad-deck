@@ -201,7 +201,8 @@ func (s *safekeepStore) List(ctx context.Context, subdir, prefix string) ([]Obje
 		if prefix != "" && !strings.HasPrefix(it.OriginalFilename, prefix) {
 			continue
 		}
-		if wantSubdir != "" && strings.Trim(it.CustomSubpath, "/") != wantSubdir {
+		gotSubdir := strings.Trim(it.CustomSubpath, "/")
+		if wantSubdir != "" && gotSubdir != wantSubdir && !strings.HasPrefix(gotSubdir, wantSubdir+"/") {
 			continue
 		}
 		out = append(out, ObjectInfo{

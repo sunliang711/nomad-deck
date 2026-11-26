@@ -1,6 +1,5 @@
 // Package backup manages scheduled and manual control-plane disaster
-// recovery bundles (.ndbundle) and offsite Raft snapshot archives across
-// local, SFTP and S3-compatible targets.
+// recovery bundles (.ndbundle) and offsite Raft snapshot archives via SafeKeep.
 package backup
 
 import (
@@ -13,14 +12,12 @@ import (
 	"fmt"
 	"net/url"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"nomad-deck/internal/audit"
 	"nomad-deck/internal/auth"
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/migration"
-	"nomad-deck/internal/sshx"
 	"nomad-deck/internal/vaultbackup"
 )
 
@@ -35,9 +32,6 @@ const (
 
 // Target types.
 const (
-	TargetLocal    = "local"
-	TargetSFTP     = "sftp"
-	TargetS3       = "s3"
 	TargetSafeKeep = "safekeep"
 )
 
@@ -47,36 +41,15 @@ const (
 	DefaultSnapshotRetentionCount = 7
 )
 
-// Target describes one backup destination. SecretAccessKey is encrypted at
-// rest inside the secret system setting backup.targets.
+// Target describes one SafeKeep backup destination. SafeKeepAPIKey is
+// encrypted at rest inside the secret system setting backup.targets.
 type Target struct {
 	ID                     string `json:"id"`
 	Name                   string `json:"name"`
-	Type                   string `json:"type"` // local | sftp | s3
+	Type                   string `json:"type"` // safekeep
 	Enabled                bool   `json:"enabled"`
 	RetentionCount         int    `json:"retention_count"`
 	SnapshotRetentionCount int    `json:"snapshot_retention_count"`
-
-	// Local directory target.
-	Path string `json:"path,omitempty"`
-
-	// SFTP target (reuses ssh_keys).
-	Host               string `json:"host,omitempty"`
-	Port               int    `json:"port,omitempty"`
-	Username           string `json:"username,omitempty"`
-	SSHKeyID           string `json:"ssh_key_id,omitempty"`
-	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
-	RemoteDir          string `json:"remote_dir,omitempty"`
-
-	// S3-compatible target.
-	Endpoint        string `json:"endpoint,omitempty"`
-	Region          string `json:"region,omitempty"`
-	Bucket          string `json:"bucket,omitempty"`
-	Prefix          string `json:"prefix,omitempty"`
-	AccessKeyID     string `json:"access_key_id,omitempty"`
-	SecretAccessKey string `json:"secret_access_key,omitempty"`
-	UseSSL          bool   `json:"use_ssl,omitempty"`
-	PathStyle       bool   `json:"path_style,omitempty"`
 
 	// SafeKeep API target.
 	SafeKeepURL         string `json:"safekeep_url,omitempty"`
@@ -95,21 +68,6 @@ type TargetView struct {
 	Enabled                bool   `json:"enabled"`
 	RetentionCount         int    `json:"retention_count"`
 	SnapshotRetentionCount int    `json:"snapshot_retention_count"`
-	Path                   string `json:"path,omitempty"`
-	Host                   string `json:"host,omitempty"`
-	Port                   int    `json:"port,omitempty"`
-	Username               string `json:"username,omitempty"`
-	SSHKeyID               string `json:"ssh_key_id,omitempty"`
-	HostKeyFingerprint     string `json:"host_key_fingerprint,omitempty"`
-	RemoteDir              string `json:"remote_dir,omitempty"`
-	Endpoint               string `json:"endpoint,omitempty"`
-	Region                 string `json:"region,omitempty"`
-	Bucket                 string `json:"bucket,omitempty"`
-	Prefix                 string `json:"prefix,omitempty"`
-	AccessKeyID            string `json:"access_key_id,omitempty"`
-	SecretAccessKeySet     bool   `json:"secret_access_key_set"`
-	UseSSL                 bool   `json:"use_ssl,omitempty"`
-	PathStyle              bool   `json:"path_style,omitempty"`
 	SafeKeepURL            string `json:"safekeep_url,omitempty"`
 	SafeKeepAPIKeySet      bool   `json:"safekeep_api_key_set"`
 	SafeKeepTargets        string `json:"safekeep_targets,omitempty"`
@@ -118,7 +76,7 @@ type TargetView struct {
 	SafeKeepInsecureTLS    bool   `json:"safekeep_insecure_tls,omitempty"`
 }
 
-// TargetInput is the API write payload for a backup target.
+// TargetInput is the API write payload for a SafeKeep backup target.
 type TargetInput struct {
 	ID                     string  `json:"id"`
 	Name                   string  `json:"name"`
@@ -126,21 +84,6 @@ type TargetInput struct {
 	Enabled                bool    `json:"enabled"`
 	RetentionCount         int     `json:"retention_count"`
 	SnapshotRetentionCount int     `json:"snapshot_retention_count"`
-	Path                   string  `json:"path"`
-	Host                   string  `json:"host"`
-	Port                   int     `json:"port"`
-	Username               string  `json:"username"`
-	SSHKeyID               string  `json:"ssh_key_id"`
-	HostKeyFingerprint     string  `json:"host_key_fingerprint"`
-	RemoteDir              string  `json:"remote_dir"`
-	Endpoint               string  `json:"endpoint"`
-	Region                 string  `json:"region"`
-	Bucket                 string  `json:"bucket"`
-	Prefix                 string  `json:"prefix"`
-	AccessKeyID            string  `json:"access_key_id"`
-	SecretAccessKey        *string `json:"secret_access_key"`
-	UseSSL                 bool    `json:"use_ssl"`
-	PathStyle              bool    `json:"path_style"`
 	SafeKeepURL            string  `json:"safekeep_url"`
 	SafeKeepAPIKey         *string `json:"safekeep_api_key"`
 	SafeKeepTargets        string  `json:"safekeep_targets"`
@@ -189,11 +132,6 @@ func (t Target) view() TargetView {
 	return TargetView{
 		ID: t.ID, Name: t.Name, Type: t.Type, Enabled: t.Enabled,
 		RetentionCount: t.RetentionCount, SnapshotRetentionCount: t.SnapshotRetentionCount,
-		Path: t.Path, Host: t.Host, Port: t.Port, Username: t.Username, SSHKeyID: t.SSHKeyID,
-		HostKeyFingerprint: t.HostKeyFingerprint, RemoteDir: t.RemoteDir,
-		Endpoint: t.Endpoint, Region: t.Region, Bucket: t.Bucket, Prefix: t.Prefix,
-		AccessKeyID: t.AccessKeyID, SecretAccessKeySet: t.SecretAccessKey != "",
-		UseSSL: t.UseSSL, PathStyle: t.PathStyle,
 		SafeKeepURL: t.SafeKeepURL, SafeKeepAPIKeySet: t.SafeKeepAPIKey != "",
 		SafeKeepTargets: t.SafeKeepTargets, SafeKeepSubpath: t.SafeKeepSubpath,
 		SafeKeepMode: t.SafeKeepMode, SafeKeepInsecureTLS: t.SafeKeepInsecureTLS,
@@ -201,11 +139,7 @@ func (t Target) view() TargetView {
 }
 
 func (t Target) isOffsite() bool {
-	return t.Enabled && (t.Type == TargetSFTP || t.Type == TargetS3 || t.Type == TargetSafeKeep)
-}
-
-func (s *Service) defaultLocalDir() string {
-	return filepath.Join(s.DataDir, "backups", "scheduled")
+	return t.Enabled && t.Type == TargetSafeKeep
 }
 
 func (s *Service) loadConfig(ctx context.Context) (*storedConfig, error) {
@@ -229,8 +163,15 @@ func (s *Service) loadConfig(ctx context.Context) (*storedConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decrypt backup targets: %w", err)
 		}
-		if err := json.Unmarshal([]byte(pt), &cfg.Targets); err != nil {
+		var rawTargets []Target
+		if err := json.Unmarshal([]byte(pt), &rawTargets); err != nil {
 			return nil, fmt.Errorf("decode backup targets: %w", err)
+		}
+		// Keep only SafeKeep targets; drop legacy non-SafeKeep targets cleanly on load.
+		for _, t := range rawTargets {
+			if t.Type == TargetSafeKeep {
+				cfg.Targets = append(cfg.Targets, t)
+			}
 		}
 	} else if err != nil && !errors.Is(err, db.ErrNotFound) {
 		return nil, err
@@ -322,7 +263,7 @@ func (s *Service) SaveConfig(ctx context.Context, actor audit.Actor, in ConfigIn
 			return ConfigView{}, badRequest("启用定时灾备前需设置至少 %d 个字符的备份口令", vaultbackup.MinPassphrase)
 		}
 		if enabledCount == 0 {
-			return ConfigView{}, badRequest("启用定时灾备前需至少启用一个备份目标")
+			return ConfigView{}, badRequest("启用定时灾备前需至少启用一个 SafeKeep 备份目标")
 		}
 	}
 
@@ -396,10 +337,17 @@ func validateIncludeHistory(in []string) ([]string, error) {
 	return out, nil
 }
 
-func (s *Service) resolveTargetInput(ctx context.Context, ti TargetInput, prevByID map[string]Target) (Target, error) {
+func (s *Service) resolveTargetInput(_ context.Context, ti TargetInput, prevByID map[string]Target) (Target, error) {
 	name := strings.TrimSpace(ti.Name)
 	if name == "" || len(name) > 64 {
 		return Target{}, badRequest("备份目标名称需为 1～64 个字符")
+	}
+	targetType := strings.TrimSpace(ti.Type)
+	if targetType == "" {
+		targetType = TargetSafeKeep
+	}
+	if targetType != TargetSafeKeep {
+		return Target{}, badRequest("当前仅支持 SafeKeep 灾备目标（不支持 %s）", targetType)
 	}
 	id := strings.TrimSpace(ti.ID)
 	if id == "" {
@@ -420,164 +368,43 @@ func (s *Service) resolveTargetInput(ctx context.Context, ti TargetInput, prevBy
 		return Target{}, badRequest("目标 %s 的快照保留份数需在 1～365 之间", name)
 	}
 
-	t := Target{
-		ID: id, Name: name, Type: ti.Type, Enabled: ti.Enabled,
-		RetentionCount: ret, SnapshotRetentionCount: snapRet,
+	rawURL := strings.TrimSpace(ti.SafeKeepURL)
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return Target{}, badRequest("SafeKeep 目标 %s 服务地址需为合法的 http(s) URL", name)
 	}
-	switch ti.Type {
-	case TargetLocal:
-		p := strings.TrimSpace(ti.Path)
-		if p == "" {
-			p = s.defaultLocalDir()
-		}
-		if err := sshx.ValidPath(p); err != nil {
-			return Target{}, badRequest("本机备份目录需为不含 .. 的绝对路径：%v", err)
-		}
-		t.Path = filepath.Clean(p)
-	case TargetSFTP:
-		host := strings.TrimSpace(ti.Host)
-		user := strings.TrimSpace(ti.Username)
-		keyID := strings.TrimSpace(ti.SSHKeyID)
-		rdir := strings.TrimSpace(ti.RemoteDir)
-		port := ti.Port
-		if port == 0 {
-			port = 22
-		}
-		if host == "" || strings.ContainsAny(host, " \t\r\n/") {
-			return Target{}, badRequest("SFTP 目标 %s 主机地址不合法", name)
-		}
-		if port < 1 || port > 65535 {
-			return Target{}, badRequest("SFTP 目标 %s 端口不合法", name)
-		}
-		if user == "" {
-			return Target{}, badRequest("SFTP 目标 %s 需指定用户名", name)
-		}
-		if keyID == "" {
-			return Target{}, badRequest("SFTP 目标 %s 需指定 SSH 密钥", name)
-		}
-		if _, err := db.GetSSHKey(ctx, s.DB.Reader, keyID); err != nil {
-			if errors.Is(err, db.ErrNotFound) {
-				return Target{}, badRequest("SFTP 目标 %s 引用的 SSH 密钥不存在", name)
-			}
-			return Target{}, err
-		}
-		if rdir == "" {
-			rdir = "/var/backups/nomad-deck"
-		}
-		if err := sshx.ValidPath(rdir); err != nil {
-			return Target{}, badRequest("SFTP 目标 %s 远端目录不合法：%v", name, err)
-		}
-		t.Host = host
-		t.Port = port
-		t.Username = user
-		t.SSHKeyID = keyID
-		t.HostKeyFingerprint = strings.TrimSpace(ti.HostKeyFingerprint)
-		t.RemoteDir = path.Clean(rdir)
-	case TargetS3:
-		ep := strings.TrimSpace(ti.Endpoint)
-		bucket := strings.TrimSpace(ti.Bucket)
-		ak := strings.TrimSpace(ti.AccessKeyID)
-		region := strings.TrimSpace(ti.Region)
-		if region == "" {
-			region = "us-east-1"
-		}
-		if ep == "" {
-			return Target{}, badRequest("S3 目标 %s 需指定 Endpoint", name)
-		}
-		if _, _, err := parseS3Endpoint(ep, ti.UseSSL); err != nil {
-			return Target{}, badRequest("S3 目标 %s Endpoint 不合法：%v", name, err)
-		}
-		if bucket == "" || strings.ContainsAny(bucket, " /\\") {
-			return Target{}, badRequest("S3 目标 %s Bucket 名称不合法", name)
-		}
-		if ak == "" {
-			return Target{}, badRequest("S3 目标 %s 需指定 Access Key ID", name)
-		}
-		sk := ""
-		if ti.SecretAccessKey != nil {
-			sk = *ti.SecretAccessKey
-		} else if prev, ok := prevByID[id]; ok {
-			sk = prev.SecretAccessKey
-		}
-		if sk == "" {
-			return Target{}, badRequest("S3 目标 %s 需提供 Secret Access Key", name)
-		}
-		prefix := strings.Trim(path.Clean("/"+strings.TrimSpace(ti.Prefix)), "/")
-		if prefix == "." {
-			prefix = ""
-		}
-		t.Endpoint = ep
-		t.Region = region
-		t.Bucket = bucket
-		t.Prefix = prefix
-		t.AccessKeyID = ak
-		t.SecretAccessKey = sk
-		t.UseSSL = ti.UseSSL
-		t.PathStyle = ti.PathStyle
-		if strings.HasPrefix(strings.ToLower(ep), "https://") {
-			t.UseSSL = true
-		} else if strings.HasPrefix(strings.ToLower(ep), "http://") {
-			t.UseSSL = false
-		}
-	case TargetSafeKeep:
-		rawURL := strings.TrimSpace(ti.SafeKeepURL)
-		u, err := url.Parse(rawURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return Target{}, badRequest("SafeKeep 目标 %s 服务地址需为合法的 http(s) URL", name)
-		}
-		apiKey := ""
-		if ti.SafeKeepAPIKey != nil {
-			apiKey = strings.TrimSpace(*ti.SafeKeepAPIKey)
-		} else if prev, ok := prevByID[id]; ok {
-			apiKey = prev.SafeKeepAPIKey
-		}
-		if apiKey == "" {
-			return Target{}, badRequest("SafeKeep 目标 %s 需提供 API Key", name)
-		}
-		mode := strings.ToLower(strings.TrimSpace(ti.SafeKeepMode))
-		if mode == "" {
-			mode = "sync"
-		}
-		if mode != "sync" && mode != "async" {
-			return Target{}, badRequest("SafeKeep 目标 %s 上传模式需为 sync 或 async", name)
-		}
-		subpath := strings.Trim(path.Clean("/"+strings.TrimSpace(ti.SafeKeepSubpath)), "/")
-		if subpath == "." {
-			subpath = ""
-		}
-		t.SafeKeepURL = strings.TrimRight(rawURL, "/")
-		t.SafeKeepAPIKey = apiKey
-		t.SafeKeepTargets = strings.TrimSpace(ti.SafeKeepTargets)
-		t.SafeKeepSubpath = subpath
-		t.SafeKeepMode = mode
-		t.SafeKeepInsecureTLS = ti.SafeKeepInsecureTLS
-	default:
-		return Target{}, badRequest("不支持的备份目标类型：%s", ti.Type)
+	apiKey := ""
+	if ti.SafeKeepAPIKey != nil {
+		apiKey = strings.TrimSpace(*ti.SafeKeepAPIKey)
+	} else if prev, ok := prevByID[id]; ok {
+		apiKey = prev.SafeKeepAPIKey
 	}
-	return t, nil
-}
-
-func parseS3Endpoint(raw string, defaultSSL bool) (host string, useSSL bool, err error) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return "", defaultSSL, errors.New("endpoint is empty")
+	if apiKey == "" {
+		return Target{}, badRequest("SafeKeep 目标 %s 需提供 API Key", name)
 	}
-	if strings.Contains(s, "://") {
-		u, err := url.Parse(s)
-		if err != nil || u.Host == "" {
-			return "", defaultSSL, errors.New("invalid URL")
-		}
-		switch strings.ToLower(u.Scheme) {
-		case "https":
-			return u.Host, true, nil
-		case "http":
-			return u.Host, false, nil
-		default:
-			return "", defaultSSL, fmt.Errorf("unsupported scheme %q", u.Scheme)
-		}
+	mode := strings.ToLower(strings.TrimSpace(ti.SafeKeepMode))
+	if mode == "" {
+		mode = "sync"
 	}
-	if strings.ContainsAny(s, "/?# ") {
-		return "", defaultSSL, errors.New("endpoint must be host[:port] or http(s) URL")
+	if mode != "sync" && mode != "async" {
+		return Target{}, badRequest("SafeKeep 目标 %s 上传模式需为 sync 或 async", name)
 	}
-	return s, defaultSSL, nil
+	subpath := strings.Trim(path.Clean("/"+strings.TrimSpace(ti.SafeKeepSubpath)), "/")
+	if subpath == "." {
+		subpath = ""
+	}
+	return Target{
+		ID:                     id,
+		Name:                   name,
+		Type:                   TargetSafeKeep,
+		Enabled:                ti.Enabled,
+		RetentionCount:         ret,
+		SnapshotRetentionCount: snapRet,
+		SafeKeepURL:            strings.TrimRight(rawURL, "/"),
+		SafeKeepAPIKey:         apiKey,
+		SafeKeepTargets:        strings.TrimSpace(ti.SafeKeepTargets),
+		SafeKeepSubpath:        subpath,
+		SafeKeepMode:           mode,
+		SafeKeepInsecureTLS:    ti.SafeKeepInsecureTLS,
+	}, nil
 }

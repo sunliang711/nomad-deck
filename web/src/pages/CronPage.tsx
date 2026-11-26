@@ -40,19 +40,30 @@ const defaultSafeKeepTarget = {
   safekeep_insecure_tls: false,
 };
 
-const BASE_PRESETS = [
-  { label: '每 2 分钟', value: '*/2 * * * *' },
-  { label: '每 5 分钟', value: '*/5 * * * *' },
-  { label: '每 15 分钟', value: '*/15 * * * *' },
-  { label: '每小时整点', value: '0 * * * *' },
-  { label: '每 6 小时整点', value: '0 */6 * * *' },
-  { label: '每天凌晨 02:00', value: '0 2 * * *' },
-  { label: '每天凌晨 03:00', value: '0 3 * * *' },
-  { label: '每天凌晨 04:00', value: '0 4 * * *' },
-  { label: '每周一 05:00', value: '0 5 * * 1' },
-  { label: '每月 1 日 04:00', value: '0 4 1 * *' },
-  { label: '自定义表达式', value: 'custom' },
+const PLAN_PRESETS: Record<string, string> = {
+  hourly: '0 * * * *',
+  daily: '0 4 * * *',
+  weekly: '0 5 * * 1',
+  monthly: '0 4 1 * *',
+};
+
+const SCHEDULE_OPTIONS = [
+  { value: 'hourly', label: '每小时 (0 * * * *)' },
+  { value: 'daily', label: '每天 (0 4 * * *)' },
+  { value: 'weekly', label: '每周 (0 5 * * 1)' },
+  { value: 'monthly', label: '每月 (0 4 1 * *)' },
+  { value: 'cron', label: '自定义' },
 ];
+
+const RETENTION_CHIPS = [
+  { label: '1 天', value: '24h' },
+  { label: '7 天', value: '7d' },
+  { label: '30 天', value: '30d' },
+  { label: '90 天', value: '90d' },
+  { label: '180 天', value: '180d' },
+];
+
+const COMMON_TIMEZONES = ['Asia/Singapore', 'Asia/Shanghai', 'UTC', 'America/New_York', 'Europe/London'];
 
 const BUILTIN_DESCRIPTIONS: Record<string, string> = {
   cluster_health_check: '定时探测纳管主机在线状态、时钟偏差以及 Nomad / Vault 集群健康情况。',
@@ -60,32 +71,48 @@ const BUILTIN_DESCRIPTIONS: Record<string, string> = {
   vault_token_renew: '自动续租 Vault 运维 Token，防止托管运维权限过期。',
   vault_auto_unseal_watch: '巡检已启用自动解封的 Vault 节点并在重启密封后自动解封。',
   raft_snapshot_backup: '定期采集 Nomad 与 Vault 集群 Raft 状态快照并按策略清理旧快照。',
-  control_plane_backup: '将控制面数据库与集群快照打包加密，同步至配置的灾备目标。',
+  control_plane_backup: '将控制面数据库与集群快照打包加密，同步至 SafeKeep 灾备目标。',
   self_update_check: '检查 GitHub Release 新版本并更新仪表盘新版本提示状态。',
-  cleanup_audit_logs: '按系统设置保留天数清理过期的审计日志记录。',
-  cleanup_operation_logs: '按系统设置保留天数清理过期的异步运维任务日志。',
+  cleanup_audit_logs: '按保留时长清理过期的审计日志记录。',
+  cleanup_operation_logs: '按保留时长清理过期的异步运维任务日志与定时执行历史。',
 };
 
-const OVERLAP_LABELS: Record<string, string> = {
-  skip_if_running: '运行中跳过',
-  allow_concurrent: '允许并发',
-  queue_one: '排队一次',
-};
+function formatScheduleTime(value: string, timezone?: string): string {
+  if (!value || value.startsWith('0001-01-01')) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  try {
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: timezone || 'Asia/Singapore',
+      dateStyle: 'medium',
+      timeStyle: 'medium',
+      hour12: false,
+    }).format(d);
+  } catch {
+    return fmtTime(value);
+  }
+}
 
-const MISFIRE_LABELS: Record<string, string> = {
-  skip: '漏过不补',
-  run_once: '补跑一次',
-};
+function formatDurationMs(ms?: number, startedAt?: string, finishedAt?: string): string {
+  if (typeof ms === 'number' && ms > 0) {
+    if (ms < 1000) return `${ms} ms`;
+    if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+    const m = Math.floor(ms / 60_000);
+    const s = Math.round((ms % 60_000) / 1000);
+    return `${m}m${s}s`;
+  }
+  if (!startedAt || !finishedAt || finishedAt.startsWith('0001-01-01')) return '';
+  const diff = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
+  if (!Number.isFinite(diff) || diff < 0) return '';
+  return `${diff} ms`;
+}
 
-function formatDuration(startedAt: string, finishedAt?: string): string {
-  if (!finishedAt || finishedAt.startsWith('0001-01-01')) return '';
-  const ms = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return '';
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  const m = Math.floor(ms / 60_000);
-  const s = Math.round((ms % 60_000) / 1000);
-  return `${m}m${s}s`;
+function resolveScheduleType(rawType?: string, expr?: string): string {
+  const t = (rawType || '').trim();
+  const c = (expr || '').trim();
+  if (t && PLAN_PRESETS[t] && PLAN_PRESETS[t] === c) return t;
+  const matched = Object.keys(PLAN_PRESETS).find((k) => PLAN_PRESETS[k] === c);
+  return matched && t !== 'cron' ? matched : 'cron';
 }
 
 export function CronPage() {
@@ -107,34 +134,45 @@ export function CronPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<any>(null);
-  const [preset, setPreset] = useState('custom');
   const [saving, setSaving] = useState(false);
   const [formErr, setFormErr] = useState('');
   const [initialSnap, setInitialSnap] = useState('');
   const [form, setForm] = useState({
     name: '',
+    schedule_type: 'daily',
     cron_expr: '0 4 * * *',
+    timezone: 'Asia/Singapore',
+    timeout_seconds: 600,
     overlap_policy: 'skip_if_running',
     misfire_policy: 'skip',
     enabled: true,
+    retention: '',
     payload_type: 'cluster_snapshot',
     cluster_id: '',
     target_id: '',
     integration_id: '',
   });
 
-  // Live schedule preview
+  // Live schedule preview (5 occurrences)
   const [previewRuns, setPreviewRuns] = useState<string[]>([]);
   const [previewTimezone, setPreviewTimezone] = useState('');
+  const [previewValid, setPreviewValid] = useState(false);
+  const [previewStatus, setPreviewStatus] = useState('');
+  const [previewError, setPreviewError] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState('');
   const previewSeq = useRef(0);
+  const previewTimer = useRef<number | null>(null);
 
-  // History Drawer
+  // Paginated History Drawer
   const [runsJob, setRunsJob] = useState<any>(null);
   const [runs, setRuns] = useState<any[]>([]);
+  const [runsPage, setRunsPage] = useState(1);
+  const [runsTotal, setRunsTotal] = useState(0);
+  const [runsFailedOnly, setRunsFailedOnly] = useState(false);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState('');
+  const runsSeq = useRef(0);
+  const runsPageSize = 20;
 
   // SafeKeep DR modal
   const [showDrModal, setShowDrModal] = useState(false);
@@ -176,44 +214,103 @@ export function CronPage() {
 
   const safekeepTargets = (backupCfg?.targets || []).filter((t: any) => t.type === 'safekeep');
 
-  // Live preview of next 5 execution times whenever cron_expr changes inside Drawer
-  useEffect(() => {
-    if (!drawerOpen) return;
-    const expr = form.cron_expr.trim();
-    if (!expr) {
-      setPreviewRuns([]);
-      setPreviewError('Cron 表达式不能为空');
-      return;
-    }
-    const seq = ++previewSeq.current;
-    const timer = window.setTimeout(async () => {
-      setPreviewLoading(true);
-      try {
-        const res = await apiPost<{ next_runs: string[]; timezone?: string }>('/api/v1/cron-jobs/preview', {
-          schedule: expr,
-        });
-        if (previewSeq.current !== seq) return;
-        setPreviewRuns(res.next_runs || []);
-        setPreviewTimezone(res.timezone || '');
-        setPreviewError('');
-      } catch (ex: any) {
-        if (previewSeq.current !== seq) return;
-        setPreviewRuns([]);
-        setPreviewError(ex?.message || 'Cron 表达式无效');
-      } finally {
-        if (previewSeq.current === seq) setPreviewLoading(false);
+  const requestPreview = useCallback(
+    (draft: { schedule_type: string; cron_expr: string; timezone: string }, immediate = false) => {
+      if (previewTimer.current) {
+        window.clearTimeout(previewTimer.current);
+        previewTimer.current = null;
       }
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [drawerOpen, form.cron_expr]);
+      const seq = ++previewSeq.current;
+      setPreviewValid(false);
+      setPreviewRuns([]);
+      setPreviewError(false);
+
+      const expr = (PLAN_PRESETS[draft.schedule_type] || draft.cron_expr).trim();
+      const tz = draft.timezone.trim();
+      if (!expr) {
+        setPreviewStatus('请填写有效的五字段 Cron 表达式（分 时 日 月 周）。');
+        setPreviewError(true);
+        setPreviewLoading(false);
+        return;
+      }
+      if (!tz) {
+        setPreviewStatus('请填写有效的执行时区，例如 Asia/Singapore 或 UTC。');
+        setPreviewError(true);
+        setPreviewLoading(false);
+        return;
+      }
+
+      setPreviewStatus('正在计算执行时间…');
+      setPreviewLoading(true);
+      const run = async () => {
+        try {
+          const res = await apiPost<{ next_runs: string[]; timezone?: string }>('/api/v1/cron-jobs/preview', {
+            schedule_type: draft.schedule_type,
+            cron_expression: expr,
+            timezone: tz,
+          });
+          if (previewSeq.current !== seq) return;
+          const times = res.next_runs || [];
+          if (times.length === 0) throw new Error('无法计算未来 5 次执行时间。');
+          setPreviewRuns(times);
+          setPreviewTimezone(res.timezone || tz);
+          setPreviewStatus(describeCron(expr) || expr);
+          setPreviewError(false);
+          setPreviewValid(true);
+        } catch (ex: any) {
+          if (previewSeq.current !== seq) return;
+          setPreviewRuns([]);
+          setPreviewStatus(ex?.message || 'Cron 表达式或时区无效');
+          setPreviewError(true);
+          setPreviewValid(false);
+        } finally {
+          if (previewSeq.current === seq) setPreviewLoading(false);
+        }
+      };
+
+      if (immediate) {
+        void run();
+      } else {
+        previewTimer.current = window.setTimeout(() => void run(), 250);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (previewTimer.current) window.clearTimeout(previewTimer.current);
+    };
+  }, []);
+
+  const updateDraft = (patch: Partial<typeof form>, repreview = false) => {
+    setForm((prev) => {
+      const next = { ...prev, ...patch };
+      if (patch.schedule_type && PLAN_PRESETS[patch.schedule_type]) {
+        next.cron_expr = PLAN_PRESETS[patch.schedule_type];
+      }
+      if (repreview && drawerOpen) {
+        requestPreview({
+          schedule_type: next.schedule_type,
+          cron_expr: next.cron_expr,
+          timezone: next.timezone,
+        });
+      }
+      return next;
+    });
+  };
 
   const openCreateDrawer = () => {
     const next = {
       name: '',
+      schedule_type: 'daily',
       cron_expr: '0 4 * * *',
+      timezone: 'Asia/Singapore',
+      timeout_seconds: 600,
       overlap_policy: 'skip_if_running',
       misfire_policy: 'skip',
       enabled: true,
+      retention: '',
       payload_type: 'cluster_snapshot',
       cluster_id: clusters[0]?.id || '',
       target_id: safekeepTargets[0]?.id || '',
@@ -222,20 +319,25 @@ export function CronPage() {
     setCreating(true);
     setEditing(null);
     setForm(next);
-    setPreset(BASE_PRESETS.find((p) => p.value === next.cron_expr)?.value || 'custom');
     setInitialSnap(JSON.stringify(next));
     setFormErr('');
-    setPreviewError('');
     setDrawerOpen(true);
+    requestPreview(next, true);
   };
 
   const openEditDrawer = (j: any) => {
+    const st = resolveScheduleType(j.schedule_type, j.cron_expr);
+    const tz = j.timezone || j.effective_timezone || 'Asia/Singapore';
     const next = {
-      name: j.name,
-      cron_expr: j.cron_expr,
-      overlap_policy: j.overlap_policy,
-      misfire_policy: j.misfire_policy,
+      name: j.name || '',
+      schedule_type: st,
+      cron_expr: PLAN_PRESETS[st] || j.cron_expr || '0 4 * * *',
+      timezone: tz,
+      timeout_seconds: Number(j.timeout_seconds || 600),
+      overlap_policy: j.overlap_policy || 'skip_if_running',
+      misfire_policy: j.misfire_policy || 'skip',
       enabled: Boolean(j.enabled),
+      retention: j.config?.retention || '',
       payload_type: 'cluster_snapshot',
       cluster_id: '',
       target_id: '',
@@ -244,11 +346,10 @@ export function CronPage() {
     setCreating(false);
     setEditing(j);
     setForm(next);
-    setPreset(BASE_PRESETS.find((p) => p.value === j.cron_expr)?.value || 'custom');
     setInitialSnap(JSON.stringify(next));
     setFormErr('');
-    setPreviewError('');
     setDrawerOpen(true);
+    requestPreview(next, true);
   };
 
   const isDirty = useMemo(() => drawerOpen && JSON.stringify(form) !== initialSnap, [drawerOpen, form, initialSnap]);
@@ -264,6 +365,11 @@ export function CronPage() {
     ) {
       return;
     }
+    if (previewTimer.current) {
+      window.clearTimeout(previewTimer.current);
+      previewTimer.current = null;
+    }
+    previewSeq.current++;
     setDrawerOpen(false);
     setCreating(false);
     setEditing(null);
@@ -272,10 +378,15 @@ export function CronPage() {
 
   const handleSave = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (saving || previewError) return;
+    if (saving || !previewValid) return;
     setFormErr('');
     setSaving(true);
     try {
+      const expr = (PLAN_PRESETS[form.schedule_type] || form.cron_expr).trim();
+      const timeoutSec = Number(form.timeout_seconds);
+      if (!Number.isInteger(timeoutSec) || timeoutSec < 1 || timeoutSec > 86400) {
+        throw new Error('超时时间需在 1 ~ 86400 秒之间');
+      }
       if (creating) {
         const payload: any = { type: form.payload_type };
         if (form.payload_type === 'safekeep_backup') {
@@ -288,7 +399,10 @@ export function CronPage() {
         }
         await apiPost('/api/v1/cron-jobs', {
           name: form.name.trim(),
-          cron_expr: form.cron_expr.trim(),
+          schedule_type: form.schedule_type,
+          cron_expr: expr,
+          timezone: form.timezone.trim(),
+          timeout_seconds: timeoutSec,
           overlap_policy: form.overlap_policy,
           misfire_policy: form.misfire_policy,
           enabled: form.enabled,
@@ -296,13 +410,20 @@ export function CronPage() {
         });
         toast.success('自定义定时任务已创建');
       } else if (editing) {
-        await apiPut(`/api/v1/cron-jobs/${editing.id}`, {
-          name: form.name.trim(),
-          cron_expr: form.cron_expr.trim(),
+        const body: any = {
+          schedule_type: form.schedule_type,
+          cron_expr: expr,
+          timezone: form.timezone.trim(),
+          timeout_seconds: timeoutSec,
           overlap_policy: form.overlap_policy,
           misfire_policy: form.misfire_policy,
           enabled: form.enabled,
-        });
+        };
+        if (!editing.is_builtin) body.name = form.name.trim();
+        if (editing.job_key === 'cleanup_audit_logs' || editing.job_key === 'cleanup_operation_logs') {
+          body.config = form.retention.trim() ? { retention: form.retention.trim() } : {};
+        }
+        await apiPut(`/api/v1/cron-jobs/${editing.id}`, body);
         toast.success('定时任务配置已保存');
       }
       setDrawerOpen(false);
@@ -321,7 +442,7 @@ export function CronPage() {
     setTogglingId(j.id);
     try {
       await apiPut(`/api/v1/cron-jobs/${j.id}`, { enabled: nextEnabled });
-      toast.success(`${j.name} 已${nextEnabled ? '启用' : '暂停'}`);
+      toast.success(`${j.name} 已${nextEnabled ? '启用' : '停用'}`);
       await load();
     } catch (ex: any) {
       toast.error(ex?.message || '切换开关失败');
@@ -330,23 +451,42 @@ export function CronPage() {
     }
   };
 
-  const loadRuns = async (job: any) => {
+  const loadRuns = useCallback(async (job: any, page = 1, failedOnly = false) => {
+    const seq = ++runsSeq.current;
     setRunsError('');
     setRunsLoading(true);
     try {
-      const res = await apiGet(`/api/v1/cron-jobs/${job.id}/runs?limit=30`);
-      setRuns(res.runs || []);
+      const qs = new URLSearchParams({
+        page: String(page),
+        page_size: String(runsPageSize),
+        failed_only: failedOnly ? 'true' : 'false',
+      });
+      const res = await apiGet(`/api/v1/cron-jobs/${job.id}/runs?${qs.toString()}`);
+      if (runsSeq.current !== seq) return;
+      setRuns(res.items || res.runs || []);
+      setRunsTotal(Number(res.total ?? (res.items || res.runs || []).length));
+      setRunsPage(Number(res.page ?? page));
     } catch (ex: any) {
-      setRunsError(ex?.message || '加载执行历史失败');
+      if (runsSeq.current !== seq) return;
+      setRunsError(ex?.message || '加载执行记录失败');
     } finally {
-      setRunsLoading(false);
+      if (runsSeq.current === seq) setRunsLoading(false);
     }
-  };
+  }, []);
 
   const openRuns = (job: any) => {
     setRunsJob(job);
     setRuns([]);
-    void loadRuns(job);
+    setRunsPage(1);
+    setRunsTotal(0);
+    setRunsFailedOnly(false);
+    void loadRuns(job, 1, false);
+  };
+
+  const closeRuns = () => {
+    runsSeq.current++;
+    setRunsJob(null);
+    setRuns([]);
   };
 
   const triggerJob = async (j: any) => {
@@ -358,7 +498,7 @@ export function CronPage() {
       toast.success(`已触发 ${j.name}`);
       await load();
       if (runsJob?.id === j.id) {
-        await loadRuns(j);
+        await loadRuns(j, runsPage, runsFailedOnly);
       }
     } catch (ex: any) {
       toast.error(ex?.message || '触发失败');
@@ -400,50 +540,36 @@ export function CronPage() {
     const out: any = {
       id: t.id,
       name: t.name,
-      type: t.type,
+      type: 'safekeep',
       enabled: Boolean(t.enabled),
       retention_count: Number(t.retention_count || 14),
       snapshot_retention_count: Number(t.snapshot_retention_count || 7),
-      path: t.path,
-      host: t.host,
-      port: Number(t.port || 22),
-      username: t.username,
-      ssh_key_id: t.ssh_key_id,
-      host_key_fingerprint: t.host_key_fingerprint,
-      remote_dir: t.remote_dir,
-      endpoint: t.endpoint,
-      region: t.region,
-      bucket: t.bucket,
-      prefix: t.prefix,
-      access_key_id: t.access_key_id,
-      use_ssl: Boolean(t.use_ssl),
-      path_style: Boolean(t.path_style),
       safekeep_url: t.safekeep_url || '',
       safekeep_targets: t.safekeep_targets || '',
       safekeep_subpath: t.safekeep_subpath || '',
       safekeep_mode: t.safekeep_mode || 'sync',
       safekeep_insecure_tls: Boolean(t.safekeep_insecure_tls),
     };
-    if (t.type === 's3' && t.secret_access_key) out.secret_access_key = t.secret_access_key;
-    if (t.type === 'safekeep' && t.safekeep_api_key) out.safekeep_api_key = t.safekeep_api_key;
+    if (t.safekeep_api_key) out.safekeep_api_key = t.safekeep_api_key;
     return out;
   };
 
   const applySafeKeepFormToList = () => {
-    if (!skForm.safekeep_url?.trim()) return drTargets;
+    if (!skForm.safekeep_url?.trim()) return drTargets.filter((t) => t.type === 'safekeep');
     const item = {
       ...skForm,
       id: skForm.id || 'tgt_' + Math.random().toString(36).slice(2, 10),
       name: skForm.name?.trim() || 'SafeKeep-DR',
       type: 'safekeep',
     };
-    const idx = drTargets.findIndex((x) => x.id === item.id);
+    const skOnly = drTargets.filter((t) => t.type === 'safekeep');
+    const idx = skOnly.findIndex((x) => x.id === item.id);
     if (idx >= 0) {
-      const next = [...drTargets];
+      const next = [...skOnly];
       next[idx] = item;
       return next;
     }
-    return [...drTargets, item];
+    return [...skOnly, item];
   };
 
   const testSafeKeepTarget = async () => {
@@ -479,35 +605,26 @@ export function CronPage() {
     });
   };
 
+  const isCleanupEditing = editing?.job_key === 'cleanup_audit_logs' || editing?.job_key === 'cleanup_operation_logs';
+  const isBackupEditing = editing?.job_key === 'control_plane_backup';
+  const totalPages = Math.max(1, Math.ceil(runsTotal / runsPageSize));
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="定时任务"
-        subtitle={
-          <span>
-            管理内置巡检、快照备份、SafeKeep 异地灾备与自定义调度任务 · 已配置 SafeKeep 目标{' '}
-            <b className="text-slate-700 dark:text-slate-200">{safekeepTargets.length}</b> 个
-            {isAdmin && (
-              <>
-                {' · '}
-                <Link to="/migration-backup" className="text-indigo-600 hover:underline dark:text-indigo-400">
-                  前往迁移与全量灾备页
-                </Link>
-              </>
-            )}
-          </span>
-        }
+        subtitle="管理内置与自定义定时任务的启用状态、执行计划与任务参数，支持立即手动触发并查看执行历史。"
         actions={
           <>
             <Button onClick={() => void load()}>
               <RefreshCw className="h-4 w-4" />
-              <span>刷新</span>
+              <span>刷新任务状态</span>
             </Button>
             {isAdmin && (
               <>
                 <Button onClick={openDrConfig}>
                   <Shield className="h-4 w-4" />
-                  <span>配置 SafeKeep / 灾备</span>
+                  <span>配置 SafeKeep</span>
                 </Button>
                 <Button variant="primary" onClick={openCreateDrawer}>
                   <Plus className="h-4 w-4" />
@@ -521,163 +638,152 @@ export function CronPage() {
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
-      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-[#e3e8f1] dark:border-slate-800 shadow-[0_3px_12px_rgba(15,23,42,0.03)] overflow-x-auto">
-        <table className="cron-table w-full text-sm">
-          <thead className="bg-[#f8faff] dark:bg-slate-950/60 text-xs text-slate-500 dark:text-slate-400 border-b border-slate-200/80 dark:border-slate-800">
-            <tr>
-              <th className="text-left px-4 py-3">任务名称与说明</th>
-              <th className="text-left px-4 py-3">调度周期</th>
-              <th className="text-left px-4 py-3">
-                <TermLabel
-                  term="策略"
-                  tip="防重入（Overlap）：上次未结束时的处理方式；漏执行（Misfire）：控制面停机错过触发时间后的补跑策略。"
-                />
-              </th>
-              <th className="text-left px-4 py-3">下次执行</th>
-              <th className="text-left px-4 py-3">上次执行</th>
-              <th className="text-left px-4 py-3">启用</th>
-              <th className="text-right px-4 py-3">操作</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-            {loading && (
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-[#e3e8f1] dark:border-slate-800 shadow-[0_3px_12px_rgba(15,23,42,0.03)] overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-6 py-4 border-b border-slate-100 dark:border-slate-800">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">任务计划</h2>
+          <span className="text-xs text-slate-500 dark:text-slate-400">按计划自动运行，也可随时手动触发</span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1040px] table-fixed text-sm">
+            <thead className="bg-[#f8faff] dark:bg-slate-950/60 text-xs text-slate-500 dark:text-slate-400 border-b border-slate-200/80 dark:border-slate-800">
               <tr>
-                <td colSpan={7}>
-                  <LoadingState label="正在加载定时任务..." />
-                </td>
+                <th className="text-left px-6 py-3 font-medium w-[29%]">任务</th>
+                <th className="text-left px-4 py-3 font-medium w-[16%]">计划</th>
+                <th className="text-left px-4 py-3 font-medium w-[17%]">下次执行</th>
+                <th className="text-left px-4 py-3 font-medium w-[18%]">最近一次</th>
+                <th className="text-left px-4 py-3 font-medium w-[72px]">启用</th>
+                <th className="text-right px-6 py-3 font-medium w-[220px]">操作</th>
               </tr>
-            )}
-            {!loading && jobs.length === 0 && (
-              <tr>
-                <td colSpan={7}>
-                  <EmptyState title="暂无定时任务" description="系统启动后将自动初始化内置巡检与维护任务。" />
-                </td>
-              </tr>
-            )}
-            {!loading &&
-              jobs.map((j) => {
-                const scheduleText = describeCron(j.cron_expr);
-                const nextTime = j.enabled && j.next_run_at && !j.next_run_at.startsWith('0001-01-01') ? j.next_run_at : '';
-                const desc = BUILTIN_DESCRIPTIONS[j.job_key] || (j.is_builtin ? '系统内置调度任务' : '管理员自定义定时任务');
-                const isRunning = runningId === j.id;
-                return (
-                  <tr key={j.id}>
-                    <td className="px-4 py-3.5 align-top min-w-[240px] max-w-[340px]">
-                      <div className="font-medium text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                        <span>{j.name}</span>
-                        {!j.is_builtin && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
-                            自定义
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">{desc}</div>
-                      <div className="font-mono text-[11px] text-slate-400 mt-0.5">{j.job_key || j.id}</div>
-                    </td>
-                    <td className="px-4 py-3.5 align-top min-w-[140px]">
-                      {scheduleText && (
-                        <div className="text-xs text-slate-700 dark:text-slate-300 mb-1">{scheduleText}</div>
-                      )}
-                      <code className="font-mono text-[11px] bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-1.5 py-0.5 rounded inline-block">
-                        {j.cron_expr}
-                      </code>
-                    </td>
-                    <td className="px-4 py-3.5 align-top text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                      <div>{OVERLAP_LABELS[j.overlap_policy] || j.overlap_policy}</div>
-                      <div className="text-[11px] text-slate-400">{MISFIRE_LABELS[j.misfire_policy] || j.misfire_policy}</div>
-                    </td>
-                    <td className="px-4 py-3.5 align-top text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                      {nextTime ? fmtTime(nextTime) : <span className="text-slate-400">—</span>}
-                    </td>
-                    <td className="px-4 py-3.5 align-top text-xs whitespace-nowrap">
-                      {!j.last_status ? (
-                        <span className="text-slate-400">—</span>
-                      ) : (
-                        <div className="space-y-1">
-                          <StatusBadge value={j.last_status} />
-                          <div className="text-[11px] text-slate-500 dark:text-slate-400">{fmtTime(j.last_run_at)}</div>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {loading && (
+                <tr>
+                  <td colSpan={6}>
+                    <LoadingState label="正在加载定时任务..." />
+                  </td>
+                </tr>
+              )}
+              {!loading && jobs.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <EmptyState title="暂无定时任务" description="系统启动后将自动初始化内置巡检与维护任务。" />
+                  </td>
+                </tr>
+              )}
+              {!loading &&
+                jobs.map((j) => {
+                  const tz = j.effective_timezone || j.timezone || 'UTC';
+                  const scheduleText = describeCron(j.cron_expr);
+                  const nextTime = j.enabled && j.next_run_at && !j.next_run_at.startsWith('0001-01-01') ? j.next_run_at : '';
+                  const desc = j.description || BUILTIN_DESCRIPTIONS[j.job_key] || (j.is_builtin ? '系统内置调度任务' : '管理员自定义定时任务');
+                  const isRunning = runningId === j.id;
+                  const lastSummary = j.last_summary || '—';
+                  return (
+                    <tr key={j.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
+                      <td className="px-6 py-4 align-middle">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">{j.name}</span>
+                          {!j.is_builtin && (
+                            <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
+                              自定义
+                            </span>
+                          )}
                         </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3.5 align-top">
-                      <div className="pt-0.5">
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed line-clamp-2" title={desc}>
+                          {desc}
+                        </p>
+                      </td>
+                      <td className="px-4 py-4 align-middle">
+                        {scheduleText && (
+                          <div className="text-xs text-slate-700 dark:text-slate-200">{scheduleText}</div>
+                        )}
+                        <code className="mt-1 inline-block font-mono text-[11px] bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-1.5 py-0.5 rounded">
+                          {j.cron_expr}
+                        </code>
+                        <div className="text-[11px] text-slate-400 mt-1 truncate">{tz}</div>
+                      </td>
+                      <td className="px-4 py-4 align-middle text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap tabular-nums">
+                        {nextTime ? formatScheduleTime(nextTime, tz) : <span className="text-slate-400">—</span>}
+                      </td>
+                      <td className="px-4 py-4 align-middle text-xs min-w-0">
+                        {!j.last_status ? (
+                          <span className="text-slate-400">—</span>
+                        ) : (
+                          <div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <StatusBadge value={j.last_status} />
+                              <span className="text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap tabular-nums">
+                                {formatScheduleTime(j.last_run_at, tz)}
+                              </span>
+                            </div>
+                            <p className="mt-1.5 text-xs text-slate-600 dark:text-slate-300 truncate" title={lastSummary}>
+                              {lastSummary}
+                            </p>
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-4 align-middle">
                         <Switch
                           checked={Boolean(j.enabled)}
                           disabled={!isAdmin || togglingId === j.id}
-                          label={`切换 ${j.name} 启用状态`}
+                          label={`${j.name} · ${j.enabled ? '停用' : '启用'}`}
                           onChange={(next) => void toggleJob(j, next)}
                         />
-                      </div>
-                    </td>
-                    <td className="px-4 py-3.5 align-top text-right whitespace-nowrap">
-                      <div className="inline-flex items-center gap-1.5">
-                        {isAdmin && (
-                          <>
-                            <button
-                              type="button"
-                              disabled={Boolean(runningId)}
-                              onClick={() => void triggerJob(j)}
-                              className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-45 inline-flex items-center gap-1"
+                      </td>
+                      <td className="px-6 py-4 align-middle text-right whitespace-nowrap">
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          {isAdmin && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                disabled={Boolean(runningId)}
+                                onClick={() => void triggerJob(j)}
+                              >
+                                {isRunning && <Loader2 className="w-3 h-3 animate-spin" />}
+                                <span>{isRunning ? '执行中' : '立即执行'}</span>
+                              </Button>
+                              <Button size="sm" onClick={() => openEditDrawer(j)}>
+                                编辑
+                              </Button>
+                            </>
+                          )}
+                          <Button size="sm" onClick={() => openRuns(j)}>
+                            记录
+                          </Button>
+                          {isAdmin && !j.is_builtin && (
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              aria-label={`删除 ${j.name}`}
+                              onClick={() => void deleteCustomJob(j)}
                             >
-                              {isRunning && <Loader2 className="w-3 h-3 animate-spin" />}
-                              <span>{isRunning ? '执行中' : '立即执行'}</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => openEditDrawer(j)}
-                              className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700"
-                            >
-                              编辑
-                            </button>
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => openRuns(j)}
-                          className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700"
-                        >
-                          历史
-                        </button>
-                        {isAdmin && j.job_key === 'control_plane_backup' && (
-                          <button
-                            type="button"
-                            onClick={openDrConfig}
-                            className="px-2.5 py-1.5 text-xs rounded-lg border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/70 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-500/25"
-                          >
-                            灾备参数
-                          </button>
-                        )}
-                        {isAdmin && !j.is_builtin && (
-                          <button
-                            type="button"
-                            aria-label={`删除 ${j.name}`}
-                            onClick={() => void deleteCustomJob(j)}
-                            className="px-2 py-1.5 text-xs rounded-lg border border-rose-200 dark:border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/15"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-          </tbody>
-        </table>
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      {/* Edit / Create Drawer */}
+      {/* Edit / Create Drawer (460px width aligned with engram) */}
       {drawerOpen && (
         <Drawer
-          title={creating ? '新建自定义定时任务' : `编辑定时任务：${editing?.name}`}
+          title={creating ? '新建自定义定时任务' : editing?.name || '配置定时任务'}
           subtitle={
             creating
               ? '支持集群快照、SafeKeep 异地灾备、巡检、Job 导出与 JWKS 同步。'
-              : BUILTIN_DESCRIPTIONS[editing?.job_key] || '调整任务触发周期、重入与漏执行策略。'
+              : editing?.description || BUILTIN_DESCRIPTIONS[editing?.job_key] || '调整任务触发周期、执行时区、超时与运行策略。'
           }
           onClose={() => void closeDrawer()}
           busy={saving}
-          width={creating ? 'lg' : 'md'}
+          width="md"
           footer={
             <>
               <Button disabled={saving} onClick={() => void closeDrawer()}>
@@ -685,7 +791,7 @@ export function CronPage() {
               </Button>
               <Button
                 variant="primary"
-                disabled={saving || Boolean(previewError) || (!creating && !isDirty)}
+                disabled={saving || !previewValid || (!creating && !isDirty)}
                 onClick={() => void handleSave()}
               >
                 {saving ? '保存中...' : '保存配置'}
@@ -693,110 +799,193 @@ export function CronPage() {
             </>
           }
         >
-          <form onSubmit={handleSave} className="space-y-4 text-sm">
+          <form onSubmit={handleSave} className="space-y-4 text-xs">
             <ErrorAlert message={formErr} onClose={() => setFormErr('')} />
 
-            <Input
-              label="任务名称"
-              required
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="例如：每晚 Nomad 快照"
-            />
+            {(creating || !editing?.is_builtin) && (
+              <Input
+                label="任务名称"
+                required
+                value={form.name}
+                onChange={(e) => updateDraft({ name: e.target.value })}
+                placeholder="例如：每晚 Nomad 快照"
+              />
+            )}
 
-            <div>
-              <label htmlFor="cron-preset" className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                执行周期预设
-              </label>
-              <select
-                id="cron-preset"
-                value={preset}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setPreset(val);
-                  if (val !== 'custom') setForm({ ...form, cron_expr: val });
-                }}
-                className="w-full px-3 py-2 text-xs border border-[#dce3ee] dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900"
-              >
-                {BASE_PRESETS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.value === 'custom' ? opt.label : `${opt.label}（${opt.value}）`}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <Select
+              label="计划"
+              value={form.schedule_type}
+              onChange={(e) => updateDraft({ schedule_type: e.target.value }, true)}
+            >
+              {SCHEDULE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </Select>
 
-            {preset === 'custom' && (
-              <div>
-                <label htmlFor="cron-expr" className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                  Cron 表达式（5 段：分 时 日 月 周）
+            {form.schedule_type === 'cron' && (
+              <div className="space-y-1.5">
+                <label htmlFor="cron-expr" className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Cron 表达式（分 时 日 月 周）
                 </label>
                 <input
                   id="cron-expr"
                   required
                   value={form.cron_expr}
-                  onChange={(e) => setForm({ ...form, cron_expr: e.target.value })}
-                  className={`w-full px-3 py-2 text-xs border rounded-lg font-mono ${
-                    previewError ? 'border-rose-400 focus:border-rose-500' : 'border-[#dce3ee] dark:border-slate-700'
+                  placeholder="例如 0 2 * * 1（每周一 02:00）"
+                  onChange={(e) => updateDraft({ cron_expr: e.target.value }, true)}
+                  className={`w-full rounded-lg border px-3 py-2 text-xs font-mono bg-white dark:bg-slate-950 focus:outline-none ${
+                    previewError
+                      ? 'border-rose-400 focus:border-rose-500'
+                      : 'border-[#dce3ee] dark:border-slate-700 focus:border-indigo-400'
                   }`}
                 />
-                {describeCron(form.cron_expr) && (
-                  <p className="text-[11px] text-indigo-600 dark:text-indigo-400 mt-1">
-                    含义：{describeCron(form.cron_expr)}
-                  </p>
-                )}
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  支持五字段 Cron、列表、范围和步长；星期 0 表示周日。
+                </p>
               </div>
             )}
 
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                  接下来 5 次执行时间{previewTimezone ? `（${previewTimezone}）` : ''}
-                </span>
-                {previewLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
-              </div>
-              {previewError ? (
-                <div className="text-xs text-rose-600 dark:text-rose-400">{previewError}</div>
-              ) : (
-                <div className="rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700 px-3.5 py-2.5 space-y-1">
-                  {previewRuns.length > 0 ? (
-                    previewRuns.map((rawTime) => (
-                      <div key={rawTime} className="text-xs font-mono text-slate-600 dark:text-slate-300">
-                        {fmtTime(rawTime)}
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-xs text-slate-400">—</div>
-                  )}
-                </div>
-              )}
+            <div className="space-y-1.5">
+              <label htmlFor="cron-timezone" className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                执行时区
+              </label>
+              <input
+                id="cron-timezone"
+                list="cron-timezone-presets"
+                required
+                value={form.timezone}
+                onChange={(e) => updateDraft({ timezone: e.target.value }, true)}
+                className="w-full rounded-lg border border-[#dce3ee] dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2 text-xs focus:border-indigo-400 focus:outline-none"
+              />
+              <datalist id="cron-timezone-presets">
+                {COMMON_TIMEZONES.map((tz) => (
+                  <option key={tz} value={tz} />
+                ))}
+              </datalist>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5" aria-live="polite" aria-atomic="true">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-300">未来执行时间</span>
+                {previewLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
+              </div>
+              <p className={`text-[11px] ${previewError ? 'text-rose-600 dark:text-rose-400' : 'text-indigo-600 dark:text-indigo-400'}`}>
+                {previewStatus || '—'}
+              </p>
+              {!previewError && (
+                <ol className="list-decimal list-inside rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700 px-3.5 py-2.5 space-y-1">
+                  {previewRuns.length > 0 ? (
+                    previewRuns.map((rawTime) => (
+                      <li key={rawTime} className="text-xs font-mono text-slate-600 dark:text-slate-300 tabular-nums">
+                        {formatScheduleTime(rawTime, previewTimezone || form.timezone)}
+                      </li>
+                    ))
+                  ) : (
+                    <li className="list-none text-xs text-slate-400">—</li>
+                  )}
+                </ol>
+              )}
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">预览未来 5 次执行时间，按所选时区显示。</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3.5 items-start">
+              <Input
+                label="超时（秒）"
+                type="number"
+                min={1}
+                max={86400}
+                required
+                hint="范围 1 ~ 86400 秒。"
+                value={form.timeout_seconds}
+                onChange={(e) => updateDraft({ timeout_seconds: Number(e.target.value) })}
+              />
+              <div className="space-y-1.5">
+                <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">启用状态</span>
+                <label className="flex items-center gap-2 min-h-[38px] cursor-pointer text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={form.enabled}
+                    onChange={(e) => updateDraft({ enabled: e.target.checked })}
+                  />
+                  <span>启用此定时任务</span>
+                </label>
+              </div>
+            </div>
+
+            {isCleanupEditing && (
+              <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
+                <Input
+                  label={editing.job_key === 'cleanup_audit_logs' ? '审计日志保留时长' : '运维任务日志保留时长'}
+                  placeholder="例如 30d、720h（留空沿用系统设置）"
+                  hint="支持时长格式如 24h、7d、30d（最小 1m）；留空则沿用系统设置中的保留天数。"
+                  value={form.retention}
+                  onChange={(e) => updateDraft({ retention: e.target.value })}
+                />
+                <div className="flex flex-wrap gap-1.5">
+                  {RETENTION_CHIPS.map((chip) => (
+                    <Button
+                      key={chip.value}
+                      size="sm"
+                      variant={form.retention === chip.value ? 'primary' : 'secondary'}
+                      onClick={() => updateDraft({ retention: chip.value })}
+                    >
+                      {chip.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {isBackupEditing && (
+              <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
+                <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 p-4 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <strong className="text-[13px] text-slate-900 dark:text-slate-100">SafeKeep 上传配置</strong>
+                    <Button size="sm" onClick={openDrConfig}>
+                      修改上传配置
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    统一使用迁移与灾备中的 SafeKeep 网关与加密口令配置。
+                  </p>
+                  <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-xs">
+                    <dt className="text-slate-500">灾备总开关</dt>
+                    <dd className="text-right font-medium">{backupCfg?.enabled ? '已启用' : '未启用'}</dd>
+                    <dt className="text-slate-500">SafeKeep 目标</dt>
+                    <dd className="text-right break-all">
+                      {safekeepTargets[0]?.safekeep_url || '未配置'}
+                      {safekeepTargets.length > 1 ? `（共 ${safekeepTargets.length} 个）` : ''}
+                    </dd>
+                    <dt className="text-slate-500">上传模式</dt>
+                    <dd className="text-right">
+                      {safekeepTargets[0]?.safekeep_mode === 'async' ? '异步上传（async）' : '同步上传（sync）'}
+                    </dd>
+                    <dt className="text-slate-500">备份加密</dt>
+                    <dd className="text-right">{backupCfg?.passphrase_set ? '已设置' : '未设置'}</dd>
+                  </dl>
+                </div>
+              </div>
+            )}
+
+            <div className="pt-4 border-t border-slate-200 dark:border-slate-800 grid grid-cols-2 gap-3">
               <Select
                 label={<TermLabel term="防重入策略" tip="skip_if_running：前一次尚未跑完则跳过本次；queue_one：排入 1 个等待槽位。" />}
                 value={form.overlap_policy}
-                onChange={(e) => setForm({ ...form, overlap_policy: e.target.value })}
+                onChange={(e) => updateDraft({ overlap_policy: e.target.value })}
               >
-                <option value="skip_if_running">skip_if_running</option>
-                <option value="queue_one">queue_one</option>
+                <option value="skip_if_running">运行中跳过 (skip_if_running)</option>
+                <option value="queue_one">排队一次 (queue_one)</option>
               </Select>
               <Select
                 label={<TermLabel term="漏执行策略" tip="控制面重启导致错过触发窗口时：skip 放弃补跑，run_once 立即补偿执行一次。" />}
                 value={form.misfire_policy}
-                onChange={(e) => setForm({ ...form, misfire_policy: e.target.value })}
+                onChange={(e) => updateDraft({ misfire_policy: e.target.value })}
               >
-                <option value="skip">skip</option>
-                <option value="run_once">run_once</option>
+                <option value="skip">漏过不补 (skip)</option>
+                <option value="run_once">补跑一次 (run_once)</option>
               </Select>
-            </div>
-
-            <div>
-              <span className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">调度开关</span>
-              <div className="flex items-center gap-2.5">
-                <Switch checked={form.enabled} label="启用该定时任务" onChange={(next) => setForm({ ...form, enabled: next })} />
-                <span className="text-xs text-slate-600 dark:text-slate-300">{form.enabled ? '已启用' : '已暂停'}</span>
-              </div>
             </div>
 
             {creating && (
@@ -806,8 +995,7 @@ export function CronPage() {
                   value={form.payload_type}
                   onChange={(e) => {
                     const pt = e.target.value;
-                    setForm({
-                      ...form,
+                    updateDraft({
                       payload_type: pt,
                       cluster_id: pt === 'safekeep_backup' ? '' : form.cluster_id || clusters[0]?.id || '',
                       target_id: pt === 'safekeep_backup' ? form.target_id || safekeepTargets[0]?.id || '' : '',
@@ -837,7 +1025,7 @@ export function CronPage() {
                       label="SafeKeep 目标"
                       required
                       value={form.target_id}
-                      onChange={(e) => setForm({ ...form, target_id: e.target.value })}
+                      onChange={(e) => updateDraft({ target_id: e.target.value })}
                     >
                       <option value="">请选择 SafeKeep 目标...</option>
                       {safekeepTargets.map((t: any) => (
@@ -849,7 +1037,7 @@ export function CronPage() {
                     <Select
                       label="备份范围"
                       value={form.cluster_id}
-                      onChange={(e) => setForm({ ...form, cluster_id: e.target.value })}
+                      onChange={(e) => updateDraft({ cluster_id: e.target.value })}
                     >
                       <option value="">控制面全量灾备 (.ndbundle)</option>
                       {clusters.map((c: any) => (
@@ -864,7 +1052,7 @@ export function CronPage() {
                     label="关联联动"
                     required
                     value={form.integration_id}
-                    onChange={(e) => setForm({ ...form, integration_id: e.target.value })}
+                    onChange={(e) => updateDraft({ integration_id: e.target.value })}
                   >
                     <option value="">请选择 Nomad-Vault 联动...</option>
                     {integrations.map((i: any) => (
@@ -876,7 +1064,7 @@ export function CronPage() {
                     label="关联集群"
                     required
                     value={form.cluster_id}
-                    onChange={(e) => setForm({ ...form, cluster_id: e.target.value })}
+                    onChange={(e) => updateDraft({ cluster_id: e.target.value })}
                   >
                     <option value="">请选择集群...</option>
                     {clusters.map((c: any) => (
@@ -888,7 +1076,7 @@ export function CronPage() {
                     label="关联集群 ID"
                     required
                     value={form.cluster_id}
-                    onChange={(e) => setForm({ ...form, cluster_id: e.target.value })}
+                    onChange={(e) => updateDraft({ cluster_id: e.target.value })}
                   />
                 )}
               </div>
@@ -897,46 +1085,95 @@ export function CronPage() {
         </Drawer>
       )}
 
-      {/* History Drawer */}
+      {/* Paginated History Drawer (aligned with engram scheduler-history-drawer) */}
       {runsJob && (
         <Drawer
-          title={`执行历史：${runsJob.name}`}
-          subtitle={BUILTIN_DESCRIPTIONS[runsJob.job_key] || runsJob.cron_expr}
-          onClose={() => setRunsJob(null)}
-          width="lg"
+          title={`${runsJob.name} · 执行记录`}
+          subtitle={runsJob.description || BUILTIN_DESCRIPTIONS[runsJob.job_key] || runsJob.cron_expr}
+          onClose={closeRuns}
+          width="xl"
           headerExtra={
-            <Button size="sm" onClick={() => void loadRuns(runsJob)} disabled={runsLoading}>
-              <RefreshCw className={`w-3.5 h-3.5 ${runsLoading ? 'animate-spin' : ''}`} />
-              <span>刷新</span>
-            </Button>
+            <div className="flex items-center gap-2">
+              <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={runsFailedOnly}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setRunsFailedOnly(next);
+                    setRunsPage(1);
+                    void loadRuns(runsJob, 1, next);
+                  }}
+                />
+                <span>仅看异常</span>
+              </label>
+              <Button size="sm" onClick={() => void loadRuns(runsJob, runsPage, runsFailedOnly)} disabled={runsLoading}>
+                <RefreshCw className={`w-3.5 h-3.5 ${runsLoading ? 'animate-spin' : ''}`} />
+                <span>刷新</span>
+              </Button>
+            </div>
+          }
+          footer={
+            <div className="flex items-center justify-between gap-2 w-full text-xs">
+              <span className="text-slate-500 dark:text-slate-400">
+                第 {runsPage} / {totalPages} 页 · 共 {runsTotal} 条
+              </span>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  disabled={runsLoading || runsPage <= 1}
+                  onClick={() => void loadRuns(runsJob, runsPage - 1, runsFailedOnly)}
+                >
+                  上一页
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={runsLoading || runsPage >= totalPages}
+                  onClick={() => void loadRuns(runsJob, runsPage + 1, runsFailedOnly)}
+                >
+                  下一页
+                </Button>
+              </div>
+            </div>
           }
         >
           {runsLoading ? (
-            <LoadingState label="正在加载执行历史..." />
+            <LoadingState label="正在加载执行记录…" />
           ) : runsError ? (
             <ErrorAlert message={runsError} />
           ) : runs.length === 0 ? (
-            <EmptyState title="暂无执行记录" description="该任务尚未产生历史运行记录。" />
+            <EmptyState
+              title={runsFailedOnly ? '没有异常执行记录' : '暂无执行记录'}
+              description={runsFailedOnly ? '当前筛选条件下没有失败或超时记录。' : '该任务尚未产生历史运行记录。'}
+            />
           ) : (
-            <div className="space-y-3 text-xs">
+            <div className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
               {runs.map((r) => {
-                const dur = formatDuration(r.started_at, r.finished_at);
+                const dur = formatDurationMs(r.duration_ms, r.started_at, r.finished_at);
+                const tz = runsJob.effective_timezone || runsJob.timezone || 'UTC';
                 return (
-                  <div
-                    key={r.id}
-                    className="rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 space-y-2 bg-slate-50/60 dark:bg-slate-800/40"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <StatusBadge value={r.status} />
-                        <span className="px-1.5 py-0.5 rounded bg-slate-200/70 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-mono text-[11px]">
-                          {r.trigger_type}
-                        </span>
-                        {dur && <span className="font-mono text-slate-400">{dur}</span>}
-                      </div>
-                      <span className="text-slate-500 dark:text-slate-400">{fmtTime(r.started_at)}</span>
+                  <article key={r.id} className="py-4 first:pt-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <StatusBadge value={r.status} />
+                      <time className="text-slate-500 dark:text-slate-400 tabular-nums" dateTime={r.started_at}>
+                        {formatScheduleTime(r.started_at, tz)}
+                      </time>
+                      <span className="text-slate-400">
+                        {r.trigger_type === 'manual' ? '手动触发' : '自动调度'}
+                      </span>
+                      {dur && <span className="font-mono text-slate-400 tabular-nums">{dur}</span>}
                     </div>
-                    <div className="text-slate-700 dark:text-slate-200 leading-relaxed">{r.summary || '无摘要输出'}</div>
+                    <p className="text-[13px] text-slate-700 dark:text-slate-200 leading-relaxed break-words">
+                      {r.summary || '—'}
+                    </p>
+                    {r.detail_log && (
+                      <details className="text-xs">
+                        <summary className="cursor-pointer text-indigo-600 dark:text-indigo-400 hover:underline">详情</summary>
+                        <pre className="mt-1.5 max-h-48 overflow-auto rounded-lg bg-slate-100 dark:bg-slate-950 p-2.5 font-mono text-[11px] text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-all">
+                          {r.detail_log}
+                        </pre>
+                      </details>
+                    )}
                     {r.operation_task_id && (
                       <div className="pt-1">
                         <Button size="sm" onClick={() => openTask(r.operation_task_id, `${runsJob.name} (${r.operation_task_id})`)}>
@@ -944,7 +1181,7 @@ export function CronPage() {
                         </Button>
                       </div>
                     )}
-                  </div>
+                  </article>
                 );
               })}
             </div>
@@ -954,6 +1191,12 @@ export function CronPage() {
 
       <Modal open={showDrModal} title="SafeKeep 灾备目标与加密配置" onClose={() => setShowDrModal(false)} wide>
         <div className="space-y-4 text-xs">
+          <div className="flex items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
+            <span>配置控制面与 Raft 快照异地灾备的 SafeKeep 网关。</span>
+            <Link to="/migration-backup" className="text-indigo-600 hover:underline dark:text-indigo-400 shrink-0">
+              前往迁移与全量灾备页
+            </Link>
+          </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex items-center gap-2 font-medium pt-2">
               <input type="checkbox" checked={bkEnabled} onChange={(e) => setBkEnabled(e.target.checked)} />
@@ -1071,9 +1314,9 @@ export function CronPage() {
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
-            <Button onClick={() => setShowDrModal(false)}>取消</Button>
-            <Button onClick={() => void testSafeKeepTarget()}>测试 SafeKeep 连通性</Button>
-            <Button variant="primary" onClick={saveDrConfig}>保存配置</Button>
+            <Button type="button" onClick={() => setShowDrModal(false)}>取消</Button>
+            <Button type="button" onClick={() => void testSafeKeepTarget()}>测试 SafeKeep 连通性</Button>
+            <Button type="button" variant="primary" onClick={saveDrConfig}>保存配置</Button>
           </div>
         </div>
       </Modal>

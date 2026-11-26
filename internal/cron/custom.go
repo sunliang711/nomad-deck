@@ -249,14 +249,19 @@ func (p *Platform) installCustom(s *Scheduler) {
 }
 
 // JobInput creates or edits a job. Built-in jobs accept only schedule,
-// policies and enabled.
+// policies, timeout, config and enabled.
 type JobInput struct {
-	Name          string          `json:"name"`
-	CronExpr      string          `json:"cron_expr"`
-	OverlapPolicy string          `json:"overlap_policy"`
-	MisfirePolicy string          `json:"misfire_policy"`
-	Enabled       *bool           `json:"enabled"`
-	Payload       json.RawMessage `json:"payload"`
+	Name           string          `json:"name"`
+	ScheduleType   string          `json:"schedule_type"`
+	CronExpr       string          `json:"cron_expr"`
+	CronExpression string          `json:"cron_expression"`
+	Timezone       *string         `json:"timezone"`
+	TimeoutSeconds *int            `json:"timeout_seconds"`
+	OverlapPolicy  string          `json:"overlap_policy"`
+	MisfirePolicy  string          `json:"misfire_policy"`
+	Enabled        *bool           `json:"enabled"`
+	Payload        json.RawMessage `json:"payload"`
+	Config         json.RawMessage `json:"config"`
 }
 
 func (in *JobInput) apply(s *Scheduler, ctx context.Context, j *db.CronJob) error {
@@ -266,11 +271,46 @@ func (in *JobInput) apply(s *Scheduler, ctx context.Context, j *db.CronJob) erro
 		}
 		j.Name = in.Name
 	}
-	if in.CronExpr != "" {
-		if _, err := ParseExpr(in.CronExpr); err != nil {
+	expr := strings.TrimSpace(in.CronExpr)
+	if expr == "" {
+		expr = strings.TrimSpace(in.CronExpression)
+	}
+	tz := j.Timezone
+	if in.Timezone != nil {
+		tz = strings.TrimSpace(*in.Timezone)
+		if tz == "Local" {
+			return badRequest("请填写有效的 IANA 时区，例如 Asia/Singapore、Asia/Shanghai 或 UTC")
+		}
+	}
+	kind := strings.TrimSpace(in.ScheduleType)
+	if expr != "" || kind != "" || in.Timezone != nil {
+		if expr == "" {
+			expr = j.CronExpr
+		}
+		if kind == "" {
+			if j.ScheduleType != "" {
+				kind = j.ScheduleType
+			} else {
+				kind = "cron"
+			}
+		}
+		effTZ := tz
+		if effTZ == "" {
+			effTZ = s.Timezone(ctx)
+		}
+		_, normKind, _, err := ValidateSchedule(kind, expr, effTZ)
+		if err != nil {
 			return badRequest("%v", err)
 		}
-		j.CronExpr = strings.TrimSpace(in.CronExpr)
+		j.ScheduleType = normKind
+		j.CronExpr = expr
+		j.Timezone = tz
+	}
+	if in.TimeoutSeconds != nil {
+		if *in.TimeoutSeconds < MinTimeoutSeconds || *in.TimeoutSeconds > MaxTimeoutSeconds {
+			return badRequest("超时时间需在 %d～%d 秒之间", MinTimeoutSeconds, MaxTimeoutSeconds)
+		}
+		j.TimeoutSeconds = *in.TimeoutSeconds
 	}
 	if in.OverlapPolicy != "" {
 		if in.OverlapPolicy != "skip_if_running" && in.OverlapPolicy != "queue_one" {
@@ -286,6 +326,27 @@ func (in *JobInput) apply(s *Scheduler, ctx context.Context, j *db.CronJob) erro
 	}
 	if in.Enabled != nil {
 		j.Enabled = *in.Enabled
+	}
+	if len(in.Config) > 0 && string(in.Config) != "null" {
+		var cfg map[string]any
+		if err := json.Unmarshal(in.Config, &cfg); err != nil {
+			return badRequest("任务参数 config 格式不合法")
+		}
+		if rawRet, ok := cfg["retention"]; ok {
+			retStr, _ := rawRet.(string)
+			retStr = strings.TrimSpace(retStr)
+			if retStr != "" {
+				dur, err := ParseDuration(retStr)
+				if err != nil || dur < time.Minute {
+					return badRequest("保留时长需为合法时长且不小于 1m（例如 7d、30d、720h）")
+				}
+				cfg["retention"] = retStr
+			} else {
+				delete(cfg, "retention")
+			}
+		}
+		b, _ := json.Marshal(cfg)
+		j.ConfigJSON = string(b)
 	}
 	if len(in.Payload) > 0 && string(in.Payload) != "null" {
 		if j.IsBuiltin {
@@ -313,10 +374,13 @@ func (in *JobInput) apply(s *Scheduler, ctx context.Context, j *db.CronJob) erro
 
 // Create adds a custom job.
 func (s *Scheduler) Create(ctx context.Context, actor audit.Actor, in JobInput) (*db.CronJob, error) {
-	if in.Name == "" || in.CronExpr == "" || len(in.Payload) == 0 {
+	if in.Name == "" || (in.CronExpr == "" && in.CronExpression == "") || len(in.Payload) == 0 {
 		return nil, badRequest("name、cron_expr 与 payload 必填")
 	}
-	j := &db.CronJob{ID: db.NewID(), OverlapPolicy: "skip_if_running", MisfirePolicy: "skip", Enabled: true}
+	j := &db.CronJob{
+		ID: db.NewID(), ScheduleType: "cron", TimeoutSeconds: DefaultTimeoutSeconds,
+		OverlapPolicy: "skip_if_running", MisfirePolicy: "skip", Enabled: true, ConfigJSON: "{}",
+	}
 	j.JobKey = "custom-" + strings.ToLower(j.ID)
 	if err := in.apply(s, ctx, j); err != nil {
 		return nil, err
@@ -329,7 +393,7 @@ func (s *Scheduler) Create(ctx context.Context, actor audit.Actor, in JobInput) 
 		return nil, err
 	}
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cron.create", ResourceType: "cron_job", ResourceID: j.ID,
-		ResourceName: j.Name, Summary: map[string]any{"cron_expr": j.CronExpr, "payload": json.RawMessage(j.PayloadJSON)}})
+		ResourceName: j.Name, Summary: map[string]any{"cron_expr": j.CronExpr, "timezone": j.Timezone, "timeout_seconds": j.TimeoutSeconds, "payload": json.RawMessage(j.PayloadJSON)}})
 	s.poke()
 	return j, nil
 }
@@ -355,8 +419,11 @@ func (s *Scheduler) Update(ctx context.Context, actor audit.Actor, id string, in
 		return nil, err
 	}
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cron.update", ResourceType: "cron_job", ResourceID: j.ID,
-		ResourceName: j.JobKey, Summary: map[string]any{"cron_expr": j.CronExpr, "enabled": j.Enabled,
-			"overlap_policy": j.OverlapPolicy, "misfire_policy": j.MisfirePolicy}})
+		ResourceName: j.JobKey, Summary: map[string]any{
+			"schedule_type": j.ScheduleType, "cron_expr": j.CronExpr, "timezone": j.Timezone,
+			"timeout_seconds": j.TimeoutSeconds, "enabled": j.Enabled,
+			"overlap_policy": j.OverlapPolicy, "misfire_policy": j.MisfirePolicy,
+		}})
 	s.poke()
 	return j, nil
 }
@@ -380,11 +447,14 @@ func (s *Scheduler) Delete(ctx context.Context, actor audit.Actor, id string) er
 		ResourceName: j.Name})
 }
 
-// JobView is a job with its running state.
+// JobView is a job with its running state and display metadata.
 type JobView struct {
 	*db.CronJob
-	Payload json.RawMessage `json:"payload"`
-	Running bool            `json:"running"`
+	EffectiveTimezone string          `json:"effective_timezone"`
+	Description       string          `json:"description"`
+	Payload           json.RawMessage `json:"payload"`
+	Config            json.RawMessage `json:"config"`
+	Running           bool            `json:"running"`
 }
 
 // List returns all jobs.
@@ -393,9 +463,29 @@ func (s *Scheduler) List(ctx context.Context) ([]JobView, error) {
 	if err != nil {
 		return nil, err
 	}
+	fallbackTZ := s.Timezone(ctx)
 	out := []JobView{}
 	for _, j := range js {
-		out = append(out, JobView{CronJob: j, Payload: json.RawMessage(j.PayloadJSON), Running: s.Running(j.ID)})
+		effTZ := j.Timezone
+		if effTZ == "" {
+			effTZ = fallbackTZ
+		}
+		cfg := j.ConfigJSON
+		if cfg == "" {
+			cfg = "{}"
+		}
+		payload := j.PayloadJSON
+		if payload == "" {
+			payload = "{}"
+		}
+		out = append(out, JobView{
+			CronJob:           j,
+			EffectiveTimezone: effTZ,
+			Description:       builtinDescription(j.JobKey),
+			Payload:           json.RawMessage(payload),
+			Config:            json.RawMessage(cfg),
+			Running:           s.Running(j.ID),
+		})
 	}
 	return out, nil
 }
@@ -410,4 +500,12 @@ func (s *Scheduler) Runs(ctx context.Context, id string, limit int) ([]*db.CronR
 		runs = []*db.CronRun{}
 	}
 	return runs, err
+}
+
+// RunsPage returns paginated run history and total count for one job.
+func (s *Scheduler) RunsPage(ctx context.Context, id string, failedOnly bool, page, pageSize int) ([]*db.CronRun, int, error) {
+	if _, err := db.GetCronJob(ctx, s.DB.Reader, id); err != nil {
+		return nil, 0, notFound()
+	}
+	return db.ListCronRunsPage(ctx, s.DB.Reader, id, failedOnly, page, pageSize)
 }

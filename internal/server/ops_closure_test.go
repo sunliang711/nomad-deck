@@ -3,12 +3,17 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,31 +72,100 @@ func TestBackupAndDashboardRoutes(t *testing.T) {
 		}
 	}
 
+	var (
+		skMu      sync.Mutex
+		skUploads = map[string][]byte{}
+	)
+	skSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-API-Key") != "sk-key-1" {
+			http.Error(w, `{"error":{"code":"unauthorized","message":"bad api key"}}`, http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/upstreams":
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{{"id": "up1", "name": "s3"}}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/backups":
+			b, _ := io.ReadAll(r.Body)
+			sum := sha256.Sum256(b)
+			sumHex := hex.EncodeToString(sum[:])
+			skMu.Lock()
+			skUploads["task_1"] = b
+			skMu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"task": map[string]any{"id": "task_1", "status": "succeeded", "sha256": sumHex}})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/backups/") && strings.HasSuffix(r.URL.Path, "/download"):
+			skMu.Lock()
+			b := skUploads["task_1"]
+			skMu.Unlock()
+			_, _ = w.Write(b)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer skSrv.Close()
+
 	// Wrong secondary password rejected on PUT /api/v1/backup/config.
-	localDir := filepath.Join(t.TempDir(), "dr")
+	skTarget := map[string]any{
+		"id":               "t-sk",
+		"name":             "sk",
+		"type":             "safekeep",
+		"enabled":          true,
+		"safekeep_url":     skSrv.URL,
+		"safekeep_api_key": "sk-key-1",
+		"safekeep_subpath": "nomad-deck",
+		"safekeep_mode":    "sync",
+		"retention_count":  2,
+	}
 	if code, _ := root.do("PUT", "/api/v1/backup/config", map[string]any{
 		"current_password": "wrong-password",
 		"enabled":          true,
 		"passphrase":       "backup-secret-passphrase",
-		"targets":          []any{map[string]any{"name": "loc", "type": "local", "enabled": true, "path": localDir}},
+		"targets":          []any{skTarget},
 	}, nil); code != 403 {
 		t.Fatalf("wrong password got %d, want 403", code)
 	}
 
 	// Test target endpoint.
-	if code, b := root.do("POST", "/api/v1/backup/targets/test", map[string]any{
-		"name": "loc", "type": "local", "enabled": true, "path": localDir,
-	}, nil); code != 200 || b["result"].(map[string]any)["ok"] != true {
+	if code, b := root.do("POST", "/api/v1/backup/targets/test", skTarget, nil); code != 200 || b["result"].(map[string]any)["ok"] != true {
 		t.Fatalf("target test: %d %v", code, b)
 	}
 
-	// Save backup config with local target (no offsite -> missing_offsite_target = true).
+	// Save backup config with disabled target first to confirm missing_offsite_target = true.
+	disabledTarget := map[string]any{
+		"id":               "t-sk",
+		"name":             "sk",
+		"type":             "safekeep",
+		"enabled":          false,
+		"safekeep_url":     skSrv.URL,
+		"safekeep_api_key": "sk-key-1",
+		"safekeep_subpath": "nomad-deck",
+		"safekeep_mode":    "sync",
+		"retention_count":  2,
+	}
+	if code, b := root.do("PUT", "/api/v1/backup/config", map[string]any{
+		"current_password": adminPass,
+		"enabled":          false,
+		"passphrase":       "backup-secret-passphrase",
+		"include_history":  []string{"audit_logs"},
+		"targets":          []any{disabledTarget},
+	}, nil); code != 200 {
+		t.Fatalf("save disabled backup config: %d %v", code, b)
+	}
+	code, dashBefore := viewer.do("GET", "/api/v1/dashboard/summary", nil, nil)
+	if code != 200 {
+		t.Fatalf("dashboard before enable: %d %v", code, dashBefore)
+	}
+	if dashBefore["backup_alerts"].(map[string]any)["missing_offsite_target"] != true {
+		t.Fatalf("expected missing_offsite_target=true when target disabled: %v", dashBefore["backup_alerts"])
+	}
+
+	// Enable SafeKeep target and run manual backup.
 	if code, b := root.do("PUT", "/api/v1/backup/config", map[string]any{
 		"current_password": adminPass,
 		"enabled":          true,
 		"passphrase":       "backup-secret-passphrase",
 		"include_history":  []string{"audit_logs"},
-		"targets":          []any{map[string]any{"id": "t-loc", "name": "loc", "type": "local", "enabled": true, "path": localDir, "retention_count": 2}},
+		"targets":          []any{skTarget},
 	}, nil); code != 200 {
 		t.Fatalf("save backup config: %d %v", code, b)
 	}
@@ -131,8 +205,8 @@ func TestBackupAndDashboardRoutes(t *testing.T) {
 		t.Fatalf("expected clock_skew_alert: %v", nodesMap)
 	}
 	ba := dash["backup_alerts"].(map[string]any)
-	if ba["missing_offsite_target"] != true {
-		t.Fatalf("expected missing_offsite_target=true: %v", ba)
+	if ba["missing_offsite_target"] != false {
+		t.Fatalf("expected missing_offsite_target=false with enabled safekeep target: %v", ba)
 	}
 
 	// Node log stream validates bad node membership & query args.

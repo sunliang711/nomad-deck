@@ -538,14 +538,10 @@ func (s *Service) RevealSecret(ctx context.Context, actor audit.Actor, kind, tar
 		for _, t := range cfg.Targets {
 			if t.ID == targetID {
 				found = true
-				switch t.Type {
-				case TargetS3:
-					secret = t.SecretAccessKey
-				case TargetSafeKeep:
-					secret = t.SafeKeepAPIKey
-				default:
+				if t.Type != TargetSafeKeep {
 					return "", badRequest("该备份目标类型不含密钥字段")
 				}
+				secret = t.SafeKeepAPIKey
 				break
 			}
 		}

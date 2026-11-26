@@ -368,7 +368,7 @@ export function VersionPage() {
         subtitle="检查 NomadDeck 官方 Release 更新、实时进度自更新或预约升级与版本回退"
         actions={
           <Button onClick={() => void load(true, useProxy)} loading={checking}>
-            <RefreshCw className={`h-4 w-4 ${checking ? 'animate-spin' : ''}`} />
+            {!checking && <RefreshCw className="h-4 w-4" />}
             <span>{checking ? '检查中...' : '检查更新'}</span>
           </Button>
         }

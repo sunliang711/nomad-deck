@@ -33,7 +33,6 @@ const navItems = [
   { to: '/vault', label: 'Vault 集群', icon: Shield, group: 'workspace' },
   { to: '/integrations', label: '集群联动', icon: Link2, group: 'workspace' },
   { to: '/jobs', label: 'Nomad Job 中心', icon: FileCode2, group: 'workspace' },
-  { to: '/operations', label: '运维任务', icon: Activity, group: 'admin' },
   { to: '/cron', label: '定时任务', icon: Clock, group: 'admin' },
   { to: '/audit', label: '审计日志', icon: ScrollText, group: 'admin' },
   { to: '/migration-backup', label: '迁移与灾备', icon: ArchiveRestore, group: 'admin' },

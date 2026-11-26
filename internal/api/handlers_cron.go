@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -67,28 +66,53 @@ func (a *API) runCronJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) listCronRuns(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	runs, err := a.Cron.Runs(r.Context(), chi.URLParam(r, "id"), limit)
+	q := r.URL.Query()
+	id := chi.URLParam(r, "id")
+	if q.Get("page") != "" || q.Get("page_size") != "" || q.Get("failed_only") != "" {
+		page, _ := strconv.Atoi(q.Get("page"))
+		if page < 1 {
+			page = 1
+		}
+		pageSize, _ := strconv.Atoi(q.Get("page_size"))
+		if pageSize <= 0 || pageSize > 100 {
+			pageSize = 20
+		}
+		failedOnly := q.Get("failed_only") == "true" || q.Get("failed_only") == "1"
+		items, total, err := a.Cron.RunsPage(r.Context(), id, failedOnly, page, pageSize)
+		if err != nil {
+			a.writeErr(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"runs":      items,
+			"items":     items,
+			"total":     total,
+			"page":      page,
+			"page_size": pageSize,
+		})
+		return
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	runs, err := a.Cron.Runs(r.Context(), id, limit)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"runs":      runs,
+		"items":     runs,
+		"total":     len(runs),
+		"page":      1,
+		"page_size": len(runs),
+	})
 }
 
 func (a *API) previewCronSchedule(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Schedule string `json:"schedule"`
-		CronExpr string `json:"cron_expr"`
-	}
+	var req cron.SchedulePreviewRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	expr := strings.TrimSpace(req.Schedule)
-	if expr == "" {
-		expr = strings.TrimSpace(req.CronExpr)
-	}
-	times, err := a.Cron.Preview(r.Context(), expr, 5)
+	times, tz, err := a.Cron.PreviewSchedule(r.Context(), req, 5)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_cron", err.Error())
 		return
@@ -99,6 +123,6 @@ func (a *API) previewCronSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"next_runs": out,
-		"timezone":  a.Cron.Timezone(r.Context()),
+		"timezone":  tz,
 	})
 }

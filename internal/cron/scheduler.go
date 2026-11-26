@@ -132,12 +132,21 @@ func ParseExpr(expr string) (robfig.Schedule, error) {
 	return sch, nil
 }
 
+func (s *Scheduler) jobLocation(ctx context.Context, j *db.CronJob) *time.Location {
+	if j != nil && strings.TrimSpace(j.Timezone) != "" && j.Timezone != "Local" {
+		if loc, err := time.LoadLocation(strings.TrimSpace(j.Timezone)); err == nil {
+			return loc
+		}
+	}
+	return s.location(ctx)
+}
+
 func (s *Scheduler) next(ctx context.Context, j *db.CronJob, after time.Time) time.Time {
 	sch, err := ParseExpr(j.CronExpr)
 	if err != nil {
 		return time.Time{}
 	}
-	return sch.Next(after.In(s.location(ctx))).UTC()
+	return sch.Next(after.In(s.jobLocation(ctx, j))).UTC()
 }
 
 // Timezone returns the configured scheduling timezone name.
@@ -329,7 +338,7 @@ func (s *Scheduler) fire(ctx context.Context, j *db.CronJob, at time.Time, trigg
 		if err := db.InsertCronRun(ctx, s.DB.Writer, rec); err != nil {
 			return nil, err
 		}
-		_ = db.SetCronLast(ctx, s.DB.Writer, j.ID, db.RunSkipped, rec.FinishedAt)
+		_ = db.SetCronLast(ctx, s.DB.Writer, j.ID, db.RunSkipped, reason, rec.FinishedAt)
 		return rec, nil
 	}
 	if reason := s.Ops.Barrier(); reason != "" {
@@ -380,7 +389,11 @@ func (s *Scheduler) fire(ctx context.Context, j *db.CronJob, at time.Time, trigg
 
 func (s *Scheduler) execute(parent context.Context, j *db.CronJob, rec *db.CronRun, h Handler) {
 	defer s.wg.Done()
-	ctx, cancel := context.WithTimeout(parent, RunTimeout)
+	timeout := time.Duration(j.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = time.Duration(DefaultTimeoutSeconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	r := &Run{s: s, Job: j, Record: rec}
 	summary, err := func() (sum string, err error) {
@@ -397,8 +410,15 @@ func (s *Scheduler) execute(parent context.Context, j *db.CronJob, rec *db.CronR
 		status, summary, err = db.RunSkipped, skipErr.Reason, nil
 	}
 	if err != nil {
-		status = db.RunFailed
+		if errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
+			status = db.RunTimeout
+		} else {
+			status = db.RunFailed
+		}
 		msg := audit.RedactString(err.Error())
+		if status == db.RunTimeout && !strings.Contains(msg, "超时") {
+			msg = fmt.Sprintf("任务执行超时（超过 %d 秒）：%s", int(timeout.Seconds()), msg)
+		}
 		if summary == "" {
 			summary = msg
 		} else {
@@ -407,13 +427,18 @@ func (s *Scheduler) execute(parent context.Context, j *db.CronJob, rec *db.CronR
 		r.Logf("错误：%s", msg)
 	}
 	now := s.DB.Now()
+	durationMS := now.Sub(rec.StartedAt).Milliseconds()
+	if durationMS < 0 {
+		durationMS = 0
+	}
+	cleanSummary := audit.RedactString(summary)
 	bg := context.Background()
-	if dbErr := db.FinishCronRun(bg, s.DB.Writer, rec.ID, status, audit.RedactString(summary), r.detail(), now); dbErr != nil {
+	if dbErr := db.FinishCronRun(bg, s.DB.Writer, rec.ID, status, cleanSummary, r.detail(), durationMS, now); dbErr != nil {
 		s.Log.Error("finish cron run", "job", j.JobKey, "err", dbErr)
 	}
-	_ = db.SetCronLast(bg, s.DB.Writer, j.ID, status, now)
-	if status == db.RunFailed {
-		s.Log.Warn("scheduled job failed", "job", j.JobKey, "err", summary)
+	_ = db.SetCronLast(bg, s.DB.Writer, j.ID, status, cleanSummary, now)
+	if status == db.RunFailed || status == db.RunTimeout {
+		s.Log.Warn("scheduled job failed", "job", j.JobKey, "status", status, "err", cleanSummary)
 	}
 	s.mu.Lock()
 	delete(s.running, j.ID)

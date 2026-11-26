@@ -695,6 +695,7 @@ func (s *Service) NodeService(ctx context.Context, actor audit.Actor, clusterID,
 type NodeConfigInput struct {
 	ClientSettings
 	ExtraSANs     []string `json:"extra_sans"`
+	ReinstallCNI  bool     `json:"reinstall_cni"`
 	UseProxy      *bool    `json:"use_proxy"`
 	ConfirmSingle bool     `json:"confirm_single_node"`
 }
@@ -746,8 +747,12 @@ func (s *Service) UpdateNodeConfig(ctx context.Context, actor audit.Actor, clust
 		return nil, err
 	}
 	var hc *cluster.HTTPClient
-	if in.CNI && !old.CNI {
-		if hc, err = cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy); err != nil {
+	if in.CNI && (!old.CNI || in.ReinstallCNI) {
+		reqProxy := in.UseProxy
+		if reqProxy == nil && cl.Settings.UseProxy != nil {
+			reqProxy = cl.Settings.UseProxy
+		}
+		if hc, err = cluster.NewHTTPClient(ctx, s.Proxy, reqProxy); err != nil {
 			return nil, err
 		}
 	}
@@ -792,7 +797,7 @@ func (s *Service) UpdateNodeConfig(ctx context.Context, actor audit.Actor, clust
 				return err
 			}
 			defer func() { nc.Done(ctx, err) }()
-			if arts != nil {
+			if arts != nil && arts.cni[nc.Node.Arch] != nil {
 				if err := s.installCNI(ctx, t, nc, arts.cni[nc.Node.Arch]); err != nil {
 					return err
 				}
@@ -827,6 +832,7 @@ type SettingsInput struct {
 	JobGCThreshold   *string     `json:"job_gc_threshold"`
 	ExecEnabled      *bool       `json:"exec_enabled"`
 	CNIVersion       *string     `json:"cni_version"`
+	UseProxy         *bool       `json:"use_proxy"`
 	ConfirmSingle    bool        `json:"confirm_single_node"`
 }
 
@@ -838,7 +844,12 @@ func (s *Service) UpdateSettings(ctx context.Context, actor audit.Actor, cluster
 	if err != nil {
 		return nil, err
 	}
+	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
 	rollout := false
+	cniChanged := false
 	if in.PublicAPIURL != nil && *in.PublicAPIURL != cl.PublicAPIURL {
 		if *in.PublicAPIURL != "" {
 			if err := validURL(*in.PublicAPIURL); err != nil {
@@ -865,16 +876,33 @@ func (s *Service) UpdateSettings(ctx context.Context, actor audit.Actor, cluster
 		v := *in.ExecEnabled
 		cl.Settings.ExecEnabled = &v
 	}
-	if in.CNIVersion != nil {
-		if *in.CNIVersion != "" && !contains(s.Releases.CNI(ctx).Versions(), *in.CNIVersion) {
+	if in.CNIVersion != nil && *in.CNIVersion != cl.Settings.CNIVersion {
+		if *in.CNIVersion == "" {
+			if needsCNI(members) {
+				return nil, badRequest("仍有 Client 节点启用了 CNI，请先关闭节点 CNI 后再清空集群 CNI 版本")
+			}
+		} else if !contains(s.Releases.CNI(ctx).Versions(), *in.CNIVersion) {
 			return nil, badRequest("CNI 版本 %s 没有登记的 SHA256", *in.CNIVersion)
 		}
 		cl.Settings.CNIVersion = *in.CNIVersion
+		if *in.CNIVersion != "" && needsCNI(members) {
+			cniChanged, rollout = true, true
+		}
 	}
 	deployed := cl.InitState == db.InitInitialized
+	var hc *cluster.HTTPClient
 	if rollout && deployed {
 		if err := s.requireOperable(cl); err != nil {
 			return nil, err
+		}
+		if cniChanged {
+			reqProxy := in.UseProxy
+			if reqProxy == nil && cl.Settings.UseProxy != nil {
+				reqProxy = cl.Settings.UseProxy
+			}
+			if hc, err = cluster.NewHTTPClient(ctx, s.Proxy, reqProxy); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err := s.saveSettings(ctx, cl); err != nil {
@@ -884,10 +912,6 @@ func (s *Service) UpdateSettings(ctx context.Context, actor audit.Actor, cluster
 		ResourceName: cl.Name, Summary: map[string]any{"rollout": rollout && deployed}})
 	if !rollout || !deployed {
 		return nil, nil
-	}
-	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
-	if err != nil {
-		return nil, err
 	}
 	return s.Ops.Submit(ctx, ops.Spec{Action: "cluster.settings_rollout", TargetType: "cluster", TargetID: clusterID,
 		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name,
@@ -900,11 +924,22 @@ func (s *Service) UpdateSettings(ctx context.Context, actor audit.Actor, cluster
 			if err != nil {
 				return err
 			}
+			var arts *artifacts
+			if hc != nil {
+				if arts, err = s.fetchArtifacts(ctx, t, hc, cl, "", members); err != nil {
+					return err
+				}
+			}
 			gi, err := s.genInput(ctx, cl, members)
 			if err != nil {
 				return err
 			}
 			return s.rolling(ctx, t, cl, "下发集群配置", in.ConfirmSingle, func(nc *cluster.NodeCtx, m *db.ClusterNode, _ []*db.ClusterNode) error {
+				if arts != nil && IsClient(m.Role) && memberConfig(m).CNI && arts.cni[nc.Node.Arch] != nil {
+					if err := s.installCNI(ctx, t, nc, arts.cni[nc.Node.Arch]); err != nil {
+						return err
+					}
+				}
 				return s.applyAndVerify(ctx, cl, nc, gi, m)
 			})
 		}})

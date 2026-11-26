@@ -51,6 +51,12 @@ func TestRenderFiles(t *testing.T) {
 	if RunUser(RoleServer) != "nomad" || RunUser(RoleClient) != "root" || RunUser(RoleServerClient) != "root" {
 		t.Error("run user by role")
 	}
+	cniScript := CNIInstallScript("/tmp/cni.tgz")
+	for _, want := range []string{ModulesLoadFile, SysctlFile, "br_netfilter", "net.bridge.bridge-nf-call-iptables = 1"} {
+		if !strings.Contains(cniScript, want) {
+			t.Errorf("CNIInstallScript missing %q", want)
+		}
+	}
 }
 
 // TestRenderedConfigValidates runs the real "nomad config validate" on the

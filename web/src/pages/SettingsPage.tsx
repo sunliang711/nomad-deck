@@ -44,6 +44,13 @@ const settingMeta: SettingItemMeta[] = [
   { key: 'defaults.vault_version', group: 'releases', label: '默认 Vault 版本', tip: '填 latest 可自动解析 HashiCorp 最新稳定版，或指定具体版本号。', type: 'text' },
   { key: 'defaults.docker_version', group: 'releases', label: '默认 Docker 版本', type: 'text' },
   { key: 'release.mirror_url', group: 'releases', label: 'HashiCorp 镜像源 URL', tip: '覆盖默认 releases.hashicorp.com 地址，适合内网制品库或反代加速。', type: 'text' },
+  {
+    key: 'release.cni_checksums',
+    group: 'releases',
+    label: '自定义 CNI 插件校验和 (JSON)',
+    tip: '按 {"v1.11.0":{"amd64":"<sha256>","arm64":"<sha256>"}} 格式登记额外的 containernetworking/plugins 版本校验和，与内置版本合并展示。',
+    type: 'textarea',
+  },
   { key: 'release.transfer_rate_limit', group: 'releases', label: '分发限速（字节/秒，0=不限）', tip: '限制控制面向节点 SFTP 分发安装包时的带宽上限。', type: 'number' },
   { key: 'upgrade.max_minor_skip', group: 'releases', label: '滚动升级允许跨小版本上限', tip: '例如设为 2 时，不允许从 1.7 直接跨 3 个次版本升到 1.10，防止 Raft 状态机不兼容。', type: 'number' },
   { key: 'self_update.channel', group: 'releases', label: '自更新发布通道', type: 'select', options: ['stable', 'prerelease'] },
@@ -95,7 +102,12 @@ export function SettingsPage() {
   const buildSettingsSnap = (obj: Record<string, any>) => {
     const out: Record<string, any> = {};
     for (const m of settingMeta) {
-      out[m.key] = obj[m.key] ?? '';
+      if (m.key === 'release.cni_checksums') {
+        const raw = obj[m.key];
+        out[m.key] = typeof raw === 'string' ? raw : JSON.stringify(raw || {}, null, 2);
+      } else {
+        out[m.key] = obj[m.key] ?? '';
+      }
     }
     return JSON.stringify(out);
   };
@@ -118,7 +130,10 @@ export function SettingsPage() {
     setErr('');
     try {
       const [sRes, pRes] = await Promise.all([apiGet('/api/v1/settings'), apiGet('/api/v1/settings/proxy')]);
-      const nextSettings = sRes.settings || {};
+      const nextSettings = { ...(sRes.settings || {}) };
+      if (typeof nextSettings['release.cni_checksums'] !== 'string') {
+        nextSettings['release.cni_checksums'] = JSON.stringify(nextSettings['release.cni_checksums'] || {}, null, 2);
+      }
       setSettings(nextSettings);
       setSavedSettingsSnap(buildSettingsSnap(nextSettings));
 
@@ -187,10 +202,27 @@ export function SettingsPage() {
     try {
       const payload: Record<string, any> = {};
       for (const m of settingMeta) {
-        if (m.key in settings) payload[m.key] = settings[m.key];
+        if (!(m.key in settings)) continue;
+        if (m.key === 'release.cni_checksums') {
+          const raw = String(settings[m.key] || '').trim() || '{}';
+          try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              throw new Error('格式应为 JSON 对象');
+            }
+            payload[m.key] = parsed;
+          } catch (parseErr: any) {
+            throw new Error(`自定义 CNI 插件校验和 JSON 无效：${parseErr?.message || '语法错误'}`);
+          }
+        } else {
+          payload[m.key] = settings[m.key];
+        }
       }
       const res = await apiPut('/api/v1/settings', payload);
-      const next = res.settings || {};
+      const next = { ...(res.settings || {}) };
+      if (typeof next['release.cni_checksums'] !== 'string') {
+        next['release.cni_checksums'] = JSON.stringify(next['release.cni_checksums'] || {}, null, 2);
+      }
       setSettings(next);
       setSavedSettingsSnap(buildSettingsSnap(next));
       toast.success(res.restart_required ? '设置已保存（部分参数需重启控制面生效）' : '系统设置已保存');
@@ -431,6 +463,20 @@ export function SettingsPage() {
                             <option key={o} value={o}>{o}</option>
                           ))}
                         </Select>
+                      );
+                    }
+                    if (m.type === 'textarea') {
+                      return (
+                        <label key={m.key} className="block space-y-1.5 sm:col-span-2">
+                          <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">{labelNode}</span>
+                          <textarea
+                            rows={4}
+                            disabled={!isAdmin}
+                            value={settings[m.key] ?? '{}'}
+                            onChange={(e) => setSettings({ ...settings, [m.key]: e.target.value })}
+                            className="w-full rounded-lg border border-[#dce3ee] bg-white px-3 py-2 font-mono text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                          />
+                        </label>
                       );
                     }
                     return (

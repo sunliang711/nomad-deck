@@ -364,7 +364,11 @@ func needsCNI(ms []*db.ClusterNode) bool {
 // every architecture in use.
 func (s *Service) fetchArtifacts(ctx context.Context, t *ops.Task, hc *cluster.HTTPClient, cl *nomadCluster, version string,
 	members []*db.ClusterNode) (*artifacts, error) {
-	step, err := t.Step("下载并校验 Nomad "+version, "")
+	stepTitle := "下载并校验 Nomad " + version
+	if version == "" {
+		stepTitle = "下载并校验 CNI 插件"
+	}
+	step, err := t.Step(stepTitle, "")
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +400,7 @@ func (s *Service) fetchArtifacts(ctx context.Context, t *ops.Task, hc *cluster.H
 				}
 				a.cni[n.Arch] = art
 			}
-			if IsClient(m.Role) && a.dockerVersion != "" && (n.DockerMode == "absent" || n.DockerMode == "") {
+			if version != "" && IsClient(m.Role) && a.dockerVersion != "" && (n.DockerMode == "absent" || n.DockerMode == "") {
 				if _, err := dockerTarget(n); err != nil {
 					step.Logf("%s：%v，跳过自动安装 Docker", n.Name, err)
 					continue

@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { ArrowRight, CheckCircle2, Circle, KeyRound, Loader2, Server, ShieldCheck, Terminal, Trash2 } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Circle, KeyRound, Loader2, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2 } from 'lucide-react';
 import { apiGet, fmtTime } from '../lib/api';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { isTaskActiveStatus } from '../lib/actionLabels';
@@ -38,6 +38,9 @@ interface ClusterOpsSectionProps {
   onCheckGate?: (node: any) => Promise<unknown> | void;
   onRestartNode: (node: any) => Promise<unknown> | void;
   onRemoveNode: (node: any) => Promise<unknown> | void;
+  onOpenClusterSettings?: () => void;
+  onConfigureNode?: (node: any) => void;
+  nodeConfigs?: Record<string, any>;
   onError: (msg: string) => void;
   quickActions?: React.ReactNode;
 }
@@ -74,6 +77,9 @@ export function ClusterOpsSection({
   onCheckGate,
   onRestartNode,
   onRemoveNode,
+  onOpenClusterSettings,
+  onConfigureNode,
+  nodeConfigs,
   onError,
   quickActions,
 }: ClusterOpsSectionProps) {
@@ -259,12 +265,20 @@ export function ClusterOpsSection({
         <Card
           title="下一步：部署集群服务"
           actions={
-            onUninstall && (
-              <Button size="sm" variant="ghost" disabled={blocked} onClick={() => void runBusy('uninstall', onUninstall)}>
-                <Trash2 className="h-3.5 w-3.5 text-rose-500" />
-                <span className="text-rose-600 dark:text-rose-400">删除未部署配置</span>
-              </Button>
-            )
+            <div className="flex flex-wrap items-center gap-2">
+              {onOpenClusterSettings && (
+                <Button size="sm" disabled={blocked} onClick={onOpenClusterSettings}>
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                  <span>集群配置</span>
+                </Button>
+              )}
+              {onUninstall && (
+                <Button size="sm" variant="ghost" disabled={blocked} onClick={() => void runBusy('uninstall', onUninstall)}>
+                  <Trash2 className="h-3.5 w-3.5 text-rose-500" />
+                  <span className="text-rose-600 dark:text-rose-400">删除未部署配置</span>
+                </Button>
+              )}
+            </div>
           }
         >
           <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(260px,1fr)]">
@@ -277,14 +291,29 @@ export function ClusterOpsSection({
                   ? '控制面将通过 SSH 下载官方 Vault 程序包、生成 TLS 证书并启动服务。启动完成后，可直接在当前页面一键初始化并自动解封。'
                   : '控制面将通过 SSH 下载官方 Nomad 程序包、配置 mTLS 加密通信、启动服务并自动完成集群组建与 ACL 初始化。'}
               </p>
-              <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300 space-y-1">
+              <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300 space-y-2">
                 <div className="font-medium text-slate-800 dark:text-slate-100">已选目标主机 ({clusterNodes.length})</div>
-                {clusterNodes.map((n: any) => (
-                  <div key={n.node_id} className="flex items-center justify-between font-mono">
-                    <span>{n.name}</span>
-                    <span className="text-slate-500">{n.api_addr || n.advertise_addr}</span>
-                  </div>
-                ))}
+                {clusterNodes.map((n: any) => {
+                  const cfg = nodeConfigs?.[n.node_id];
+                  const hvCount = Array.isArray(cfg?.host_volumes) ? cfg.host_volumes.length : 0;
+                  return (
+                    <div key={n.node_id} className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5 font-mono">
+                        <span className="font-semibold text-slate-800 dark:text-slate-100">{n.name}</span>
+                        <span className="text-slate-500">{n.api_addr || n.advertise_addr}</span>
+                        {cfg?.cni && <Badge tone="blue">CNI</Badge>}
+                        {cfg?.raw_exec && <Badge tone="amber">raw_exec</Badge>}
+                        {hvCount > 0 && <Badge tone="green">HostVolume×{hvCount}</Badge>}
+                      </div>
+                      {onConfigureNode && (
+                        <Button size="sm" disabled={blocked} onClick={() => onConfigureNode(n)}>
+                          <SlidersHorizontal className="h-3 w-3" />
+                          <span>插件/配置</span>
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
             <div className="space-y-3.5">
@@ -521,6 +550,11 @@ export function ClusterOpsSection({
                             <div className="flex flex-wrap items-center gap-1.5">
                               <Badge>{n.role === 'server_client' ? 'Server + Client' : n.role === 'server' ? 'Server' : 'Client'}</Badge>
                               <StatusBadge value={n.service_status} />
+                              {nodeConfigs?.[n.node_id]?.cni && <Badge tone="blue">CNI</Badge>}
+                              {nodeConfigs?.[n.node_id]?.raw_exec && <Badge tone="amber">raw_exec</Badge>}
+                              {Array.isArray(nodeConfigs?.[n.node_id]?.host_volumes) && nodeConfigs[n.node_id].host_volumes.length > 0 && (
+                                <Badge tone="green">HV×{nodeConfigs[n.node_id].host_volumes.length}</Badge>
+                              )}
                             </div>
                           )}
                         </td>
@@ -555,6 +589,15 @@ export function ClusterOpsSection({
                             )}
                             {isAdmin && (
                               <>
+                                {onConfigureNode && (
+                                  <Button
+                                    size="sm"
+                                    disabled={blocked}
+                                    onClick={() => onConfigureNode(n)}
+                                  >
+                                    <SlidersHorizontal className="h-3 w-3" /> 插件/配置
+                                  </Button>
+                                )}
                                 <Button
                                   size="sm"
                                   loading={busyKey === `restart:${n.node_id}`}
@@ -610,9 +653,17 @@ export function ClusterOpsSection({
             <Card
               title="集群运维"
               actions={
-                <Button size="sm" loading={busyKey === 'doctor'} disabled={blocked || !initialized} onClick={() => void runBusy('doctor', onDoctor)}>
-                  集群体检
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {onOpenClusterSettings && (
+                    <Button size="sm" disabled={blocked} onClick={onOpenClusterSettings}>
+                      <SlidersHorizontal className="h-3.5 w-3.5" />
+                      <span>集群配置</span>
+                    </Button>
+                  )}
+                  <Button size="sm" loading={busyKey === 'doctor'} disabled={blocked || !initialized} onClick={() => void runBusy('doctor', onDoctor)}>
+                    集群体检
+                  </Button>
+                </div>
               }
             >
               <div className="space-y-3">

@@ -27,10 +27,11 @@ const (
 	VolumesDir  = Base + "/volumes"
 	OpLockFile  = Base + "/.op.lock"
 	UnitFile    = "/etc/systemd/system/nomad.service"
-	CNIBinDir   = "/opt/cni/bin"
-	CNIConfDir  = "/opt/cni/config"
-	SysctlFile  = "/etc/sysctl.d/90-nomad-deck-cni.conf"
-	ManagedMark = "# Managed by NomadDeck"
+	CNIBinDir       = "/opt/cni/bin"
+	CNIConfDir      = "/opt/cni/config"
+	SysctlFile      = "/etc/sysctl.d/90-nomad-deck-cni.conf"
+	ModulesLoadFile = "/etc/modules-load.d/90-nomad-deck-cni.conf"
+	ManagedMark     = "# Managed by NomadDeck"
 	// KeepGenerations is how many config generations stay on disk.
 	KeepGenerations = 5
 )
@@ -497,13 +498,21 @@ func ServiceScript(action string) (string, error) {
 }
 
 // CNIInstallScript extracts a staged, verified CNI archive into /opt/cni/bin
-// and enables the bridge sysctls Nomad bridge networking needs.
+// and enables the kernel modules and bridge sysctls Nomad bridge networking needs.
 func CNIInstallScript(archive string) string {
 	return fmt.Sprintf(`set -e
-install -d -m 0755 %[1]s %[2]s
+install -d -m 0755 %[1]s %[2]s /etc/modules-load.d /etc/sysctl.d
 tar -xzf %[3]s -C %[1]s
 rm -f %[3]s
+modprobe bridge 2>/dev/null || true
 modprobe br_netfilter 2>/dev/null || true
+cat > %[6]s.nd-tmp <<'ND_MOD_EOF'
+%[5]s
+bridge
+br_netfilter
+ND_MOD_EOF
+mv -f %[6]s.nd-tmp %[6]s
+chmod 0644 %[6]s
 cat > %[4]s.nd-tmp <<'ND_SYSCTL_EOF'
 %[5]s
 net.bridge.bridge-nf-call-arptables = 1
@@ -511,9 +520,10 @@ net.bridge.bridge-nf-call-ip6tables = 1
 net.bridge.bridge-nf-call-iptables = 1
 ND_SYSCTL_EOF
 mv -f %[4]s.nd-tmp %[4]s
+chmod 0644 %[4]s
 sysctl -q -p %[4]s 2>/dev/null || echo "bridge sysctls not applied (br_netfilter unavailable)"
 ls %[1]s | tr '\n' ' '
-`, CNIBinDir, CNIConfDir, archive, SysctlFile, ManagedMark)
+`, CNIBinDir, CNIConfDir, archive, SysctlFile, ManagedMark, ModulesLoadFile)
 }
 
 // HostVolumeScript creates host volume directories that do not exist yet;

@@ -1,7 +1,13 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Check, Info, Server } from 'lucide-react';
-import { apiPost } from '../lib/api';
+import { apiGet, apiPost } from '../lib/api';
+import {
+  buildClientSettingsPayload,
+  ClientPluginFields,
+  defaultClientPluginDraft,
+  type ClientPluginDraft,
+} from './NomadConfigModals';
 import { Badge, Button, EmptyState, ErrorAlert, Input, Modal, Select, StatusBadge } from './UI';
 
 type Member = { node_id: string; role: string; advertise_addr: string };
@@ -19,6 +25,14 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
   const [region, setRegion] = useState('global');
   const [datacenter, setDatacenter] = useState('dc1');
   const [publicURL, setPublicURL] = useState('');
+  const [cniVersions, setCniVersions] = useState<string[]>([]);
+  const [cniVersion, setCniVersion] = useState('');
+  const [clientDefaults, setClientDefaults] = useState<ClientPluginDraft>(defaultClientPluginDraft);
+  const [allowInsecureHTTP, setAllowInsecureHTTP] = useState(false);
+  const [verifyHTTPSClient, setVerifyHTTPSClient] = useState(false);
+  const [httpPort, setHttpPort] = useState('4646');
+  const [rpcPort, setRpcPort] = useState('4647');
+  const [serfPort, setSerfPort] = useState('4648');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const submitting = useRef(false);
@@ -46,8 +60,24 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
     setRegion('global');
     setDatacenter('dc1');
     setPublicURL('');
+    setCniVersion('');
+    setClientDefaults(defaultClientPluginDraft());
+    setAllowInsecureHTTP(false);
+    setVerifyHTTPSClient(false);
+    setHttpPort('4646');
+    setRpcPort('4647');
+    setSerfPort('4648');
     setErr('');
-  }, [open, nodes]);
+    if (isNomad) {
+      void apiGet('/api/v1/releases/cni')
+        .then((r) => {
+          const vers = (r.versions || []) as string[];
+          setCniVersions(vers);
+          if (vers.length > 0) setCniVersion(vers[0]);
+        })
+        .catch(() => setCniVersions([]));
+    }
+  }, [open, nodes, isNomad]);
 
   const toggleNode = (node: any, checked: boolean) => {
     setMembers((prev) => checked
@@ -62,9 +92,22 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
     setBusy(true);
     setErr('');
     try {
+      const nomadPayload = isNomad
+        ? {
+            region: region.trim() || 'global',
+            datacenter: datacenter.trim() || 'dc1',
+            allow_insecure_http: allowInsecureHTTP,
+            verify_https_client: allowInsecureHTTP ? false : verifyHTTPSClient,
+            http_port: Number(httpPort) || 4646,
+            rpc_port: Number(rpcPort) || 4647,
+            serf_port: Number(serfPort) || 4648,
+            cni_version: cniVersion.trim() || undefined,
+            client_defaults: buildClientSettingsPayload(clientDefaults),
+          }
+        : {};
       const res = await apiPost('/api/v1/clusters', {
         type: product, name: name.trim(), mode, public_api_url: publicURL.trim(),
-        ...(isNomad ? { region, datacenter } : {}),
+        ...nomadPayload,
         nodes: members.map((m) => isNomad ? m : { node_id: m.node_id, advertise_addr: m.advertise_addr }),
       });
       await onCreated(res.cluster.id);
@@ -253,7 +296,7 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
 
             <details className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5">
               <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-200">
-                高级配置 <span className="text-xs font-normal text-slate-400">· 初次使用保留默认即可</span>
+                高级配置 <span className="text-xs font-normal text-slate-400">· CNI / Host Volume / 驱动插件 / TLS 与端口（初次使用保留默认即可）</span>
               </summary>
               <div className="mt-4 space-y-4">
                 {isNomad && (
@@ -270,6 +313,48 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
                   onChange={(e) => setPublicURL(e.target.value)}
                   hint="已有负载均衡或域名时填写；留空直接使用节点地址。"
                 />
+                {isNomad && (
+                  <>
+                    <ClientPluginFields
+                      value={clientDefaults}
+                      onChange={setClientDefaults}
+                      cniVersions={cniVersions}
+                      cniVersion={cniVersion}
+                      onChangeCNIVersion={setCniVersion}
+                    />
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5 space-y-3 text-xs">
+                      <div className="font-semibold text-slate-800 dark:text-slate-100">TLS 与通信端口</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <Input label="HTTP 端口" type="number" min={1} max={65535} value={httpPort} onChange={(e) => setHttpPort(e.target.value)} />
+                        <Input label="RPC 端口" type="number" min={1} max={65535} value={rpcPort} onChange={(e) => setRpcPort(e.target.value)} />
+                        <Input label="Serf 端口" type="number" min={1} max={65535} value={serfPort} onChange={(e) => setSerfPort(e.target.value)} />
+                      </div>
+                      <div className="flex flex-wrap gap-4">
+                        <label className="flex items-center gap-2 cursor-pointer text-amber-700 dark:text-amber-300">
+                          <input
+                            type="checkbox"
+                            checked={allowInsecureHTTP}
+                            onChange={(e) => {
+                              setAllowInsecureHTTP(e.target.checked);
+                              if (e.target.checked) setVerifyHTTPSClient(false);
+                            }}
+                          />
+                          <span>关闭 TLS（allow_insecure_http，仅限非生产测试）</span>
+                        </label>
+                        {!allowInsecureHTTP && (
+                          <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-200">
+                            <input
+                              type="checkbox"
+                              checked={verifyHTTPSClient}
+                              onChange={(e) => setVerifyHTTPSClient(e.target.checked)}
+                            />
+                            <span>校验 HTTPS 客户端证书（verify_https_client）</span>
+                          </label>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </details>
           </div>

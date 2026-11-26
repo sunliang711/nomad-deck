@@ -30,6 +30,7 @@ import { ClusterOpsSection } from '../components/ClusterOpsSection';
 import { ItemSwitcher } from '../components/ItemSwitcher';
 import { UninstallClusterModal, type UninstallPlan } from '../components/UninstallClusterModal';
 import { ClusterCreateModal } from '../components/ClusterCreateModal';
+import { NomadClusterSettingsModal, NomadNodeConfigModal } from '../components/NomadConfigModals';
 
 export function NomadPage() {
   const { isAdmin } = useAuth();
@@ -61,6 +62,9 @@ export function NomadPage() {
   const [err, setErr] = useState('');
 
   const [showCreate, setShowCreate] = useState(false);
+  const [memberRecords, setMemberRecords] = useState<any[]>([]);
+  const [showClusterSettings, setShowClusterSettings] = useState(false);
+  const [configMember, setConfigMember] = useState<any>(null);
   const [deployVer, setDeployVer] = useState('latest');
   const [upVer, setUpVer] = useState('');
   const [showJoin, setShowJoin] = useState(false);
@@ -101,15 +105,21 @@ export function NomadPage() {
   const loadOpsTab = useCallback(async () => {
     if (!selectedId) return;
     try {
-      const [stRes, snRes] = await Promise.all([
+      const [cRes, stRes, snRes] = await Promise.all([
+        apiGet(`/api/v1/clusters/${selectedId}`),
         apiGet(`/api/v1/clusters/${selectedId}/status`),
         apiGet(`/api/v1/clusters/${selectedId}/snapshots`),
       ]);
       if (selectionRef.current !== selectedId) return;
       setStatus(stRes.status);
+      setMemberRecords(cRes.nodes || []);
       setClusters((prev) => prev.map((c) => c.id === selectedId ? {
-        ...c, health_status: stRes.status.health_status, init_state: stRes.status.init_state,
-        maintenance_mode: stRes.status.maintenance_mode, maintenance_reason: stRes.status.maintenance_reason,
+        ...c,
+        ...(cRes.cluster || {}),
+        health_status: stRes.status.health_status,
+        init_state: stRes.status.init_state,
+        maintenance_mode: stRes.status.maintenance_mode,
+        maintenance_reason: stRes.status.maintenance_reason,
       } : c));
       setSnapshots(snRes.snapshots || []);
     } catch (ex: any) {
@@ -161,6 +171,9 @@ export function NomadPage() {
 
   useEffect(() => {
     setStatus(null);
+    setMemberRecords([]);
+    setShowClusterSettings(false);
+    setConfigMember(null);
   }, [selectedId]);
 
   const cluster = clusters.find((c) => c.id === selectedId);
@@ -244,6 +257,7 @@ export function NomadPage() {
   };
 
   const clusterNodes = status?.nodes || [];
+  const nodeConfigs = Object.fromEntries(memberRecords.map((m) => [m.node_id, m.config]));
 
 
   if (loadingList) return <LoadingState label="正在加载 Nomad 集群…" />;
@@ -378,6 +392,21 @@ export function NomadPage() {
                     .then((r) => { if (r.task?.id) openTask(r.task.id, `缩容节点: ${n.name}`); })
                     .catch((ex) => setErr(ex.message))
                 }
+                nodeConfigs={nodeConfigs}
+                onOpenClusterSettings={() => setShowClusterSettings(true)}
+                onConfigureNode={(n) => {
+                  const full = memberRecords.find((m) => m.node_id === n.node_id) || {
+                    ...n,
+                    install_state: n.installed_version ? 'installed' : 'pending',
+                    config: {},
+                  };
+                  setConfigMember(full);
+                  if (cluster?.init_state === 'initialized' && pools.length === 0) {
+                    void apiGet(`/api/v1/nomad/${selectedId}/node-pools`)
+                      .then((r) => setPools(r.node_pools || []))
+                      .catch(() => {});
+                  }
+                }}
                 quickActions={
                   <>
                     <Button size="sm" onClick={() => setTab('workbench')}>
@@ -744,6 +773,30 @@ export function NomadPage() {
         onSubmitted={(taskId) => {
           if (taskId) openTask(taskId, `卸载 Nomad: ${cluster?.name || ''}`);
           void loadList();
+        }}
+      />
+
+      <NomadClusterSettingsModal
+        open={showClusterSettings}
+        cluster={cluster || null}
+        onClose={() => setShowClusterSettings(false)}
+        onSaved={async (taskId) => {
+          if (taskId) openTask(taskId, `更新集群配置: ${cluster?.name || ''}`);
+          else toast.success('集群配置已保存');
+          await loadOpsTab();
+        }}
+      />
+
+      <NomadNodeConfigModal
+        open={Boolean(configMember)}
+        cluster={cluster || null}
+        member={configMember}
+        nodePools={pools.map((p) => p.name)}
+        onClose={() => setConfigMember(null)}
+        onSubmitted={async (taskId, title) => {
+          if (taskId) openTask(taskId, title || '更新节点配置');
+          else toast.success('节点配置已保存（将在部署时生效）');
+          await loadOpsTab();
         }}
       />
     </div>

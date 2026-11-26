@@ -16,6 +16,7 @@ import (
 	"nomad-deck/internal/crypto"
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/ops"
+	"nomad-deck/internal/release"
 )
 
 var testActor = audit.Actor{Name: "tester"}
@@ -302,5 +303,51 @@ func TestLocalClusterGateAndRemoval(t *testing.T) {
 	views, _ := e.s.ListSnapshots(ctx, cl.ID)
 	if len(views) != 1 || views[0].CredentialGeneration == "" {
 		t.Fatalf("snapshots: %+v", views)
+	}
+}
+
+func TestUndeployedNodeConfigAndCNISettings(t *testing.T) {
+	e := newSvcEnv(t)
+	e.s.Releases = &release.Provider{DB: e.s.DB, CacheDir: e.t.TempDir()}
+	ctx := context.Background()
+
+	// Create an undeployed cluster with a server_client member and verify
+	// pre-deploy plugin config + CNI version validation.
+	cl := e.load()
+	if _, err := e.s.DB.Writer.Exec(`UPDATE cluster_nodes SET role = ?, install_state = 'pending' WHERE cluster_id = ?`, RoleServerClient, cl.ID); err != nil {
+		t.Fatal(err)
+	}
+	cniVer := "v1.10.0"
+	if _, err := e.s.UpdateSettings(ctx, testActor, cl.ID, SettingsInput{CNIVersion: &cniVer}); err != nil {
+		t.Fatalf("set cni version: %v", err)
+	}
+	task, err := e.s.UpdateNodeConfig(ctx, testActor, cl.ID, "h1", NodeConfigInput{
+		ClientSettings: ClientSettings{
+			CNI:         true,
+			RawExec:     true,
+			Denylist:    []string{"java"},
+			Meta:        map[string]string{"env": "lab"},
+			HostVolumes: []HostVolume{{Name: "data", Path: "/opt/nomad-deck/nomad/volumes/data", Create: true}},
+			Docker:      DockerDriver{Volumes: true, AllowPrivileged: true, ImageGCDelay: "5m"},
+		},
+		ReinstallCNI: true,
+	})
+	if err != nil {
+		t.Fatalf("update pending node config: %v", err)
+	}
+	if task != nil {
+		t.Fatalf("expected no async task for pending node, got %+v", task)
+	}
+	empty := ""
+	if _, err := e.s.UpdateSettings(ctx, testActor, cl.ID, SettingsInput{CNIVersion: &empty}); err == nil {
+		t.Fatal("clearing cni_version while client uses CNI must fail")
+	}
+	m1, err := db.GetClusterNode(ctx, e.s.DB.Reader, cl.ID, "h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc := memberConfig(m1)
+	if !mc.CNI || !mc.RawExec || len(mc.HostVolumes) != 1 || mc.Meta["env"] != "lab" || !mc.Docker.AllowPrivileged {
+		t.Fatalf("unexpected persisted member config: %+v", mc)
 	}
 }

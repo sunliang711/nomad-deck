@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Boxes, ExternalLink, FileCode2, Plus, RefreshCw } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -40,10 +40,11 @@ import { NomadClusterSettingsModal, NomadNodeConfigModal } from '../components/N
 
 export function NomadPage() {
   const { isAdmin } = useAuth();
+  const navigate = useNavigate();
   const { openTask, openNodeLogs, tasks } = useOpsDrawer();
   const toast = useToast();
   const askConfirm = useConfirm();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const queryId = searchParams.get('id') || '';
   const queryTab = searchParams.get('tab') || '';
   const queryNs = searchParams.get('ns') || '';
@@ -56,6 +57,20 @@ export function NomadPage() {
   const selectionRef = useRef(selectedId);
   selectionRef.current = selectedId;
   const [tab, setTab] = useState(queryTab === 'workbench' ? 'workbench' : 'status');
+  const [govSubTab, setGovSubTab] = useState<'tenants' | 'policies' | 'tokens'>('tenants');
+  const [tokenModal, setTokenModal] = useState<{ name: string; policies: string[] } | null>(null);
+
+  // Redirect legacy /nomad?id=X&tab=workbench&job=Y links directly to Job Center runtime view
+  useEffect(() => {
+    if (!queryJob) return;
+    const cid = queryId || selectedId;
+    if (!cid) return;
+    const ns = queryNs || 'default';
+    navigate(
+      `/jobs?cluster_id=${encodeURIComponent(cid)}&namespace=${encodeURIComponent(ns)}&job=${encodeURIComponent(queryJob)}&tab=runtime`,
+      { replace: true },
+    );
+  }, [queryJob, queryId, queryNs, selectedId, navigate]);
 
   useEffect(() => {
     if (queryId && clusters.some((c: any) => c.id === queryId)) {
@@ -328,7 +343,7 @@ export function NomadPage() {
             <SectionTabs
               tabs={[
                 { id: 'status', label: '集群状态详情' },
-                { id: 'workbench', label: '运行态工作台', title: '实时查看与管理 Nomad Clients、Servers、Allocations、Deployments、CSI 存储与 Variables' },
+                { id: 'workbench', label: '运行态工作台', title: '实时查看与管理 Nomad Clients、Servers、拓扑容量、CSI 存储、Variables 与 Evaluations' },
                 { id: 'snapshots', label: 'Raft 快照', badge: snapshots.length, title: '保存与恢复 Nomad Server Raft 状态机中的任务、变量与 ACL 快照' },
                 { id: 'governance', label: '治理 (Namespace / Pool / ACL)', title: '配置多租户命名空间（Namespace）、节点资源池（Node Pool）与访问控制（ACL Policy / Role / Token）' },
               ]}
@@ -446,16 +461,7 @@ export function NomadPage() {
               key={selectedId}
               clusterId={selectedId}
               initialNamespace={queryNs}
-              initialJobId={queryJob}
               initialSubTab={querySub}
-              onClearDeepLink={() => {
-                if (!queryNs && !queryJob && !querySub) return;
-                const next = new URLSearchParams(searchParams);
-                next.delete('ns');
-                next.delete('job');
-                next.delete('sub');
-                setSearchParams(next, { replace: true });
-              }}
             />
           )}
 
@@ -547,91 +553,340 @@ export function NomadPage() {
           )}
 
           {tab === 'governance' && (
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-              <Card title="Namespaces & Node Pools">
-                <div className="space-y-3 text-xs">
-                  <div className="font-semibold">Namespaces ({namespaces.length})</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {namespaces.map((ns) => isAdmin ? <Button key={ns.name} size="sm" onClick={() => setGovernanceEdit({ kind: 'namespaces', name: ns.name, description: ns.description || '', meta: ns.meta || {}, creating: false })}>{ns.name}</Button> : <Badge key={ns.name}>{ns.name}</Badge>)}
-                    {isAdmin && <Button size="sm" onClick={() => setGovernanceEdit({ kind: 'namespaces', name: '', description: '', meta: {}, creating: true })}>新建 Namespace</Button>}
-                  </div>
-                  <div className="font-semibold pt-2">Node Pools ({pools.length})</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {pools.map((p) => isAdmin ? <Button key={p.name} size="sm" onClick={() => setGovernanceEdit({ kind: 'node-pools', name: p.name, description: p.description || '', meta: p.meta || {}, creating: false })}>{p.name}</Button> : <Badge key={p.name}>{p.name}</Badge>)}
-                    {isAdmin && <Button size="sm" onClick={() => setGovernanceEdit({ kind: 'node-pools', name: '', description: '', meta: {}, creating: true })}>新建 Node Pool</Button>}
-                  </div>
-                </div>
-              </Card>
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <SectionTabs
+                  variant="underline"
+                  tabs={[
+                    { id: 'tenants', label: 'Namespaces & Node Pools', badge: namespaces.length + pools.length },
+                    { id: 'policies', label: 'ACL Policies', badge: policies.length },
+                    { id: 'tokens', label: 'ACL Tokens & Roles', badge: tokens.length + roles.length },
+                  ]}
+                  active={govSubTab}
+                  onChange={(next) => setGovSubTab(next as 'tenants' | 'policies' | 'tokens')}
+                />
+                {isAdmin && (
+                  <Button size="sm" onClick={handleRevealMgmtToken}>
+                    查看 Management (Root) Token
+                  </Button>
+                )}
+              </div>
 
-              <Card title="ACL Policies & Tokens">
-                <div className="space-y-3 text-xs">
-                  <div className="flex flex-wrap gap-1.5">
-                    {policies.map((p) => (
-                      <Button key={p.name} size="sm" onClick={() => void apiGet(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(p.name)}`).then((r) => setPolicyEdit({ name: p.name, rules: r.policy?.rules || '' })).catch((ex) => setErr(ex.message))}>
-                        {p.name}
-                      </Button>
-                    ))}
-                  </div>
-                  <Input label="Policy 名称" value={policyEdit.name} onChange={(e) => setPolicyEdit({ ...policyEdit, name: e.target.value })} />
-                  <CodeEditor value={policyEdit.rules} onChange={(v) => setPolicyEdit({ ...policyEdit, rules: v })} readOnly={!isAdmin} height="160px" />
-                  {isAdmin && (
-                    <div className="flex flex-wrap gap-2">
-                      <Button variant="primary" onClick={() => policyEdit.name && void apiPut(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`, { rules: policyEdit.rules }).then(() => { toast.success('Policy 已保存'); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>保存 Policy</Button>
-                      <Button
-                        variant="danger-outline"
-                        disabled={!policyEdit.name}
-                        onClick={async () => {
-                          if (!policyEdit.name) return;
-                          if (!(await askConfirm(`确认删除 ACL Policy「${policyEdit.name}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
-                          void apiDelete(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`)
-                            .then(() => {
-                              setPolicyEdit({ name: '', rules: '' });
-                              toast.success('Policy 已删除');
-                              return loadGovernance();
-                            })
-                            .catch((ex) => setErr(ex.message));
-                        }}
-                      >
-                        删除 Policy
-                      </Button>
-                      <Button onClick={() => void apiPost(`/api/v1/nomad/${selectedId}/acl/tokens`, { name: 'ops-token', policies: policyEdit.name ? [policyEdit.name] : [] }).then((r) => { setNewToken(r.token?.secret_id || ''); toast.success('已签发 Client Token'); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>签发 Client Token</Button>
-                      <Button onClick={handleRevealMgmtToken}>查看 Management (Root) Token</Button>
+              {govSubTab === 'tenants' && (
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <Card
+                    title={`Namespaces (${namespaces.length})`}
+                    description="多租户逻辑隔离空间，控制任务、变量与 ACL 权限边界"
+                    actions={
+                      isAdmin && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() => setGovernanceEdit({ kind: 'namespaces', name: '', description: '', meta: {}, creating: true })}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>新建 Namespace</span>
+                        </Button>
+                      )
+                    }
+                  >
+                    <div className="space-y-2 text-xs">
+                      {namespaces.map((ns) => (
+                        <div
+                          key={ns.name}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/30"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-mono font-semibold text-slate-900 dark:text-slate-100">{ns.name}</div>
+                            {ns.description && <div className="mt-0.5 text-[11px] text-slate-500 truncate">{ns.description}</div>}
+                          </div>
+                          {isAdmin && (
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                setGovernanceEdit({
+                                  kind: 'namespaces',
+                                  name: ns.name,
+                                  description: ns.description || '',
+                                  meta: ns.meta || {},
+                                  creating: false,
+                                })
+                              }
+                            >
+                              编辑
+                            </Button>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                  )}
-                  <div className="border-t border-slate-200 pt-2 dark:border-slate-800">
-                    <div className="mb-1 font-semibold">ACL Tokens ({tokens.length})</div>
-                    {tokens.slice(0, 10).map((tk) => (
-                      <div key={tk.accessor_id} className="flex items-center justify-between py-1">
-                        <span className="font-mono">{tk.name} ({(tk.accessor_id || '').slice(0, 8)})</span>
-                        {isAdmin && (
+                  </Card>
+
+                  <Card
+                    title={`Node Pools (${pools.length})`}
+                    description="按硬件规格或业务分组划分 Client 节点调度池"
+                    actions={
+                      isAdmin && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() => setGovernanceEdit({ kind: 'node-pools', name: '', description: '', meta: {}, creating: true })}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>新建 Node Pool</span>
+                        </Button>
+                      )
+                    }
+                  >
+                    <div className="space-y-2 text-xs">
+                      {pools.map((p) => (
+                        <div
+                          key={p.name}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/30"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-mono font-semibold text-slate-900 dark:text-slate-100">{p.name}</div>
+                            {p.description && <div className="mt-0.5 text-[11px] text-slate-500 truncate">{p.description}</div>}
+                          </div>
+                          {isAdmin && (
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                setGovernanceEdit({
+                                  kind: 'node-pools',
+                                  name: p.name,
+                                  description: p.description || '',
+                                  meta: p.meta || {},
+                                  creating: false,
+                                })
+                              }
+                            >
+                              编辑
+                            </Button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                </div>
+              )}
+
+              {govSubTab === 'policies' && (
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)] items-start">
+                  <Card
+                    title={`ACL Policies (${policies.length})`}
+                    bodyClassName="p-3"
+                    actions={
+                      isAdmin && (
+                        <Button size="sm" onClick={() => setPolicyEdit({ name: '', rules: '' })}>
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>新建</span>
+                        </Button>
+                      )
+                    }
+                  >
+                    {policies.length === 0 ? (
+                      <div className="py-6 text-center text-xs text-slate-400">暂无 ACL Policy</div>
+                    ) : (
+                      <div className="space-y-1 text-xs">
+                        {policies.map((p) => {
+                          const active = policyEdit.name === p.name;
+                          return (
+                            <button
+                              key={p.name}
+                              type="button"
+                              onClick={() =>
+                                void apiGet(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(p.name)}`)
+                                  .then((r) => setPolicyEdit({ name: p.name, rules: r.policy?.rules || '' }))
+                                  .catch((ex) => setErr(ex.message))
+                              }
+                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left font-mono transition ${
+                                active
+                                  ? 'bg-indigo-50 font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200'
+                                  : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                              }`}
+                            >
+                              <span className="truncate">{p.name}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </Card>
+
+                  <Card
+                    title={policyEdit.name ? `编辑 Policy：${policyEdit.name}` : '新建 ACL Policy'}
+                    description={'编写 Nomad HCL 权限规则（例如 namespace "default" { policy = "read" }）'}
+                  >
+                    <div className="space-y-3 text-xs">
+                      <Input
+                        label="Policy 名称"
+                        disabled={!isAdmin}
+                        placeholder="例如 app-readonly"
+                        value={policyEdit.name}
+                        onChange={(e) => setPolicyEdit({ ...policyEdit, name: e.target.value })}
+                      />
+                      <CodeEditor value={policyEdit.rules} onChange={(v) => setPolicyEdit({ ...policyEdit, rules: v })} readOnly={!isAdmin} height="260px" />
+                      {isAdmin && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                           <Button
-                            size="sm"
                             variant="danger-outline"
+                            disabled={!policyEdit.name.trim() || !policies.some((p) => p.name === policyEdit.name.trim())}
                             onClick={async () => {
-                              if (!(await askConfirm(`确认吊销 ACL Token「${tk.name}」吗？`, { title: '吊销 Token', confirmText: '确认吊销', danger: true }))) return;
-                              void apiDelete(`/api/v1/nomad/${selectedId}/acl/tokens/${tk.accessor_id}`)
+                              const name = policyEdit.name.trim();
+                              if (!name) return;
+                              if (!(await askConfirm(`确认删除 ACL Policy「${name}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
+                              void apiDelete(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(name)}`)
                                 .then(() => {
-                                  toast.success('Token 已吊销');
+                                  setPolicyEdit({ name: '', rules: '' });
+                                  toast.success('Policy 已删除');
                                   return loadGovernance();
                                 })
                                 .catch((ex) => setErr(ex.message));
                             }}
                           >
-                            吊销
+                            删除 Policy
                           </Button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  <div className="border-t border-slate-200 pt-2 dark:border-slate-800">
-                    <div className="mb-1 font-semibold">ACL Roles ({roles.length})</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {roles.map((role) => isAdmin ? <Button key={role.id} size="sm" onClick={() => setRoleEdit({ id: role.id, name: role.name, description: role.description || '', policies: role.policies || [] })}>{role.name}</Button> : <Badge key={role.id}>{role.name}</Badge>)}
-                      {isAdmin && <Button size="sm" onClick={() => setRoleEdit({ id: '', name: '', description: '', policies: [] })}>新建 ACL Role</Button>}
+                          <Button
+                            variant="primary"
+                            disabled={!policyEdit.name.trim()}
+                            onClick={() =>
+                              policyEdit.name.trim() &&
+                              void apiPut(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name.trim())}`, {
+                                rules: policyEdit.rules,
+                              })
+                                .then(() => {
+                                  toast.success('Policy 已保存');
+                                  return loadGovernance();
+                                })
+                                .catch((ex) => setErr(ex.message))
+                            }
+                          >
+                            保存 Policy
+                          </Button>
+                        </div>
+                      )}
                     </div>
-                  </div>
+                  </Card>
                 </div>
-              </Card>
+              )}
+
+              {govSubTab === 'tokens' && (
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <Card
+                    title={`ACL Tokens (${tokens.length})`}
+                    description="签发与吊销 Nomad API 访问令牌"
+                    actions={
+                      isAdmin && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() => setTokenModal({ name: '', policies: [] })}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>签发 Client Token</span>
+                        </Button>
+                      )
+                    }
+                  >
+                    {tokens.length === 0 ? (
+                      <EmptyState title="暂无 ACL Token" />
+                    ) : (
+                      <div className="space-y-2 text-xs">
+                        {tokens.slice(0, 20).map((tk) => (
+                          <div
+                            key={tk.accessor_id}
+                            className="flex items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/30"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-slate-900 dark:text-slate-100 truncate">{tk.name || 'unnamed'}</span>
+                                {tk.type && <Badge tone={tk.type === 'management' ? 'amber' : 'neutral'}>{tk.type}</Badge>}
+                              </div>
+                              <div className="mt-0.5 font-mono text-[11px] text-slate-500">
+                                Accessor: {(tk.accessor_id || '').slice(0, 12)}
+                                {Array.isArray(tk.policies) && tk.policies.length > 0 ? ` · ${tk.policies.join(', ')}` : ''}
+                              </div>
+                            </div>
+                            {isAdmin && (
+                              <Button
+                                size="sm"
+                                variant="danger-outline"
+                                onClick={async () => {
+                                  if (!(await askConfirm(`确认吊销 ACL Token「${tk.name}」吗？`, { title: '吊销 Token', confirmText: '确认吊销', danger: true }))) return;
+                                  void apiDelete(`/api/v1/nomad/${selectedId}/acl/tokens/${tk.accessor_id}`)
+                                    .then(() => {
+                                      toast.success('Token 已吊销');
+                                      return loadGovernance();
+                                    })
+                                    .catch((ex) => setErr(ex.message));
+                                }}
+                              >
+                                吊销
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+
+                  <Card
+                    title={`ACL Roles (${roles.length})`}
+                    description="将多个 ACL Policy 聚合为可复用角色"
+                    actions={
+                      isAdmin && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={() => setRoleEdit({ id: '', name: '', description: '', policies: [] })}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>新建 ACL Role</span>
+                        </Button>
+                      )
+                    }
+                  >
+                    {roles.length === 0 ? (
+                      <EmptyState title="暂无 ACL Role" description="可创建 Role 绑定一组 Policy，便于向团队或自动化工具统一授权。" />
+                    ) : (
+                      <div className="space-y-2 text-xs">
+                        {roles.map((role) => (
+                          <div
+                            key={role.id}
+                            className="flex items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/30"
+                          >
+                            <div className="min-w-0">
+                              <div className="font-mono font-semibold text-slate-900 dark:text-slate-100">{role.name}</div>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {(role.policies || []).length > 0 ? (
+                                  role.policies.map((p: string) => <Badge key={p} tone="blue">{p}</Badge>)
+                                ) : (
+                                  <span className="text-[11px] text-slate-400">未关联 Policy</span>
+                                )}
+                              </div>
+                            </div>
+                            {isAdmin && (
+                              <Button
+                                size="sm"
+                                onClick={() =>
+                                  setRoleEdit({
+                                    id: role.id,
+                                    name: role.name,
+                                    description: role.description || '',
+                                    policies: role.policies || [],
+                                  })
+                                }
+                              >
+                                编辑
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -652,6 +907,73 @@ export function NomadPage() {
             <div className="flex justify-end gap-2">
               {!governanceEdit.creating && <Button type="button" variant="danger" disabled={governanceEdit.name === 'default' || (governanceEdit.kind === 'node-pools' && governanceEdit.name === 'all')} onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/${governanceEdit.kind}/${encodeURIComponent(governanceEdit.name)}`).then(() => { setGovernanceEdit(null); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>删除对象</Button>}
               <Button type="submit" variant="primary">保存对象</Button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      <Modal open={Boolean(tokenModal)} title="签发 Nomad Client Token" onClose={() => setTokenModal(null)}>
+        {tokenModal && (
+          <form
+            className="space-y-3 text-xs"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!tokenModal.name.trim()) return;
+              void apiPost(`/api/v1/nomad/${selectedId}/acl/tokens`, {
+                name: tokenModal.name.trim(),
+                policies: tokenModal.policies,
+              })
+                .then((r) => {
+                  setTokenModal(null);
+                  setNewToken(r.token?.secret_id || '');
+                  toast.success('已签发 Client Token');
+                  return loadGovernance();
+                })
+                .catch((ex) => setErr(ex.message));
+            }}
+          >
+            <Input
+              label="Token 名称"
+              required
+              placeholder="例如 ci-deployer"
+              value={tokenModal.name}
+              onChange={(e) => setTokenModal({ ...tokenModal, name: e.target.value })}
+            />
+            <div className="space-y-1.5">
+              <div className="font-medium text-slate-700 dark:text-slate-300">关联 Policies</div>
+              {policies.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-200 p-2.5 text-slate-400 dark:border-slate-700">
+                  暂无可选 Policy，可先在「ACL Policies」页签创建后再关联。
+                </div>
+              ) : (
+                <div className="space-y-1 max-h-40 overflow-auto rounded-lg border border-slate-200 p-2.5 dark:border-slate-700">
+                  {policies.map((p) => (
+                    <label key={p.name} className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={tokenModal.policies.includes(p.name)}
+                        onChange={(e) =>
+                          setTokenModal({
+                            ...tokenModal,
+                            policies: e.target.checked
+                              ? [...tokenModal.policies, p.name]
+                              : tokenModal.policies.filter((name) => name !== p.name),
+                          })
+                        }
+                      />
+                      <span className="font-mono">{p.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" onClick={() => setTokenModal(null)}>
+                取消
+              </Button>
+              <Button type="submit" variant="primary" disabled={!tokenModal.name.trim()}>
+                确认签发
+              </Button>
             </div>
           </form>
         )}

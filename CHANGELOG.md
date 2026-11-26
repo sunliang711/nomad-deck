@@ -1,5 +1,16 @@
 # ChangeLog
 
+## [v0.5.0] - 2026-11-26
+
+### Added
+- **Nomad Job 中心整合运行态详情**：将单任务运行态（Task Group 副本计数与就地扩缩容、Deployments 发布控制、Allocations 实时日志/资源监控/文件浏览/Web 终端、调度阻塞诊断、Evaluations 与修订历史回滚）完整整合进「Nomad Job 中心」，新增内置场景蓝图页签与按状态快速筛选。
+- **全新可视化 Job 编排器**：新增面向运维直觉的「积木表单」模式（左侧任务蓝图导航 + 右侧聚焦属性卡片 + 可开关的实时 HCL 分栏预览），支持工作负载类型选择、副本步进、Group 端口声明与 Task 一键绑定、计算资源一键预设、环境变量键值表、Vault Role 下拉与多行模板正文无损编辑，同时保留「高级结构树」全 Schema 能力。
+- **Nomad 治理页升级**：拆分为「Namespaces & Node Pools」「ACL Policies（主从分栏）」「ACL Tokens & Roles」三个子视图，并支持自定义名称与 Policy 的 Client Token 签发弹窗。
+
+### Changed
+- **Nomad 集群运行态工作台去重瘦身**：移除与 Job 中心重叠的 Jobs 子页签，默认聚焦基础设施视图（Clients、Servers、拓扑容量、存储/CSI、Variables、Evaluations），点击 Evaluations 或全局搜索中的 Job 自动跳转至 Job 中心运行态；兼容旧版 `/nomad?tab=workbench&job=...` 链接自动重定向。
+- 统一集群运维 2×2 卡片底部对齐；移除集群联动按钮内的 `(i)` 图标干扰并修正 6 步指南完成度统计。
+
 ## [Unreleased]
 
 ### Added

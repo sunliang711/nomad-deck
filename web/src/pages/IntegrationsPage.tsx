@@ -630,7 +630,7 @@ export function IntegrationsPage() {
       num: '6',
       title: '在 Job 中使用',
       desc: '点 Role 旁的「示例 Job」一键带入 Job 中心运行',
-      done: false,
+      done: isApplied && doctorPassed,
       cta: readyNomad ? { label: '打开 Job 中心', to: `/jobs?cluster_id=${readyNomad.id}` } : { label: '打开 Job 中心', to: '/jobs' },
     },
   ];
@@ -836,13 +836,14 @@ export function IntegrationsPage() {
                   </Button>
                   <Button
                     size="sm"
+                    title="对比 Nomad 联动配置、Vault JWT Auth 挂载、Role 与 Policy 期望状态与当前线上状态的差异"
                     onClick={() =>
                       void apiPost(`/api/v1/integrations/${selected.id}/plan`, {})
                         .then((r) => setPlan(r.plan))
                         .catch((ex) => toast.error(ex.message))
                     }
                   >
-                    <TermLabel term="Plan 预览" tip="对比 Nomad 联动配置、Vault JWT Auth 挂载、Role 与 Policy 期望状态与当前线上状态的差异。" />
+                    Plan 预览
                   </Button>
                   <Button
                     size="sm"
@@ -853,9 +854,13 @@ export function IntegrationsPage() {
                   >
                     {applyPending ? '正在应用…' : needsApply ? '应用联动' : '重新应用'}
                   </Button>
-                  <Button size="sm" onClick={openDoctorModal}>
+                  <Button
+                    size="sm"
+                    title="依次检验 Nomad JWKS 公钥、节点配置、Vault JWT 挂载与 Role，并支持直接跑一次真实任务验证登录读密钥"
+                    onClick={openDoctorModal}
+                  >
                     <ShieldCheck className="h-3.5 w-3.5" />
-                    <TermLabel term="链路体检" tip="依次检验 Nomad JWKS 公钥、节点配置、Vault JWT 挂载与 Role，并支持直接跑一次真实任务验证登录读密钥。" />
+                    <span>链路体检</span>
                   </Button>
                   <Button size="sm" variant="danger-outline" loading={deleting} disabled={deletePending} onClick={() => void deleteIntegration()}>
                     {deletePending ? '正在删除…' : '删除'}

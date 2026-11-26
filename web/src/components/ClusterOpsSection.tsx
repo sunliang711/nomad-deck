@@ -726,7 +726,7 @@ export function ClusterOpsSection({
                         )}
                       </div>
                     </div>
-                    <div className="pt-1">
+                    <div className="mt-auto border-t border-slate-200/70 pt-3 dark:border-slate-800/80">
                       <Button size="sm" loading={busyKey === 'upgrade'} disabled={blocked} onClick={() => void runBusy('upgrade', onUpgrade)}>
                         开始滚动升级
                       </Button>
@@ -750,7 +750,7 @@ export function ClusterOpsSection({
                       </div>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2 pt-1">
+                  <div className="mt-auto flex flex-wrap gap-2 border-t border-slate-200/70 pt-3 dark:border-slate-800/80">
                     <Button size="sm" loading={busyKey === 'renew'} disabled={blocked || !initialized} onClick={() => void runBusy('renew', onRenewCerts)}>
                       续期证书
                     </Button>
@@ -790,7 +790,7 @@ export function ClusterOpsSection({
                       </p>
                     </div>
                   </div>
-                  <div className="pt-1">
+                  <div className="mt-auto border-t border-slate-200/70 pt-3 dark:border-slate-800/80">
                     <Button size="sm" loading={busyKey === 'reconcile'} disabled={blocked} onClick={() => void runBusy('reconcile', onReconcile)}>
                       核对并解锁
                     </Button>
@@ -810,7 +810,7 @@ export function ClusterOpsSection({
                         </p>
                       </div>
                     </div>
-                    <div className="pt-1">
+                    <div className="mt-auto border-t border-rose-200/70 pt-3 dark:border-rose-900/50">
                       <Button size="sm" variant="danger-outline" loading={busyKey === 'uninstall'} disabled={blocked} onClick={() => void runBusy('uninstall', onUninstall)}>
                         卸载集群
                       </Button>

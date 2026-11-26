@@ -309,7 +309,9 @@ func (s *Service) runJoin(ctx context.Context, t *ops.Task, cl *cluster, memberI
 
 // NodeRemove safely removes a node: quorum gate, step-down if active,
 // remove-peer, then stop and wipe the node so retry_join cannot re-add it.
-func (s *Service) NodeRemove(ctx context.Context, actor audit.Actor, clusterID, nodeID string) (*db.OperationTask, error) {
+// When force is true, unreachable nodes or failed remote wipes are skipped
+// after Raft peer removal succeeds.
+func (s *Service) NodeRemove(ctx context.Context, actor audit.Actor, clusterID, nodeID string, force bool) (*db.OperationTask, error) {
 	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return nil, err
@@ -330,7 +332,7 @@ func (s *Service) NodeRemove(ctx context.Context, actor audit.Actor, clusterID, 
 	}
 	m := target[0]
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.node_remove", TargetType: "cluster", TargetID: clusterID,
-		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID},
+		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID, "force": force},
 		Run: func(ctx context.Context, t *ops.Task) error {
 			freshCl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
 			if err != nil {
@@ -344,13 +346,13 @@ func (s *Service) NodeRemove(ctx context.Context, actor audit.Actor, clusterID, 
 			if err != nil {
 				return err
 			}
-			return s.runRemove(ctx, t, freshCl, freshMembers, freshM)
+			return s.runRemove(ctx, t, freshCl, freshMembers, freshM, force)
 		}})
 	if err != nil {
 		return nil, err
 	}
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.node_remove", ResourceType: "cluster", ResourceID: clusterID,
-		ResourceName: cl.Name, OperationTaskID: task.ID, Summary: map[string]any{"node_id": nodeID, "node": m.NodeName}})
+		ResourceName: cl.Name, OperationTaskID: task.ID, Summary: map[string]any{"node_id": nodeID, "node": m.NodeName, "force": force}})
 	return task, nil
 }
 
@@ -380,7 +382,7 @@ func memberByNode(members []*db.ClusterNode, nodeID string) (*db.ClusterNode, er
 	return nil, conflict("not_member", "节点不属于该集群")
 }
 
-func (s *Service) runRemove(ctx context.Context, t *ops.Task, cl *cluster, members []*db.ClusterNode, m *db.ClusterNode) error {
+func (s *Service) runRemove(ctx context.Context, t *ops.Task, cl *cluster, members []*db.ClusterNode, m *db.ClusterNode, force bool) error {
 	step, err := t.Step("移出 Raft "+m.NodeName, m.NodeID)
 	if err != nil {
 		return err
@@ -433,12 +435,24 @@ func (s *Service) runRemove(ctx context.Context, t *ops.Task, cl *cluster, membe
 	}
 	nc, err := s.openNode(ctx, t, m, "停服并清理")
 	if err != nil {
-		return fmt.Errorf("节点已移出 Raft，但无法连接清理（请手动停止 vault 服务）：%w", err)
-	}
-	err = s.wipe(ctx, nc)
-	nc.step.Finish(err, nil)
-	if err != nil {
-		return err
+		if !force {
+			return fmt.Errorf("节点已移出 Raft，但无法连接清理（请手动停止 vault 服务）：%w", err)
+		}
+		if skipStep, stepErr := t.Step("跳过失联节点清理 "+m.NodeName, m.NodeID); stepErr == nil {
+			skipStep.Logf("无法连接主机（%v），按强制移出模式跳过远端停服与擦除", err)
+			skipStep.Finish(nil, nil)
+		}
+	} else {
+		err = s.wipe(ctx, nc)
+		if err != nil && force {
+			nc.step.Logf("远端清理失败（%v），按强制移出模式继续移除成员记录", err)
+			nc.step.Finish(nil, nil)
+		} else {
+			nc.step.Finish(err, nil)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	if err := db.DeleteClusterNode(ctx, s.DB.Writer, m.ID); err != nil {
 		return err
@@ -916,12 +930,22 @@ func (s *Service) PlanUninstall(ctx context.Context, clusterID string) (*Uninsta
 	}}
 	for _, m := range members {
 		p.Nodes = append(p.Nodes, m.NodeName)
+		unreachable := m.ServiceStatus == "unreachable"
+		if !unreachable {
+			if n, err := db.GetNode(ctx, s.DB.Reader, m.NodeID); err == nil && n.Status == "offline" {
+				unreachable = true
+			}
+		}
+		if unreachable {
+			p.UnreachableNodes = append(p.UnreachableNodes, m.NodeName)
+		}
 	}
 	return p, nil
 }
 
 // Uninstall removes Vault from every node and deletes the cluster.
-func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, confirmName string) (*db.OperationTask, error) {
+// When force is true, unreachable nodes or failed remote wipes are skipped.
+func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, confirmName string, force bool) (*db.OperationTask, error) {
 	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return nil, err
@@ -939,7 +963,7 @@ func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, c
 		return nil, err
 	}
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.uninstall", TargetType: "cluster", TargetID: clusterID,
-		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name, Params: map[string]any{"name": cl.Name},
+		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name, Params: map[string]any{"name": cl.Name, "force": force},
 		Run: func(ctx context.Context, t *ops.Task) error {
 			var errs []error
 			for _, m := range members {
@@ -948,10 +972,22 @@ func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, c
 				}
 				nc, err := s.openNode(ctx, t, m, "卸载")
 				if err != nil {
+					if force {
+						if skipStep, stepErr := t.Step("跳过失联节点 "+m.NodeName, m.NodeID); stepErr == nil {
+							skipStep.Logf("无法连接主机（%v），按强制卸载模式跳过远端清理", err)
+							skipStep.Finish(nil, nil)
+						}
+						continue
+					}
 					errs = append(errs, err)
 					continue
 				}
 				err = s.wipe(ctx, nc)
+				if err != nil && force {
+					nc.step.Logf("远端清理失败（%v），按强制卸载模式忽略并继续清理控制面记录", err)
+					nc.step.Finish(nil, nil)
+					continue
+				}
 				nc.step.Finish(err, nil)
 				errs = append(errs, err)
 			}
@@ -971,7 +1007,7 @@ func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, c
 		return nil, err
 	}
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.uninstall", ResourceType: "cluster", ResourceID: clusterID,
-		ResourceName: cl.Name, OperationTaskID: task.ID})
+		ResourceName: cl.Name, OperationTaskID: task.ID, Summary: map[string]any{"force": force}})
 	return task, nil
 }
 

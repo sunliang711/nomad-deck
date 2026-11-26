@@ -98,9 +98,10 @@ type ReconcileReport struct {
 
 // UninstallPlan lists what an uninstall removes.
 type UninstallPlan struct {
-	Nodes     []string `json:"nodes"`
-	Snapshots int      `json:"snapshots"`
-	Warnings  []string `json:"warnings"`
+	Nodes            []string `json:"nodes"`
+	UnreachableNodes []string `json:"unreachable_nodes,omitempty"`
+	Snapshots        int      `json:"snapshots"`
+	Warnings         []string `json:"warnings"`
 }
 
 // Check is one Doctor finding.
@@ -136,11 +137,11 @@ type Driver interface {
 	Preflight(ctx context.Context, clusterID string, confirmSwap bool) ([]PreflightIssue, error)
 	Deploy(ctx context.Context, actor audit.Actor, clusterID string, in DeployInput) (*db.OperationTask, error)
 	PlanUninstall(ctx context.Context, clusterID string) (*UninstallPlan, error)
-	Uninstall(ctx context.Context, actor audit.Actor, clusterID, confirmName string) (*db.OperationTask, error)
+	Uninstall(ctx context.Context, actor audit.Actor, clusterID, confirmName string, force bool) (*db.OperationTask, error)
 
 	// Membership changes and single-node actions.
 	NodeJoin(ctx context.Context, actor audit.Actor, clusterID, nodeID string, in JoinInput) (*db.OperationTask, error)
-	NodeRemove(ctx context.Context, actor audit.Actor, clusterID, nodeID string) (*db.OperationTask, error)
+	NodeRemove(ctx context.Context, actor audit.Actor, clusterID, nodeID string, force bool) (*db.OperationTask, error)
 	NodeService(ctx context.Context, actor audit.Actor, clusterID, nodeID, action string, confirmSingle bool) (*db.OperationTask, error)
 	RollbackGeneration(ctx context.Context, actor audit.Actor, clusterID, nodeID string, confirmSingle bool) (*db.OperationTask, error)
 	CheckGate(ctx context.Context, clusterID, nodeID string) (*GateResult, error)

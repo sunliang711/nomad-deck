@@ -394,3 +394,94 @@ func TestNomadUILoginOTT(t *testing.T) {
 		t.Fatal("second OTT exchange must fail")
 	}
 }
+
+func TestNomadForceRemoveAndUninstall(t *testing.T) {
+	e := newSvcEnvN(t, 3)
+	ctx := context.Background()
+	if err := e.s.bootstrap(ctx, e.load(), t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	cl := e.load()
+	ms, _ := db.ListClusterNodes(ctx, e.s.DB.Reader, cl.ID)
+	for _, m := range ms {
+		if err := e.s.waitHealthyServer(ctx, cl, m, t.Logf); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Simulate losing the third server (and s.Hosts is nil so SSH fails).
+	e.servers[2].stop()
+	down := e.member("local3")
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		g, err := e.s.CheckGate(ctx, cl.ID, down.NodeID)
+		if err == nil && !g.TargetHealthy && g.HealthyVoters >= 2 && g.Allowed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("local3 never reported removable: %+v %v", g, err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Normal remove fails when SSH is unavailable.
+	task, err := e.s.NodeRemove(ctx, testActor, cl.ID, down.NodeID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for {
+		got, _ := db.GetTask(ctx, e.s.DB.Reader, task.ID)
+		if got.Status == db.TaskFailed {
+			break
+		}
+		if got.Status == db.TaskSuccess || time.Now().After(deadline) {
+			t.Fatalf("expected non-force remove failure, got %s", got.Status)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Force remove cleans Raft, gossip and DB membership without SSH.
+	task, err = e.s.NodeRemove(ctx, testActor, cl.ID, down.NodeID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitTask(t, e.s, task.ID)
+	rest, err := db.ListClusterNodes(ctx, e.s.DB.Reader, cl.ID)
+	if err != nil || len(rest) != 2 {
+		t.Fatalf("expected 2 members after force remove, got %d %v", len(rest), err)
+	}
+	api, _, err := e.s.apiClient(ctx, cl, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raft, err := api.RaftConfiguration(ctx)
+	if err != nil || len(raft) != 2 {
+		t.Fatalf("expected 2 raft peers after force remove, got %+v %v", raft, err)
+	}
+
+	// Normal uninstall fails when SSH is unavailable; force uninstall deletes the cluster.
+	task, err = e.s.Uninstall(ctx, testActor, cl.ID, "local", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for {
+		got, _ := db.GetTask(ctx, e.s.DB.Reader, task.ID)
+		if got.Status == db.TaskFailed {
+			break
+		}
+		if got.Status == db.TaskSuccess || time.Now().After(deadline) {
+			t.Fatalf("expected non-force uninstall failure, got %s", got.Status)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	task, err = e.s.Uninstall(ctx, testActor, cl.ID, "local", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitTask(t, e.s, task.ID)
+	if _, err := db.GetCluster(ctx, e.s.DB.Reader, cl.ID); err == nil {
+		t.Fatal("cluster must be deleted after force uninstall")
+	}
+}

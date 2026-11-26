@@ -584,3 +584,53 @@ func TestServiceBusinessAndDoctor(t *testing.T) {
 		t.Fatalf("doctor: %+v", rep.Checks)
 	}
 }
+
+func TestVaultForceRemoveAndUninstall(t *testing.T) {
+	e := newSvcEnv(t, 3)
+	ctx := context.Background()
+	id := e.cluster.ID
+	e.mustSucceed(e.s.Init(ctx, testActor, id, InitInput{}))
+	if _, health, err := e.s.SyncStatus(ctx, id); err != nil || health != "healthy" {
+		t.Fatalf("sync status: %s %v", health, err)
+	}
+
+	// Simulate losing the third host: stop its process (and s.Hosts is nil so SSH fails).
+	e.lc.nodes[2].stop()
+	n3 := e.members["n3"]
+	waitFor(t, "n3 unhealthy in autopilot", 60*time.Second, func() (bool, error) {
+		g, err := e.s.CheckGate(ctx, id, n3.NodeID)
+		return err == nil && !g.TargetHealthy && g.Allowed, nil
+	})
+
+	// Normal remove fails because SSH to n3 is unavailable.
+	if res := e.wait(e.s.NodeRemove(ctx, testActor, id, n3.NodeID, false)); res.Status != db.TaskFailed {
+		t.Fatalf("expected non-force remove to fail when SSH unreachable, got %s", res.Status)
+	}
+	// Force remove skips SSH wipe, removes n3 from Raft and DB.
+	e.mustSucceed(e.s.NodeRemove(ctx, testActor, id, n3.NodeID, true))
+	ms, err := db.ListClusterNodes(ctx, e.s.DB.Reader, id)
+	if err != nil || len(ms) != 2 {
+		t.Fatalf("expected 2 members after force remove, got %d %v", len(ms), err)
+	}
+	cl, err := e.s.loadCluster(ctx, e.s.DB.Reader, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, _, err := e.s.adminClient(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := admin.RaftConfiguration(ctx)
+	if err != nil || len(cfg) != 2 {
+		t.Fatalf("expected 2 raft peers after force remove, got %+v %v", cfg, err)
+	}
+
+	// Normal uninstall fails when SSH is unavailable; force uninstall removes the cluster.
+	if res := e.wait(e.s.Uninstall(ctx, testActor, id, "local", false)); res.Status != db.TaskFailed {
+		t.Fatalf("expected non-force uninstall to fail when SSH unreachable, got %s", res.Status)
+	}
+	e.mustSucceed(e.s.Uninstall(ctx, testActor, id, "local", true))
+	if _, err := db.GetCluster(ctx, e.s.DB.Reader, id); err == nil {
+		t.Fatal("cluster must be deleted after force uninstall")
+	}
+}

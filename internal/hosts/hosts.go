@@ -422,7 +422,7 @@ func (s *Service) UpdateNode(ctx context.Context, actor audit.Actor, id string, 
 	return db.GetNode(ctx, s.DB.Reader, id)
 }
 
-// DeleteNode removes a host. (Cluster membership checks are added with clusters.)
+// DeleteNode removes a host after verifying it no longer belongs to any cluster.
 func (s *Service) DeleteNode(ctx context.Context, actor audit.Actor, id string) error {
 	err := s.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		n, err := db.GetNode(ctx, tx, id)
@@ -431,6 +431,13 @@ func (s *Service) DeleteNode(ctx context.Context, actor audit.Actor, id string) 
 		}
 		if err != nil {
 			return err
+		}
+		cnt, err := db.CountMembershipsOfNode(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if cnt > 0 {
+			return conflict("node_in_cluster", "主机仍属于集群，请先从集群移出（失联节点可使用强制移出）或卸载集群后再删除")
 		}
 		if err := db.DeleteNode(ctx, tx, id); err != nil {
 			return err

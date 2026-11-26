@@ -177,7 +177,7 @@ func TestE2EVaultCluster(t *testing.T) {
 	if ns, _ := status(); len(ns) != 4 {
 		t.Fatalf("after join: %+v", ns)
 	}
-	e.mustSucceed(s.NodeRemove(ctx, actor, id, nodeIDs[3]))
+	e.mustSucceed(s.NodeRemove(ctx, actor, id, nodeIDs[3], false))
 	if ns, _ := status(); len(ns) != 3 {
 		t.Fatalf("after remove: %+v", ns)
 	}
@@ -237,7 +237,7 @@ func TestE2EVaultCluster(t *testing.T) {
 	}
 
 	// Uninstall.
-	e.mustSucceed(s.Uninstall(ctx, actor, id, "e2e-vault"))
+	e.mustSucceed(s.Uninstall(ctx, actor, id, "e2e-vault", false))
 	if _, err := db.GetCluster(ctx, d.Reader, id); err == nil {
 		t.Fatal("cluster must be deleted")
 	}

@@ -327,8 +327,8 @@ func TestE2ENomadCluster(t *testing.T) {
 	healthy("after restore")
 
 	// Scale in: the server_client (drain + remove-peer), then the client.
-	e.mustSucceed(s.NodeRemove(ctx, actor, id, ids[4]))
-	e.mustSucceed(s.NodeRemove(ctx, actor, id, ids[3]))
+	e.mustSucceed(s.NodeRemove(ctx, actor, id, ids[4], false))
+	e.mustSucceed(s.NodeRemove(ctx, actor, id, ids[3], false))
 	rep = healthy("after remove")
 	if rep.Voters != 3 || len(rep.Nodes) != 3 {
 		t.Fatalf("after remove: %+v", rep)
@@ -343,7 +343,7 @@ func TestE2ENomadCluster(t *testing.T) {
 		t.Fatalf("allocation still on a removed node: %s", n)
 	}
 
-	e.mustSucceed(s.Uninstall(ctx, actor, id, "e2e-nomad"))
+	e.mustSucceed(s.Uninstall(ctx, actor, id, "e2e-nomad", false))
 	if _, err := db.GetCluster(ctx, d.Reader, id); err == nil {
 		t.Fatal("cluster must be deleted")
 	}

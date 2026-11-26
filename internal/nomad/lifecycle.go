@@ -385,8 +385,10 @@ func (s *Service) runJoin(ctx context.Context, t *ops.Task, clusterID, memberID 
 // drained to completion; servers pass the quorum gate, hand over
 // leadership if they lead, stop and are removed from Raft and gossip. A
 // server_client member runs both flows in that order. The host is then
-// wiped so retry_join cannot bring it back.
-func (s *Service) NodeRemove(ctx context.Context, actor audit.Actor, clusterID, nodeID string) (*db.OperationTask, error) {
+// wiped so retry_join cannot bring it back. When force is true,
+// unreachable hosts skip SSH stop/wipe and dead client drain waits while
+// still cleaning Raft, gossip, client purge and membership records.
+func (s *Service) NodeRemove(ctx context.Context, actor audit.Actor, clusterID, nodeID string, force bool) (*db.OperationTask, error) {
 	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return nil, err
@@ -409,7 +411,7 @@ func (s *Service) NodeRemove(ctx context.Context, actor audit.Actor, clusterID, 
 		return nil, conflict("maintenance", "集群处于维护模式（%s）", cl.MaintenanceReason)
 	}
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.node_remove", TargetType: "cluster", TargetID: clusterID,
-		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID, "role": m.Role},
+		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name, Params: map[string]any{"node_id": nodeID, "role": m.Role, "force": force},
 		Run: func(ctx context.Context, t *ops.Task) error {
 			freshCl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
 			if err != nil {
@@ -423,13 +425,13 @@ func (s *Service) NodeRemove(ctx context.Context, actor audit.Actor, clusterID, 
 			if err != nil {
 				return err
 			}
-			return s.runRemove(ctx, t, freshCl, freshM)
+			return s.runRemove(ctx, t, freshCl, freshM, force)
 		}})
 	if err != nil {
 		return nil, err
 	}
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.node_remove", ResourceType: "cluster", ResourceID: clusterID,
-		ResourceName: cl.Name, OperationTaskID: task.ID, Summary: map[string]any{"node_id": nodeID, "node": m.NodeName, "role": m.Role}})
+		ResourceName: cl.Name, OperationTaskID: task.ID, Summary: map[string]any{"node_id": nodeID, "node": m.NodeName, "role": m.Role, "force": force}})
 	return task, nil
 }
 
@@ -489,36 +491,87 @@ func (s *Service) undrain(ctx context.Context, cl *nomadCluster, m *db.ClusterNo
 	return api.SetEligibility(ctx, id, true)
 }
 
-func (s *Service) runRemove(ctx context.Context, t *ops.Task, cl *nomadCluster, m *db.ClusterNode) error {
+func (s *Service) forceDrainClient(ctx context.Context, cl *nomadCluster, m *db.ClusterNode, log func(string, ...any)) {
+	id := memberConfig(m).ClientNodeID
+	if id == "" {
+		log("%s 没有登记的 Nomad 节点 ID，跳过疏散", m.NodeName)
+		return
+	}
+	api, _, err := s.apiClient(ctx, cl, "")
+	if err != nil {
+		log("读取 Nomad Server API 失败（%v），按强制移出模式跳过 Client 疏散", err)
+		return
+	}
+	nd, err := api.Node(ctx, id)
+	if err != nil || nd.Status == "down" {
+		_ = api.SetEligibility(ctx, id, false)
+		log("Client %s 当前已失联或不可达，跳过等待疏散，后续直接 Purge", m.NodeName)
+		return
+	}
+	if err := s.drainClient(ctx, cl, m, log); err != nil {
+		log("疏散 Client 失败（%v），按强制移出模式继续移出", err)
+	}
+}
+
+func (s *Service) runRemove(ctx context.Context, t *ops.Task, cl *nomadCluster, m *db.ClusterNode, force bool) error {
 	initialized := cl.InitState == db.InitInitialized
 	if initialized && IsClient(m.Role) {
 		step, err := t.Step("疏散 Client "+m.NodeName, m.NodeID)
 		if err != nil {
 			return err
 		}
-		err = s.drainClient(ctx, cl, m, step.Logf)
-		step.Finish(err, nil)
+		if force {
+			s.forceDrainClient(ctx, cl, m, step.Logf)
+			step.Finish(nil, nil)
+		} else {
+			err = s.drainClient(ctx, cl, m, step.Logf)
+			step.Finish(err, nil)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	nc, sshErr := s.remote().Open(ctx, t, m.NodeID, "停服并移出")
+	if sshErr != nil {
+		if !force {
+			return sshErr
+		}
+		step, err := t.Step("强制移出失联节点 "+m.NodeName, m.NodeID)
 		if err != nil {
 			return err
 		}
-	}
-	nc, err := s.remote().Open(ctx, t, m.NodeID, "停服并移出")
-	if err != nil {
-		return err
-	}
-	err = func() error {
+		step.Logf("无法连接主机（%v），按强制移出模式跳过远端停服与擦除", sshErr)
+		var remErr error
 		if initialized && IsServer(m.Role) {
-			if err := s.removeServer(ctx, cl, nc, m); err != nil {
+			remErr = s.removeServer(ctx, cl, nil, step.Logf, m, true)
+		}
+		step.Finish(remErr, nil)
+		if remErr != nil {
+			return remErr
+		}
+	} else {
+		err := func() error {
+			if initialized && IsServer(m.Role) {
+				if err := s.removeServer(ctx, cl, nc, nc.Step.Logf, m, force); err != nil {
+					return err
+				}
+			} else if err := s.service(ctx, nc, "stop"); err != nil && !force {
 				return err
+			} else if err != nil {
+				nc.Step.Logf("停服失败（%v），按强制移出模式继续", err)
 			}
-		} else if err := s.service(ctx, nc, "stop"); err != nil {
+			if err := s.wipe(ctx, nc); err != nil {
+				if !force {
+					return err
+				}
+				nc.Step.Logf("远端擦除失败（%v），按强制移出模式继续移除成员记录", err)
+			}
+			return nil
+		}()
+		nc.Step.Finish(err, nil)
+		if err != nil {
 			return err
 		}
-		return s.wipe(ctx, nc)
-	}()
-	nc.Step.Finish(err, nil)
-	if err != nil {
-		return err
 	}
 	if initialized && IsClient(m.Role) {
 		if api, _, err := s.apiClient(ctx, cl, m.ID); err == nil {
@@ -532,7 +585,13 @@ func (s *Service) runRemove(ctx context.Context, t *ops.Task, cl *nomadCluster, 
 	}
 	if initialized && IsServer(m.Role) {
 		if err := s.refreshPeers(ctx, t, cl, ""); err != nil {
-			return fmt.Errorf("节点已移除，但刷新其余节点的 retry_join 失败：%w", err)
+			if !force {
+				return fmt.Errorf("节点已移除，但刷新其余节点的 retry_join 失败：%w", err)
+			}
+			if warnStep, stepErr := t.Step("刷新其余节点 retry_join", ""); stepErr == nil {
+				warnStep.Logf("刷新其余节点 retry_join 失败（%v），节点已从集群移除，请稍后同步配置", err)
+				warnStep.Finish(nil, nil)
+			}
 		}
 	}
 	_, _ = s.StatusDetail(ctx, cl.ID)
@@ -541,8 +600,8 @@ func (s *Service) runRemove(ctx context.Context, t *ops.Task, cl *nomadCluster, 
 
 // removeServer hands over leadership if needed, stops the server and
 // removes it from Raft and the gossip pool.
-func (s *Service) removeServer(ctx context.Context, cl *nomadCluster, nc *cluster.NodeCtx, m *db.ClusterNode) error {
-	if err := s.gateFor(ctx, cl, m, false, nc.Step.Logf); err != nil {
+func (s *Service) removeServer(ctx context.Context, cl *nomadCluster, nc *cluster.NodeCtx, log func(string, ...any), m *db.ClusterNode, force bool) error {
+	if err := s.gateFor(ctx, cl, m, false, log); err != nil {
 		return err
 	}
 	api, _, err := s.apiClient(ctx, cl, m.ID)
@@ -554,20 +613,25 @@ func (s *Service) removeServer(ctx context.Context, cl *nomadCluster, nc *cluste
 		return err
 	}
 	sv, inRaft := raftServerOf(cl, m, raft)
-	if inRaft && sv.Leader {
-		for _, other := range raft {
-			if other.ID != sv.ID && other.Voter {
-				if err := api.TransferLeadership(ctx, other.ID); err != nil {
-					nc.Step.Logf("移交 Leader 失败（%v），停服后由其余节点重新选举", err)
-				} else {
-					nc.Step.Logf("Leader 已移交给 %s", other.Node)
+	if nc != nil {
+		if inRaft && sv.Leader {
+			for _, other := range raft {
+				if other.ID != sv.ID && other.Voter {
+					if err := api.TransferLeadership(ctx, other.ID); err != nil {
+						log("移交 Leader 失败（%v），停服后由其余节点重新选举", err)
+					} else {
+						log("Leader 已移交给 %s", other.Node)
+					}
+					break
 				}
-				break
 			}
 		}
-	}
-	if err := s.service(ctx, nc, "stop"); err != nil {
-		return err
+		if err := s.service(ctx, nc, "stop"); err != nil {
+			if !force {
+				return err
+			}
+			log("停止 Nomad 服务失败（%v），按强制移出模式继续从 Raft 移除", err)
+		}
 	}
 	members, _ := db.ListClusterNodes(ctx, s.DB.Reader, cl.ID)
 	var rest []*db.ClusterNode
@@ -576,7 +640,7 @@ func (s *Service) removeServer(ctx context.Context, cl *nomadCluster, nc *cluste
 			rest = append(rest, x)
 		}
 	}
-	if _, err := s.waitLeader(ctx, cl, rest, nc.Step.Logf); err != nil {
+	if _, err := s.waitLeader(ctx, cl, rest, log); err != nil {
 		return err
 	}
 	if api, _, err = s.apiClient(ctx, cl, m.ID); err != nil {
@@ -601,7 +665,7 @@ func (s *Service) removeServer(ctx context.Context, cl *nomadCluster, nc *cluste
 				}
 			}
 		}
-		nc.Step.Logf("已从 Raft 成员中移除 %s", sv.Node)
+		log("已从 Raft 成员中移除 %s", sv.Node)
 	}
 	_ = api.ForceLeave(ctx, memberConfig(m).NodeName+"."+cl.Region)
 	return nil
@@ -1039,12 +1103,22 @@ func (s *Service) PlanUninstall(ctx context.Context, clusterID string) (*cluster
 	}}
 	for _, m := range members {
 		p.Nodes = append(p.Nodes, m.NodeName)
+		unreachable := m.ServiceStatus == "unreachable"
+		if !unreachable {
+			if n, err := db.GetNode(ctx, s.DB.Reader, m.NodeID); err == nil && n.Status == "offline" {
+				unreachable = true
+			}
+		}
+		if unreachable {
+			p.UnreachableNodes = append(p.UnreachableNodes, m.NodeName)
+		}
 	}
 	return p, nil
 }
 
 // Uninstall removes Nomad from every member and deletes the cluster.
-func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, confirmName string) (*db.OperationTask, error) {
+// When force is true, unreachable nodes or failed remote wipes are skipped.
+func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, confirmName string, force bool) (*db.OperationTask, error) {
 	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
 	if err != nil {
 		return nil, err
@@ -1062,7 +1136,7 @@ func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, c
 		return nil, err
 	}
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: "cluster.uninstall", TargetType: "cluster", TargetID: clusterID,
-		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name, Params: map[string]any{"name": cl.Name},
+		Locks: memberLocks(clusterID, members), TriggeredBy: actor.Name, Params: map[string]any{"name": cl.Name, "force": force},
 		Run: func(ctx context.Context, t *ops.Task) error {
 			var errs []error
 			for _, m := range members {
@@ -1071,10 +1145,22 @@ func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, c
 				}
 				nc, err := s.remote().Open(ctx, t, m.NodeID, "卸载")
 				if err != nil {
+					if force {
+						if skipStep, stepErr := t.Step("跳过失联节点 "+m.NodeName, m.NodeID); stepErr == nil {
+							skipStep.Logf("无法连接主机（%v），按强制卸载模式跳过远端清理", err)
+							skipStep.Finish(nil, nil)
+						}
+						continue
+					}
 					errs = append(errs, err)
 					continue
 				}
 				err = s.wipe(ctx, nc)
+				if err != nil && force {
+					nc.Step.Logf("远端清理失败（%v），按强制卸载模式忽略并继续清理控制面记录", err)
+					nc.Step.Finish(nil, nil)
+					continue
+				}
 				nc.Step.Finish(err, nil)
 				errs = append(errs, err)
 			}
@@ -1094,7 +1180,7 @@ func (s *Service) Uninstall(ctx context.Context, actor audit.Actor, clusterID, c
 		return nil, err
 	}
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.uninstall", ResourceType: "cluster", ResourceID: clusterID,
-		ResourceName: cl.Name, OperationTaskID: task.ID})
+		ResourceName: cl.Name, OperationTaskID: task.ID, Summary: map[string]any{"force": force}})
 	return task, nil
 }
 

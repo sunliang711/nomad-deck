@@ -308,7 +308,7 @@ func TestE2EIntegration(t *testing.T) {
 	doctorClean(t, rep, "after Nomad CA rotation")
 
 	// Uninstall is refused while the integration exists; teardown removes both sides.
-	if _, err := ns.Uninstall(ctx, actor, nc.ID, "e2e-nomad"); err == nil {
+	if _, err := ns.Uninstall(ctx, actor, nc.ID, "e2e-nomad", false); err == nil {
 		t.Fatal("uninstall must be refused while an integration references the cluster")
 	}
 	e.ok(is.Delete(ctx, actor, iv.ID, ApplyInput{ConfirmSingle: true}))
@@ -318,8 +318,8 @@ func TestE2EIntegration(t *testing.T) {
 	if strings.Contains(sh(ids[0], "ls "+nomad.ConfigLink+"/"), "60-vault.hcl") {
 		t.Fatal("60-vault.hcl must be removed")
 	}
-	e.ok(ns.Uninstall(ctx, actor, nc.ID, "e2e-nomad"))
-	e.ok(vs.Uninstall(ctx, actor, vc.ID, "e2e-vault"))
+	e.ok(ns.Uninstall(ctx, actor, nc.ID, "e2e-nomad", false))
+	e.ok(vs.Uninstall(ctx, actor, vc.ID, "e2e-vault", false))
 	engine.Wait()
 }
 

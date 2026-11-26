@@ -490,9 +490,9 @@ export function VaultPage() {
                     .then((r) => { if (r.task?.id) openTask(r.task.id, `重启节点: ${n.name}`); })
                     .catch((ex) => setErr(ex.message))
                 }
-                onRemoveNode={(n) =>
-                  apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {})
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, `缩容节点: ${n.name}`); })
+                onRemoveNode={(n, force) =>
+                  apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, { force })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, `${force ? '强制移出' : '缩容'}节点: ${n.name}`); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onError={setErr}

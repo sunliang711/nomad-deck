@@ -5,6 +5,7 @@ import { Button, ErrorAlert, Input, Modal, SecretInput } from './UI';
 
 export interface UninstallPlan {
   nodes?: string[];
+  unreachable_nodes?: string[];
   snapshots?: number;
   warnings?: string[];
 }
@@ -24,6 +25,7 @@ export function UninstallClusterModal({
 }) {
   const [confirmName, setConfirmName] = useState('');
   const [password, setPassword] = useState('');
+  const [force, setForce] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -31,6 +33,7 @@ export function UninstallClusterModal({
     if (!open) return;
     setConfirmName('');
     setPassword('');
+    setForce(false);
     setErr('');
   }, [open, cluster?.id]);
 
@@ -43,6 +46,7 @@ export function UninstallClusterModal({
       const res = await apiPost(`/api/v1/clusters/${cluster.id}/uninstall`, {
         confirm_name: confirmName.trim(),
         current_password: password,
+        force,
       });
       onClose();
       onSubmitted(res.task?.id);
@@ -54,6 +58,7 @@ export function UninstallClusterModal({
   };
 
   const nameMatches = Boolean(cluster && confirmName.trim() === cluster.name);
+  const unreachableNodes = plan?.unreachable_nodes || [];
 
   return (
     <Modal open={open} title={`卸载集群：${cluster?.name || ''}`} busy={busy} onClose={onClose}>
@@ -79,6 +84,27 @@ export function UninstallClusterModal({
           )}
         </div>
 
+        {unreachableNodes.length > 0 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/50 dark:text-amber-200">
+            检测到以下节点当前不可达：{unreachableNodes.join('、')}。若虚拟机已删除或无法 SSH 连接，请勾选下方「强制卸载」。
+          </div>
+        )}
+
+        <label className="flex items-start gap-2.5 rounded-xl border border-amber-200/90 bg-amber-50/60 p-3 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={force}
+            onChange={(e) => setForce(e.target.checked)}
+            className="mt-0.5 shrink-0"
+          />
+          <span>
+            <span className="font-medium">强制卸载（跳过失联节点的 SSH 清理）</span>
+            <span className="mt-0.5 block text-[11px] leading-4 opacity-85">
+              仍会尽力清理可连通的节点；遇到 SSH 失联或清理失败的节点将自动跳过，并直接删除控制面集群记录与托管凭据。
+            </span>
+          </span>
+        </label>
+
         <Input
           label={`请输入集群名称「${cluster?.name || ''}」确认卸载`}
           required
@@ -98,7 +124,7 @@ export function UninstallClusterModal({
             取消
           </Button>
           <Button type="submit" variant="danger" loading={busy} disabled={!nameMatches || !password}>
-            确认卸载并清除数据
+            {force ? '确认强制卸载' : '确认卸载并清除数据'}
           </Button>
         </div>
       </form>

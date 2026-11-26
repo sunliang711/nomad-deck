@@ -355,11 +355,27 @@ func (a *API) joinClusterNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) removeClusterNode(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Force bool `json:"force"`
+	}
+	if r.Body != nil {
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid_json", "请求体不是合法的 JSON："+err.Error())
+			return
+		} else if err == nil {
+			if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+				writeError(w, http.StatusBadRequest, "invalid_json", "请求体只能包含一个 JSON 对象")
+				return
+			}
+		}
+	}
 	d, _, ok := a.driver(w, r)
 	if !ok {
 		return
 	}
-	t, err := d.NodeRemove(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "node_id"))
+	t, err := d.NodeRemove(r.Context(), a.actor(r), chi.URLParam(r, "id"), chi.URLParam(r, "node_id"), in.Force)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return
@@ -595,6 +611,7 @@ func (a *API) uninstallCluster(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ConfirmName     string `json:"confirm_name"`
 		CurrentPassword string `json:"current_password"`
+		Force           bool   `json:"force"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -603,7 +620,7 @@ func (a *API) uninstallCluster(w http.ResponseWriter, r *http.Request) {
 	if !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
 		return
 	}
-	t, err := d.Uninstall(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.ConfirmName)
+	t, err := d.Uninstall(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.ConfirmName, in.Force)
 	if err != nil {
 		a.writeErr(w, r, err)
 		return

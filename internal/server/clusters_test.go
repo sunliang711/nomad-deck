@@ -3,6 +3,7 @@ package server
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestVaultClusterAPI(t *testing.T) {
@@ -354,5 +355,114 @@ func TestJobRoutes(t *testing.T) {
 	}
 	if code, b := root.do("POST", "/api/v1/nomad/"+cid+"/management-token/reveal", map[string]any{"current_password": adminPass}, nil); code != 409 || errCode(b) != "no_admin_token" {
 		t.Fatalf("expected 409 no_admin_token on undeployed cluster, got %d %v", code, b)
+	}
+}
+
+func TestForceRemoveUninstallAndDeleteNodeAPI(t *testing.T) {
+	e := newEnv(t)
+	root := e.setup(t)
+	var ids []string
+	for i, name := range []string{"dead-1", "dead-2", "dead-3", "dead-4"} {
+		code, b := root.do("POST", "/api/v1/nodes", map[string]any{
+			"name": name, "host": "127.0.0.1", "ssh_port": 1 + i, "ssh_user": "ops", "use_sudo": true,
+		}, nil)
+		if code != 201 {
+			t.Fatalf("create node: %d %v", code, b)
+		}
+		ids = append(ids, b["node"].(map[string]any)["id"].(string))
+	}
+	code, b := root.do("POST", "/api/v1/clusters", map[string]any{
+		"type": "nomad", "name": "dead-cluster", "mode": "cluster",
+		"nodes": []any{
+			map[string]any{"node_id": ids[0], "role": "server"},
+			map[string]any{"node_id": ids[1], "role": "server"},
+			map[string]any{"node_id": ids[2], "role": "server"},
+			map[string]any{"node_id": ids[3], "role": "client"},
+		},
+	}, nil)
+	if code != 201 {
+		t.Fatalf("create cluster: %d %v", code, b)
+	}
+	cid := b["cluster"].(map[string]any)["id"].(string)
+	// Mark members installed and offline to simulate an installed cluster whose VMs vanished.
+	if _, err := e.app.DB.Writer.Exec(`UPDATE cluster_nodes SET install_state = 'installed', service_status = 'unreachable' WHERE cluster_id = ?`, cid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.app.DB.Writer.Exec(`UPDATE nodes SET status = 'offline' WHERE id IN (?, ?, ?, ?)`, ids[0], ids[1], ids[2], ids[3]); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deleting a host that still belongs to a cluster must return 409 node_in_cluster (not 500).
+	if code, b := root.do("DELETE", "/api/v1/nodes/"+ids[3], nil, nil); code != 409 || errCode(b) != "node_in_cluster" {
+		t.Fatalf("delete node in cluster: %d %v", code, b)
+	}
+
+	// PlanUninstall must report unreachable_nodes.
+	if code, b := root.do("POST", "/api/v1/clusters/"+cid+"/uninstall/plan", map[string]any{}, nil); code != 200 {
+		t.Fatalf("uninstall plan: %d %v", code, b)
+	} else if plan := b["plan"].(map[string]any); len(plan["unreachable_nodes"].([]any)) != 4 {
+		t.Fatalf("expected 4 unreachable_nodes, got %+v", plan)
+	}
+
+	waitOp := func(taskID string) string {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			_, res := root.do("GET", "/api/v1/operations/"+taskID, nil, nil)
+			st := res["operation"].(map[string]any)["status"].(string)
+			if st != "pending" && st != "running" {
+				return st
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Fatalf("task %s timed out", taskID)
+		return ""
+	}
+
+	// Non-force remove fails when SSH is unreachable; force remove succeeds and allows deleting the host.
+	code, b = root.do("POST", "/api/v1/clusters/"+cid+"/nodes/"+ids[3]+"/remove", map[string]any{}, nil)
+	if code != 202 {
+		t.Fatalf("submit remove: %d %v", code, b)
+	}
+	if st := waitOp(b["task"].(map[string]any)["id"].(string)); st != "failed" {
+		t.Fatalf("expected non-force remove to fail, got %s", st)
+	}
+	code, b = root.do("POST", "/api/v1/clusters/"+cid+"/nodes/"+ids[3]+"/remove", map[string]any{"force": true}, nil)
+	if code != 202 {
+		t.Fatalf("submit force remove: %d %v", code, b)
+	}
+	if st := waitOp(b["task"].(map[string]any)["id"].(string)); st != "success" {
+		t.Fatalf("expected force remove to succeed, got %s", st)
+	}
+	if code, _ := root.do("DELETE", "/api/v1/nodes/"+ids[3], nil, nil); code != 204 {
+		t.Fatalf("expected host deletion after force remove to succeed, got %d", code)
+	}
+
+	// Non-force uninstall fails when SSH is unreachable; force uninstall succeeds and allows deleting remaining hosts.
+	code, b = root.do("POST", "/api/v1/clusters/"+cid+"/uninstall", map[string]any{
+		"confirm_name": "dead-cluster", "current_password": adminPass,
+	}, nil)
+	if code != 202 {
+		t.Fatalf("submit uninstall: %d %v", code, b)
+	}
+	if st := waitOp(b["task"].(map[string]any)["id"].(string)); st != "failed" {
+		t.Fatalf("expected non-force uninstall to fail, got %s", st)
+	}
+	code, b = root.do("POST", "/api/v1/clusters/"+cid+"/uninstall", map[string]any{
+		"confirm_name": "dead-cluster", "current_password": adminPass, "force": true,
+	}, nil)
+	if code != 202 {
+		t.Fatalf("submit force uninstall: %d %v", code, b)
+	}
+	if st := waitOp(b["task"].(map[string]any)["id"].(string)); st != "success" {
+		t.Fatalf("expected force uninstall to succeed, got %s", st)
+	}
+	if code, _ := root.do("GET", "/api/v1/clusters/"+cid, nil, nil); code != 404 {
+		t.Fatalf("cluster must be gone after force uninstall, got %d", code)
+	}
+	for _, id := range ids[:3] {
+		if code, _ := root.do("DELETE", "/api/v1/nodes/"+id, nil, nil); code != 204 {
+			t.Fatalf("expected host deletion after force uninstall to succeed, got %d", code)
+		}
 	}
 }

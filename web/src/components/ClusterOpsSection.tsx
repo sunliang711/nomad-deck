@@ -1,10 +1,10 @@
 import React, { useRef, useState } from 'react';
-import { ArrowRight, CheckCircle2, Circle, KeyRound, Loader2, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, CheckCircle2, Circle, KeyRound, Loader2, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2 } from 'lucide-react';
 import { apiGet, fmtTime } from '../lib/api';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { isTaskActiveStatus } from '../lib/actionLabels';
 import { useConfirm } from './ConfirmDialog';
-import { Badge, Button, Card, ExternalUrlLink, Input, Select, StatusBadge, TermLabel } from './UI';
+import { Badge, Button, Card, ExternalUrlLink, Input, Modal, Select, StatusBadge, TermLabel } from './UI';
 
 interface ClusterOpsSectionProps {
   product: 'nomad' | 'vault';
@@ -37,7 +37,7 @@ interface ClusterOpsSectionProps {
   onOpenLogs: (node: any) => void;
   onCheckGate?: (node: any) => Promise<unknown> | void;
   onRestartNode: (node: any) => Promise<unknown> | void;
-  onRemoveNode: (node: any) => Promise<unknown> | void;
+  onRemoveNode: (node: any, force: boolean) => Promise<unknown> | void;
   onOpenClusterSettings?: () => void;
   onConfigureNode?: (node: any) => void;
   nodeConfigs?: Record<string, any>;
@@ -87,6 +87,8 @@ export function ClusterOpsSection({
   const [availableVersions, setAvailableVersions] = useState<string[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
   const [busyKey, setBusyKey] = useState('');
+  const [removeTarget, setRemoveTarget] = useState<any | null>(null);
+  const [forceRemove, setForceRemove] = useState(false);
   const busyRef = useRef(false);
   const { tasks, openTask } = useOpsDrawer();
   const activeTask = tasks.find((task) => task.target_id === cluster.id && isTaskActiveStatus(task.status));
@@ -624,19 +626,21 @@ export function ClusterOpsSection({
                                   size="sm"
                                   variant="danger"
                                   loading={busyKey === `remove:${n.node_id}`}
-                                  disabled={blocked || !initialized || isSingleMode}
-                                  title={isSingleMode ? '单机模式仅 1 个节点，如需清理请使用下方卸载集群' : undefined}
-                                  onClick={async () => {
-                                    if (
-                                      !(await askConfirm(`确定要从集群中缩容移除节点「${n.name}」吗？`, {
-                                        title: '缩容移除节点',
-                                        confirmText: '确认缩容',
-                                        danger: true,
-                                      }))
-                                    ) {
-                                      return;
-                                    }
-                                    await runBusy(`remove:${n.node_id}`, () => onRemoveNode(n));
+                                  disabled={
+                                    blocked ||
+                                    clusterNodes.length <= 1 ||
+                                    (!isVault && (n.role === 'server' || n.role === 'server_client') && serverCount <= 1)
+                                  }
+                                  title={
+                                    clusterNodes.length <= 1
+                                      ? '集群仅剩 1 个节点，如需清理请使用下方卸载集群'
+                                      : !isVault && (n.role === 'server' || n.role === 'server_client') && serverCount <= 1
+                                        ? '不能移除集群的最后一台 Server'
+                                        : undefined
+                                  }
+                                  onClick={() => {
+                                    setRemoveTarget(n);
+                                    setForceRemove(false);
                                   }}
                                 >
                                   缩容
@@ -757,6 +761,67 @@ export function ClusterOpsSection({
           )}
         </>
       )}
+
+      <Modal
+        open={Boolean(removeTarget)}
+        title={`缩容移除节点：${removeTarget?.name || ''}`}
+        busy={Boolean(removeTarget && busyKey === `remove:${removeTarget.node_id}`)}
+        onClose={() => setRemoveTarget(null)}
+      >
+        {removeTarget && (
+          <div className="space-y-4 text-xs">
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-rose-900 dark:border-rose-900/70 dark:bg-rose-950/60 dark:text-rose-200 space-y-1.5">
+              <div className="flex items-center gap-2 font-semibold">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>确认将节点「{removeTarget.name}」从 {productName} 集群中移出</span>
+              </div>
+              <p className="leading-5 opacity-90">
+                正常缩容会先执行仲裁门禁{!isVault ? '（Client 会先疏散并 Purge）' : ''}、从 Raft 成员移除，再通过 SSH 停服并擦除节点数据。
+              </p>
+            </div>
+
+            {(removeTarget.service_status === 'unreachable' || removeTarget.reachable === false) && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/50 dark:text-amber-200">
+                检测到节点当前处于失联或不可达状态。若虚拟机已删除或无法通过 SSH 连接，请勾选下方「强制移出」。
+              </div>
+            )}
+
+            <label className="flex items-start gap-2.5 rounded-xl border border-amber-200/90 bg-amber-50/60 p-3 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={forceRemove}
+                onChange={(e) => setForceRemove(e.target.checked)}
+                className="mt-0.5 shrink-0"
+              />
+              <span>
+                <span className="font-medium">强制移出（跳过失联节点的 SSH 清理）</span>
+                <span className="mt-0.5 block text-[11px] leading-4 opacity-85">
+                  仅跳过无法连接主机时的 SSH 停服、数据擦除及失联 Client 疏散等待；如集群已初始化，仍会尝试通过存活节点将该成员从 Raft{!isVault ? '、Gossip 及 Client 列表' : ''}中清理（需存活节点仍满足仲裁多数派）。
+                </span>
+              </span>
+            </label>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <Button type="button" disabled={busyKey === `remove:${removeTarget.node_id}`} onClick={() => setRemoveTarget(null)}>
+                取消
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                loading={busyKey === `remove:${removeTarget.node_id}`}
+                onClick={async () => {
+                  const target = removeTarget;
+                  const force = forceRemove;
+                  setRemoveTarget(null);
+                  await runBusy(`remove:${target.node_id}`, () => onRemoveNode(target, force));
+                }}
+              >
+                {forceRemove ? '确认强制移出' : '确认缩容'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

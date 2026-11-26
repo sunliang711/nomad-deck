@@ -60,6 +60,9 @@ func TestSSHKeysAndNodesAPI(t *testing.T) {
 	if len(got["node"].(map[string]any)["address_aliases"].([]any)) != 2 {
 		t.Fatalf("aliases not stored: %v", got)
 	}
+	if _, ok := got["warnings"].([]any); !ok {
+		t.Fatalf("expected warnings slice on getNode, got: %v", got["warnings"])
+	}
 	if code, _ := root.do("POST", "/api/v1/nodes/"+nodeID+"/reset-fingerprint", map[string]any{"current_password": "nope-nope-nope"}, nil); code != 403 {
 		t.Fatalf("reset fingerprint requires second verification: %d", code)
 	}

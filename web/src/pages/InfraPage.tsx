@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, Copy, KeyRound, MoreHorizontal, Plus, RefreshCw, Server as ServerIcon, Trash2 } from 'lucide-react';
+import { Activity, AlertTriangle, CheckCircle2, Copy, KeyRound, MoreHorizontal, Plus, RefreshCw, Server as ServerIcon, Trash2 } from 'lucide-react';
 import { apiDelete, apiGet, apiPost, apiPut, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { copyText as copyToClipboard } from '../lib/clipboard';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
+import { Drawer } from '../components/Drawer';
 import {
   Badge,
   Button,
@@ -23,8 +24,26 @@ import {
   Select,
   StatusBadge,
   TermLabel,
-  statusTone,
 } from '../components/UI';
+
+function dockerModeLabelOf(mode?: string): string {
+  if (mode === 'managed') return '托管';
+  if (mode === 'external') return '外部';
+  if (mode === 'absent') return '未安装';
+  return mode || '-';
+}
+
+function dockerStatusLabelOf(status?: string): string {
+  if (status === 'running' || status === 'active') return '运行中';
+  if (status === 'absent') return '';
+  return status || '';
+}
+
+function timeSyncLabelOf(sync?: string): string {
+  if (sync === 'synced') return '已同步';
+  if (sync === 'unsynced' || sync === 'skewed') return '待校时';
+  return sync || '-';
+}
 
 function setupCommandForKey(k?: { public_key?: string; setup_command?: string } | null): string {
   if (!k) return '';
@@ -71,7 +90,11 @@ export function InfraPage() {
   const [pushPassword, setPushPassword] = useState('');
   const [pushAndTest, setPushAndTest] = useState(true);
   const [pwResetNode, setPwResetNode] = useState<any>(null);
-  const [probeWarnings, setProbeWarnings] = useState<{ node: string; warnings: string[] } | null>(null);
+  const [detailNode, setDetailNode] = useState<any>(null);
+  const [detailProbe, setDetailProbe] = useState<any>(null);
+  const [detailWarnings, setDetailWarnings] = useState<string[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailTesting, setDetailTesting] = useState(false);
   const [openMenu, setOpenMenu] = useState<{ id: string; top: number; right: number } | null>(null);
   const [saveAndTest, setSaveAndTest] = useState(true);
   const [dockerNode, setDockerNode] = useState<any>(null);
@@ -207,6 +230,69 @@ export function InfraPage() {
     setPushModalErr('');
   };
 
+  const openNodeDetail = useCallback(async (node: any, overrideWarnings?: string[]) => {
+    setDetailNode(node);
+    setDetailProbe(null);
+    setDetailWarnings(overrideWarnings || []);
+    setDetailLoading(true);
+    try {
+      const res = await apiGet(`/api/v1/nodes/${node.id}`);
+      if (res.node) setDetailNode(res.node);
+      setDetailProbe(res.probe || null);
+      setDetailWarnings(Array.isArray(res.warnings) ? res.warnings : (overrideWarnings || []));
+    } catch (ex: any) {
+      toast.error(ex?.message || `加载主机 ${node.name} 详情失败`, { position: 'top-right' });
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [toast]);
+
+  const closeDetailDrawer = () => {
+    setDetailNode(null);
+    setDetailProbe(null);
+    setDetailWarnings([]);
+    setDetailLoading(false);
+  };
+
+  const notifyProbeResult = (node: any, warnings: string[], options?: { pushed?: boolean; prefix?: string }) => {
+    const list = Array.isArray(warnings) ? warnings : [];
+    const name = node?.name || '';
+    const viewAction = node?.id
+      ? {
+          label: '查看详情',
+          onClick: () => {
+            void openNodeDetail(node, list);
+          },
+        }
+      : undefined;
+
+    if (list.length === 0) {
+      const title = options?.prefix
+        ? `${options.prefix}，所有环境预检均通过`
+        : `主机 ${name} 连接成功，所有环境预检均通过`;
+      toast.success(title, {
+        position: 'top-right',
+        durationMs: 4500,
+        action: viewAction,
+      });
+      return;
+    }
+
+    const preview = list.slice(0, 3);
+    if (list.length > 3) {
+      preview.push(`另有 ${list.length - 3} 项提醒，点击「查看详情」查看完整列表`);
+    }
+    const title = options?.prefix
+      ? `${options.prefix}（发现 ${list.length} 项环境提醒）`
+      : `主机 ${name} 连接成功，发现 ${list.length} 项环境提醒`;
+    toast.info(title, {
+      position: 'top-right',
+      durationMs: 8000,
+      details: preview,
+      action: viewAction,
+    });
+  };
+
   const saveNode = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormBusy(true);
@@ -244,17 +330,23 @@ export function InfraPage() {
       if (saveAndTest && savedNode?.id) {
         try {
           const testRes = await apiPost(`/api/v1/nodes/${savedNode.id}/test`);
-          setProbeWarnings({ node: savedNode.name || nodeForm.name, warnings: testRes.warnings || [] });
-          toast.success(
-            pushed
-              ? `主机 ${savedNode.name || nodeForm.name} 已保存、推送公钥并连接成功`
-              : `主机 ${savedNode.name || nodeForm.name} 已保存并连接成功`,
-          );
+          const testedNode = testRes.node || savedNode;
+          const warnings = testRes.warnings || [];
+          notifyProbeResult(testedNode, warnings, {
+            pushed,
+            prefix: pushed
+              ? `主机 ${testedNode.name || nodeForm.name} 已保存、推送公钥并连接成功`
+              : `主机 ${testedNode.name || nodeForm.name} 已保存并连接成功`,
+          });
+          if (detailNode?.id === testedNode.id) {
+            void openNodeDetail(testedNode, warnings);
+          }
         } catch (testEx: any) {
           toast.info(
             pushed
               ? `主机已保存并完成公钥推送，但探测未通过：${testEx?.message || '请检查主机网络或 SSH 配置'}`
               : `主机已保存，暂未连通：${testEx?.message || '请手动配置公钥或点击「推送公钥」后再测试连接'}`,
+            { position: 'top-right', durationMs: 6000 },
           );
         }
       } else {
@@ -262,9 +354,13 @@ export function InfraPage() {
           pushed
             ? `主机 ${savedNode?.name || nodeForm.name} 已保存并推送公钥`
             : `主机 ${savedNode?.name || nodeForm.name} 已保存`,
+          { position: 'top-right' },
         );
       }
       await load();
+      if (detailNode?.id && detailNode.id === savedNode?.id && !saveAndTest) {
+        void openNodeDetail(savedNode);
+      }
     } catch (ex: any) {
       setNodeModalErr(ex?.message || '保存主机失败');
     } finally {
@@ -274,12 +370,29 @@ export function InfraPage() {
 
   const testNode = async (n: any) => {
     setErr('');
+    if (detailNode?.id === n.id) setDetailTesting(true);
     try {
       const res = await apiPost(`/api/v1/nodes/${n.id}/test`);
-      setProbeWarnings({ node: n.name, warnings: res.warnings || [] });
+      const testedNode = res.node || n;
+      const warnings = res.warnings || [];
+      notifyProbeResult(testedNode, warnings);
       await load();
+      if (detailNode?.id === n.id) {
+        setDetailNode(testedNode);
+        setDetailProbe(res.probe || null);
+        setDetailWarnings(warnings);
+      }
     } catch (ex: any) {
-      setErr(ex?.message || '探测失败');
+      toast.error(`探测主机 ${n.name} 失败：${ex?.message || '连接异常'}`, {
+        position: 'top-right',
+        durationMs: 6000,
+      });
+      await load();
+      if (detailNode?.id === n.id) {
+        void openNodeDetail(n);
+      }
+    } finally {
+      setDetailTesting(false);
     }
   };
 
@@ -295,13 +408,23 @@ export function InfraPage() {
       if (pushAndTest) {
         try {
           const testRes = await apiPost(`/api/v1/nodes/${targetNode.id}/test`);
-          setProbeWarnings({ node: targetNode.name, warnings: testRes.warnings || [] });
-          toast.success(`已向 ${targetNode.name} 推送公钥并连接成功`);
+          const testedNode = testRes.node || targetNode;
+          const warnings = testRes.warnings || [];
+          notifyProbeResult(testedNode, warnings, {
+            pushed: true,
+            prefix: `已向 ${testedNode.name} 推送公钥并连接成功`,
+          });
+          if (detailNode?.id === targetNode.id) {
+            void openNodeDetail(testedNode, warnings);
+          }
         } catch (testEx: any) {
-          toast.info(`已成功推送公钥到主机 ${targetNode.name}，但探测未通过：${testEx?.message || '请稍后重试测试连接'}`);
+          toast.info(
+            `已成功推送公钥到主机 ${targetNode.name}，但探测未通过：${testEx?.message || '请稍后重试测试连接'}`,
+            { position: 'top-right', durationMs: 6000 },
+          );
         }
       } else {
-        toast.success(`已成功推送公钥到主机 ${targetNode.name}`);
+        toast.success(`已成功推送公钥到主机 ${targetNode.name}`, { position: 'top-right' });
       }
       await load();
     } catch (ex: any) {
@@ -428,10 +551,13 @@ export function InfraPage() {
       const res = await apiPost(`/api/v1/nodes/${node.id}/metrics`, {});
       if (res.node) {
         setNodes((prev) => prev.map((x) => (x.id === node.id ? res.node : x)));
+        if (detailNode?.id === node.id) {
+          setDetailNode(res.node);
+        }
       }
-      toast.success(`已刷新 ${node.name} CPU/内存利用率`);
+      toast.success(`已刷新 ${node.name} CPU/内存利用率`, { position: 'top-right' });
     } catch (ex: any) {
-      setErr(ex?.message || `采集 ${node.name} 负载失败`);
+      toast.error(ex?.message || `采集 ${node.name} 负载失败`, { position: 'top-right' });
     }
   };
 
@@ -487,23 +613,6 @@ export function InfraPage() {
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
-      {probeWarnings && (
-        <Card
-          title={`主机 ${probeWarnings.node} 环境探测结果`}
-          actions={<Button size="sm" onClick={() => setProbeWarnings(null)}>关闭</Button>}
-        >
-          {probeWarnings.warnings.length === 0 ? (
-            <div className="text-sm text-emerald-700 dark:text-emerald-400">所有环境预检项均通过。</div>
-          ) : (
-            <ul className="list-disc space-y-1 pl-5 text-xs text-amber-800 dark:text-amber-300">
-              {probeWarnings.warnings.map((w, i) => (
-                <li key={i}>{w}</li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      )}
-
       {tab === 'nodes' && (
         <Card>
           {nodes.length === 0 ? (
@@ -558,7 +667,7 @@ export function InfraPage() {
             })()
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[920px] text-left text-xs">
+              <table className="w-full min-w-[740px] text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
                     <th className="py-2.5 pr-3">名称 / 地址</th>
@@ -566,30 +675,27 @@ export function InfraPage() {
                     <th className="py-2.5 pr-3">CPU / 内存利用率</th>
                     <th className="py-2.5 pr-3">系统 / 架构</th>
                     <th className="py-2.5 pr-3">Docker</th>
-                    <th className="py-2.5 pr-3"><TermLabel term="时间同步" tip="Raft 一致性依赖各节点系统时间同步（chrony / systemd-timesyncd），偏差过大会导致选举抖动或 TLS 校验异常。" /></th>
-                    <th className="py-2.5 pr-3"><TermLabel term="节点 ID" tip="/etc/machine-id，用于探测克隆虚拟机导致的节点身份冲突。" /></th>
-                    {isAdmin && <th className="py-2.5 text-right">操作</th>}
+                    <th className="py-2.5 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {nodes.map((n) => {
                     const cpuPct = typeof n.cpu_percent === 'number' && n.cpu_percent >= 0 ? n.cpu_percent : null;
                     const memPct = typeof n.mem_percent === 'number' && n.mem_percent >= 0 ? n.mem_percent : null;
-                    const dockerModeLabel =
-                      n.docker_mode === 'managed' ? '托管' : n.docker_mode === 'external' ? '外部' : n.docker_mode === 'absent' ? '未安装' : n.docker_mode || '-';
-                    const dockerStatusLabel =
-                      n.docker_status === 'running' || n.docker_status === 'active'
-                        ? '运行中'
-                        : n.docker_status === 'absent'
-                          ? ''
-                          : n.docker_status || '';
-                    const timeSyncLabel = n.time_sync === 'synced' ? '已同步' : n.time_sync === 'unsynced' || n.time_sync === 'skewed' ? '待校时' : n.time_sync || '-';
+                    const dockerModeLabel = dockerModeLabelOf(n.docker_mode);
+                    const dockerStatusLabel = dockerStatusLabelOf(n.docker_status);
                     return (
                     <tr key={n.id}>
                       <td className="py-3 pr-3">
                         <div className="flex flex-wrap items-center gap-1.5 font-medium">
                           <ServerIcon className="h-3.5 w-3.5 text-slate-400" />
-                          <span className="text-slate-900 dark:text-slate-100">{n.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => void openNodeDetail(n)}
+                            className="text-left text-slate-900 hover:text-indigo-600 hover:underline underline-offset-2 dark:text-slate-100 dark:hover:text-indigo-400"
+                          >
+                            {n.name}
+                          </button>
                           {n.is_control_plane_host && (
                             <span className="inline-flex items-center gap-0.5">
                               <Badge tone="amber">控制面同机</Badge>
@@ -603,6 +709,9 @@ export function InfraPage() {
                       </td>
                       <td className="py-3 pr-3">
                         <StatusBadge value={n.status || 'unknown'} />
+                        {n.status === 'online' && (n.time_sync === 'unsynced' || n.time_sync === 'skewed') && (
+                          <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">待校时</div>
+                        )}
                       </td>
                       <td className="py-3 pr-3 min-w-[160px]">
                         <div className="space-y-1.5 text-[11px]">
@@ -645,32 +754,33 @@ export function InfraPage() {
                         </div>
                         {dockerStatusLabel && <div className="text-slate-500 mt-0.5">{dockerStatusLabel}</div>}
                       </td>
-                      <td className="py-3 pr-3">
-                        <div className={n.time_sync === 'synced' ? 'text-emerald-600 dark:text-emerald-400 font-medium' : 'text-amber-600 dark:text-amber-400 font-medium'}>
-                          {timeSyncLabel}
-                        </div>
-                        <div className="text-slate-500 font-mono">{n.clock_skew_ms ?? 0} ms</div>
-                      </td>
-                      <td className="py-3 pr-3 font-mono text-[11px] text-slate-500" title={n.machine_id || ''}>
-                        {n.machine_id ? n.machine_id.slice(0, 10) + '…' : '-'}
-                      </td>
-                      {isAdmin && (
-                        <td className="py-3 text-right">
-                          <div className="relative inline-flex items-center justify-end gap-1.5 whitespace-nowrap">
-                            {n.status !== 'online' && (
-                              <Button size="sm" onClick={() => openPushModal(n)}>
-                                推送公钥
-                              </Button>
-                            )}
+                      <td className="py-3 text-right">
+                        <div className="relative inline-flex items-center justify-end gap-1.5 whitespace-nowrap">
+                          {isAdmin && n.status !== 'online' && (
+                            <Button size="sm" onClick={() => openPushModal(n)}>
+                              推送公钥
+                            </Button>
+                          )}
+                          {isAdmin && (
                             <Button size="sm" onClick={() => void testNode(n)}>
                               测试连接
                             </Button>
+                          )}
+                          <Button size="sm" onClick={() => void openNodeDetail(n)}>
+                            详情
+                          </Button>
+                          {isAdmin && (
                             <Button size="sm" onClick={() => void openDocker(n)}>
                               Docker
                             </Button>
+                          )}
+                          {isAdmin && (
                             <Button size="sm" onClick={() => openEditNode(n)}>
                               编辑
                             </Button>
+                          )}
+                          {isAdmin && (
+                            <>
                             <Button
                               size="sm"
                               aria-label={`更多操作：${n.name}`}
@@ -735,6 +845,7 @@ export function InfraPage() {
                                     void apiDelete(`/api/v1/nodes/${n.id}`)
                                       .then(() => {
                                         toast.success(`已删除主机 ${n.name}`);
+                                        if (detailNode?.id === n.id) closeDetailDrawer();
                                         return load();
                                       })
                                       .catch((ex) => toast.error(ex.message));
@@ -746,9 +857,10 @@ export function InfraPage() {
                               </div>,
                               document.body
                             )}
-                          </div>
-                        </td>
-                      )}
+                            </>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                     );
                   })}
@@ -1148,11 +1260,233 @@ export function InfraPage() {
         onClose={() => setPwResetNode(null)}
         onConfirm={async (pw) => {
           if (!pwResetNode) return;
-          await apiPost(`/api/v1/nodes/${pwResetNode.id}/reset-fingerprint`, { current_password: pw });
-          toast.success(`已重置 ${pwResetNode.name} 主机指纹`);
+          const target = pwResetNode;
+          await apiPost(`/api/v1/nodes/${target.id}/reset-fingerprint`, { current_password: pw });
+          toast.success(`已重置 ${target.name} 主机指纹`, { position: 'top-right' });
           await load();
+          if (detailNode?.id === target.id) {
+            void openNodeDetail(target);
+          }
         }}
       />
+
+      {detailNode && (() => {
+        const dn = detailNode;
+        const dp = detailProbe && typeof detailProbe === 'object' ? detailProbe : null;
+        const sshKeyObj = keys.find((k) => k.id === dn.ssh_key_id);
+        const cpuPct = typeof dn.cpu_percent === 'number' && dn.cpu_percent >= 0 ? dn.cpu_percent : null;
+        const memPct = typeof dn.mem_percent === 'number' && dn.mem_percent >= 0 ? dn.mem_percent : null;
+        const missingTools: string[] = Array.isArray(dp?.missing_tools) ? dp.missing_tools : [];
+        const aliases: string[] = Array.isArray(dn.address_aliases) ? dn.address_aliases : [];
+        const optWritable = typeof dp?.opt_writable === 'boolean' ? dp.opt_writable : null;
+        const swapEncrypted = typeof dp?.swap_encrypted === 'boolean' ? dp.swap_encrypted : null;
+        const isRootUser = dn.ssh_user === 'root' || dp?.is_root === true;
+        return (
+          <Drawer
+            title={
+              <>
+                <ServerIcon className="h-4 w-4 text-indigo-500 shrink-0" />
+                <span className="truncate">{dn.name}</span>
+                <StatusBadge value={dn.status || 'unknown'} />
+                {dn.is_control_plane_host && <Badge tone="amber">控制面同机</Badge>}
+              </>
+            }
+            subtitle={`${dn.ssh_user}@${dn.host}:${dn.ssh_port} · ${dn.last_checked_at ? `最近探测 ${fmtTime(dn.last_checked_at)}` : '尚未探测'}`}
+            width="lg"
+            onClose={closeDetailDrawer}
+            headerExtra={
+              isAdmin ? (
+                <Button size="sm" loading={detailTesting} onClick={() => void testNode(dn)}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>重新探测</span>
+                </Button>
+              ) : undefined
+            }
+            footer={
+              <div className="flex flex-wrap items-center justify-between gap-2 w-full">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {isAdmin && dn.status !== 'online' && (
+                    <Button size="sm" onClick={() => openPushModal(dn)}>推送公钥</Button>
+                  )}
+                  {isAdmin && (
+                    <>
+                      <Button size="sm" onClick={() => void refreshNodeMetrics(dn)}>采集负载</Button>
+                      <Button size="sm" onClick={() => void openDocker(dn)}>Docker</Button>
+                      <Button size="sm" onClick={() => setPwResetNode(dn)}>重置指纹</Button>
+                      <Button size="sm" onClick={() => openEditNode(dn)}>编辑主机</Button>
+                    </>
+                  )}
+                </div>
+                <Button size="sm" variant="primary" onClick={closeDetailDrawer}>关闭</Button>
+              </div>
+            }
+          >
+            <div className="space-y-4 text-xs">
+              {detailLoading && (
+                <div className="text-slate-500 dark:text-slate-400">正在加载完整探测档案…</div>
+              )}
+
+              {detailWarnings.length > 0 ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3.5 space-y-2 dark:border-amber-500/30 dark:bg-amber-500/10">
+                  <div className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    <span>环境预检提醒（{detailWarnings.length} 项）</span>
+                  </div>
+                  <ul className="list-disc space-y-1 pl-5 text-amber-900 dark:text-amber-200 leading-5">
+                    {detailWarnings.map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : dn.status === 'online' ? (
+                <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/80 px-3.5 py-2.5 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  <span>所有环境预检项均通过，可用于组建或扩展集群。</span>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">
+                  该主机尚未连通或探测，可先推送/配置 SSH 公钥后点击右上角「重新探测」。
+                </div>
+              )}
+
+              <div className="rounded-xl border border-slate-200 p-4 space-y-3 dark:border-slate-800">
+                <div className="font-semibold text-slate-900 dark:text-slate-100">实时资源与系统</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-slate-500">
+                      <span>CPU{dn.cpu_cores > 0 ? ` (${dn.cpu_cores} 核)` : ''}</span>
+                      <span className="font-mono text-slate-800 dark:text-slate-200">{cpuPct !== null ? `${cpuPct.toFixed(1)}%` : '-'}</span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded bg-slate-200 dark:bg-slate-800">
+                      <div
+                        className={`h-full ${cpuPct !== null && cpuPct >= 85 ? 'bg-rose-500' : cpuPct !== null && cpuPct >= 65 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                        style={{ width: `${Math.min(100, Math.max(0, cpuPct ?? 0))}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-slate-500">
+                      <span>内存{dn.mem_total_bytes > 0 ? ` (${fmtBytes(dn.mem_used_bytes)}/${fmtBytes(dn.mem_total_bytes)})` : ''}</span>
+                      <span className="font-mono text-slate-800 dark:text-slate-200">{memPct !== null ? `${memPct.toFixed(1)}%` : '-'}</span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded bg-slate-200 dark:bg-slate-800">
+                      <div
+                        className={`h-full ${memPct !== null && memPct >= 85 ? 'bg-rose-500' : memPct !== null && memPct >= 65 ? 'bg-amber-500' : 'bg-sky-500'}`}
+                        style={{ width: `${Math.min(100, Math.max(0, memPct ?? 0))}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5 pt-1 border-t border-slate-100 dark:border-slate-800">
+                  <div>
+                    <dt className="text-slate-500">操作系统</dt>
+                    <dd className="mt-0.5 text-slate-900 dark:text-slate-100">{dn.os_info || '-'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">架构 / 家族</dt>
+                    <dd className="mt-0.5 font-mono text-slate-900 dark:text-slate-100">
+                      {[dn.arch, dn.os_family, dn.os_codename].filter(Boolean).join(' · ') || '-'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">内核版本</dt>
+                    <dd className="mt-0.5 font-mono text-slate-900 dark:text-slate-100">{dp?.kernel || '-'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">包管理器</dt>
+                    <dd className="mt-0.5 font-mono text-slate-900 dark:text-slate-100">{dn.package_manager || '-'}</dd>
+                  </div>
+                  <div className="col-span-2">
+                    <dt className="text-slate-500">Docker Engine</dt>
+                    <dd className="mt-0.5 flex flex-wrap items-center gap-2">
+                      <Badge tone={dn.docker_mode === 'absent' ? 'neutral' : 'blue'}>{dockerModeLabelOf(dn.docker_mode)}</Badge>
+                      {dn.docker_version && <span className="font-mono text-slate-800 dark:text-slate-200">{dn.docker_version}</span>}
+                      {dockerStatusLabelOf(dn.docker_status) && <span className="text-slate-500">{dockerStatusLabelOf(dn.docker_status)}</span>}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 p-4 space-y-3 dark:border-slate-800">
+                <div className="font-semibold text-slate-900 dark:text-slate-100">环境预检明细</div>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+                  <div>
+                    <dt className="text-slate-500"><TermLabel term="时间同步" tip="Raft 一致性依赖各节点系统时间同步（chrony / systemd-timesyncd），偏差过大会导致选举抖动或 TLS 校验异常。" /></dt>
+                    <dd className={`mt-0.5 font-medium ${dn.time_sync === 'synced' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                      {timeSyncLabelOf(dn.time_sync)}（{dn.clock_skew_ms ?? 0} ms）
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">提权权限（sudo）</dt>
+                    <dd className="mt-0.5 text-slate-900 dark:text-slate-100">
+                      {isRootUser ? 'root 直连' : dn.sudo_ready ? '免密 sudo 就绪' : dn.use_sudo ? '未就绪（需 NOPASSWD）' : '未启用'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">SELinux 模式</dt>
+                    <dd className="mt-0.5 font-mono text-slate-900 dark:text-slate-100">{dn.selinux_mode || '-'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Swap 交换空间</dt>
+                    <dd className="mt-0.5 text-slate-900 dark:text-slate-100">
+                      {dn.status === 'unknown' ? '-' : dn.swap_enabled ? (swapEncrypted ? '已启用（已加密）' : '已启用（未加密）') : '已禁用'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">/opt/nomad-deck 目录</dt>
+                    <dd className="mt-0.5 text-slate-900 dark:text-slate-100">
+                      {optWritable === null ? '-' : optWritable ? '可写' : '不可写'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">基础命令检查</dt>
+                    <dd className="mt-0.5 text-slate-900 dark:text-slate-100">
+                      {dp ? (missingTools.length === 0 ? '完整' : `缺少：${missingTools.join('、')}`) : '-'}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 p-4 space-y-2.5 dark:border-slate-800">
+                <div className="font-semibold text-slate-900 dark:text-slate-100">SSH 连接与节点身份</div>
+                <dl className="space-y-2.5">
+                  <div>
+                    <dt className="text-slate-500">SSH 密钥</dt>
+                    <dd className="mt-0.5 text-slate-900 dark:text-slate-100">{sshKeyObj?.name || dn.ssh_key_id || '-'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">主机公钥指纹（TOFU）</dt>
+                    <dd className="mt-0.5 font-mono break-all text-slate-800 dark:text-slate-200">
+                      {dn.host_key_fingerprint || '尚未记录（首次连接时自动信任并固定）'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500"><TermLabel term="节点 ID（/etc/machine-id）" tip="/etc/machine-id，用于探测克隆虚拟机导致的节点身份冲突。" /></dt>
+                    <dd className="mt-0.5 flex items-center justify-between gap-2">
+                      <span className="font-mono break-all text-slate-800 dark:text-slate-200">{dn.machine_id || '-'}</span>
+                      {dn.machine_id && (
+                        <Button size="sm" onClick={() => copyText(dn.machine_id, '已复制节点 ID')}>
+                          <Copy className="h-3 w-3" /> 复制
+                        </Button>
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">地址别名</dt>
+                    <dd className="mt-1 flex flex-wrap gap-1.5">
+                      {aliases.length > 0 ? aliases.map((a) => <Badge key={a}>{a}</Badge>) : <span className="text-slate-500">-</span>}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">备注</dt>
+                    <dd className="mt-0.5 whitespace-pre-wrap text-slate-800 dark:text-slate-200">{dn.notes || '-'}</dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
+          </Drawer>
+        );
+      })()}
     </div>
   );
 }

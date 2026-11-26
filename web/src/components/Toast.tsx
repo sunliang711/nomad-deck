@@ -112,7 +112,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 {item.details && item.details.length > 0 && (
                   <ul className="mt-1 space-y-0.5 text-xs opacity-90">
                     {item.details.map((line, idx) => (
-                      <li key={idx} className="truncate font-mono">
+                      <li key={idx} className="break-words leading-5">
                         {line}
                       </li>
                     ))}

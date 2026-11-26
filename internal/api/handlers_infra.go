@@ -182,7 +182,12 @@ func (a *API) getNode(w http.ResponseWriter, r *http.Request) {
 	if !json.Valid(probe) {
 		probe = []byte("{}")
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(n), "probe": probe})
+	warnings := []string{}
+	var parsed sshx.ProbeResult
+	if n.ProbeJSON != "" && n.ProbeJSON != "{}" && json.Unmarshal([]byte(n.ProbeJSON), &parsed) == nil && parsed.Arch != "" {
+		warnings = hosts.WarningsForHost(n, &parsed, a.Hosts.IsControlPlaneHost(n))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(n), "probe": probe, "warnings": warnings})
 }
 
 func (a *API) createNode(w http.ResponseWriter, r *http.Request) {

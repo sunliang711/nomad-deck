@@ -400,7 +400,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               <Button size="sm" aria-label="上移当前元素" disabled={readOnly || selected[selected.length - 1] === 0} onClick={() => reorder(-1)}><ArrowUp className="h-3 w-3" /></Button>
               <Button size="sm" aria-label="下移当前元素" disabled={readOnly || selected[selected.length - 1] === bodyAt(document, parent).nodes.length - 1} onClick={() => reorder(1)}><ArrowDown className="h-3 w-3" /></Button>
               <Button size="sm" aria-label="复制当前块" disabled={readOnly || node.kind !== 'block' || !siblingRule || siblingRule.max === 1} onClick={() => { try { const next = duplicateBlock(document, selected, schema); commit(next.document, next.path); } catch (ex: any) { setError(ex.message); } }}><Copy className="h-3 w-3" /></Button>
-              <Button size="sm" aria-label="删除当前元素" variant="danger" disabled={readOnly} onClick={() => removeNode(selected)}><Trash2 className="h-3 w-3" /></Button>
+              <Button size="sm" aria-label="删除当前元素" variant="danger-outline" disabled={readOnly} onClick={() => removeNode(selected)}><Trash2 className="h-3 w-3" /></Button>
             </div>}
           </div>
           {node?.kind === 'block' && (node.labels || []).map((label, i) => <Input key={i} label={labels[node.name] || `名称标签 ${i + 1}`} disabled={readOnly} value={label} onChange={(e) => commit(editDocument(document, (draft) => { nodeAt(draft, selected)!.labels![i] = e.target.value; }))} />)}

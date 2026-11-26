@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowRight, Copy, ExternalLink, Lock, Plus, RefreshCw, Shield, Unlock } from 'lucide-react';
+import { ArrowRight, ChevronRight, Copy, ExternalLink, Folder, KeyRound, Link2, Lock, Plus, RefreshCw, Shield, Sparkles, Trash2, Unlock } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { copyText } from '../lib/clipboard';
 import { buildTemplateData, parseKVPath } from '../lib/vaultHelpers';
@@ -39,6 +39,17 @@ import { CodeEditor } from '../components/CodeEditor';
 import { ItemSwitcher } from '../components/ItemSwitcher';
 import { UninstallClusterModal, type UninstallPlan } from '../components/UninstallClusterModal';
 import { ClusterCreateModal } from '../components/ClusterCreateModal';
+
+function generateRandomSecret(length = 24): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_';
+  const bytes = new Uint8Array(length);
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    window.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
+}
 
 export function VaultPage() {
   const { isAdmin } = useAuth();
@@ -87,10 +98,16 @@ export function VaultPage() {
   const [policyLoading, setPolicyLoading] = useState(false);
   const [policyEdit, setPolicyEdit] = useState({ name: '', rules: '' });
   const [mounts, setMounts] = useState<any[]>([]);
+  const [manageTab, setManageTab] = useState<'kv' | 'policies' | 'auth'>('kv');
   const [kvMount, setKvMount] = useState('');
   const [kvPath, setKvPath] = useState('');
   const [kvKeys, setKvKeys] = useState<string[]>([]);
+  const [kvListing, setKvListing] = useState(false);
   const [kvItem, setKvItem] = useState<{ path: string; data: string; cas: number } | null>(null);
+  const [kvEditMode, setKvEditMode] = useState<'form' | 'json'>('form');
+  const [kvRows, setKvRows] = useState<Array<{ key: string; value: string }>>([]);
+  const [kvErr, setKvErr] = useState('');
+  const [kvSaving, setKvSaving] = useState(false);
   const [showKVMount, setShowKVMount] = useState(false);
   const [kvMountForm, setKvMountForm] = useState({ path: '', description: '' });
   const [gateView, setGateView] = useState<any>(null);
@@ -187,6 +204,60 @@ export function VaultPage() {
     });
   };
 
+  const listKVKeys = useCallback(async (mountName: string, pathStr: string) => {
+    if (!selectedId || !mountName) {
+      setKvKeys([]);
+      return;
+    }
+    setKvListing(true);
+    try {
+      const r = await apiGet(`/api/v1/vault/${selectedId}/kv/list?mount=${encodeURIComponent(mountName)}&path=${encodeURIComponent(pathStr)}`);
+      setKvKeys(r.keys || []);
+    } catch (ex: any) {
+      // Empty path in Vault KV v2 may return 404 when no keys exist yet.
+      if (String(ex?.message || '').includes('404')) {
+        setKvKeys([]);
+      } else {
+        setErr(ex?.message || '读取密钥目录失败');
+      }
+    } finally {
+      setKvListing(false);
+    }
+  }, [selectedId]);
+
+  const openKVEditor = (item: { path: string; data: string; cas: number }) => {
+    setKvErr('');
+    setKvItem(item);
+    try {
+      const parsed = JSON.parse(item.data);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const entries = Object.entries(parsed);
+        const allFlat = entries.every(([, v]) => v === null || ['string', 'number', 'boolean'].includes(typeof v));
+        if (allFlat) {
+          setKvRows(
+            entries.length > 0
+              ? entries.map(([k, v]) => ({ key: k, value: v == null ? '' : String(v) }))
+              : [{ key: 'password', value: '' }],
+          );
+          setKvEditMode('form');
+          return;
+        }
+      }
+    } catch {
+      // Fall back to JSON editor if content isn't a flat object.
+    }
+    setKvEditMode('json');
+  };
+
+  const serializeKVRows = (rows: Array<{ key: string; value: string }>) => {
+    const out: Record<string, string> = {};
+    for (const row of rows) {
+      const k = row.key.trim();
+      if (k) out[k] = row.value;
+    }
+    return out;
+  };
+
   const loadManage = useCallback(async () => {
     if (!selectedId) return;
     try {
@@ -200,7 +271,9 @@ export function VaultPage() {
       setPolicies(pList);
       const ms = mRes.mounts || [];
       setMounts(ms);
-      setKvMount((prev) => prev || ms[0]?.path || ms[0] || '');
+      const nextMount = kvMount || ms[0]?.path || ms[0] || '';
+      if (!kvMount && nextMount) setKvMount(nextMount);
+      if (nextMount) void listKVKeys(nextMount, kvPath);
       if (!policyIsNew && pList.length > 0 && (!selectedPolicy || !pList.includes(selectedPolicy))) {
         const first = pList.find((p) => p !== 'root') || pList[0];
         void selectPolicy(first);
@@ -208,7 +281,7 @@ export function VaultPage() {
     } catch (ex: any) {
       setErr(ex?.message || '加载 Vault 管理数据失败');
     }
-  }, [selectedId, policyIsNew, selectedPolicy, selectPolicy]);
+  }, [selectedId, kvMount, kvPath, listKVKeys, policyIsNew, selectedPolicy, selectPolicy]);
 
   useEffect(() => {
     void loadList();
@@ -364,9 +437,9 @@ export function VaultPage() {
         subtitle="管理 Raft HA Vault 集群、Shamir 密钥托管解封、Raft 快照与 Auth/Policy/KV"
         actions={
           <>
-            <Button onClick={() => void loadDetail()}>
+            <Button title="每 30 秒自动刷新" onClick={() => void loadDetail()}>
               <RefreshCw className="h-4 w-4" />
-              <span>刷新 (30s)</span>
+              <span>刷新</span>
             </Button>
             {isAdmin && (
               <Button variant="primary" onClick={() => setShowCreate(true)}>
@@ -378,17 +451,6 @@ export function VaultPage() {
         }
       />
 
-      <ItemSwitcher
-        label="Vault 集群"
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-        items={clusters.map((c) => ({
-          id: c.id,
-          name: c.name,
-          status: c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status,
-        }))}
-      />
-
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
       {!cluster ? (
@@ -397,19 +459,41 @@ export function VaultPage() {
         </Card>
       ) : (
         <div className="space-y-4">
-          <SectionTabs
-            tabs={[
-              { id: 'status', label: '集群状态详情' },
-              { id: 'custody', label: '初始化与密钥托管', tip: '控制面托管 Vault Unseal Key（Shamir 门限分片）与短时效运维 Token，支持自动解封、Rekey 轮换及签发临时 Root Token。' },
-              { id: 'snapshots', label: 'Raft 快照', badge: snapshots.length, tip: '对 Vault Integrated Storage (Raft) 后端状态执行一致性快照备份与在线恢复。' },
-              { id: 'manage', label: 'Auth / Policy / KV', tip: '管理 Vault 认证挂载（Userpass/JWT/AppRole）、HCL 权限策略（Policy）以及 KV v2 密钥引擎。' },
-            ]}
-            active={tab}
-            onChange={(t) => {
-              setTab(t);
-              if (t === 'manage') void loadManage();
-            }}
-          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <ItemSwitcher
+              label="Vault 集群"
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              items={clusters.map((c) => {
+                const isSelected = c.id === selectedId;
+                const anyInstalled =
+                  isSelected &&
+                  clusterNodes.some(
+                    (n: any) => Boolean(n.installed_version) || (n.install_state && n.install_state !== 'pending') || n.service_status === 'active',
+                  );
+                const awaitInit = c.init_state === 'uninitialized' && anyInstalled;
+                return {
+                  id: c.id,
+                  name: c.name,
+                  status: awaitInit ? 'sealed' : c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status,
+                  statusLabel: awaitInit ? '已安装 · 待初始化' : undefined,
+                };
+              })}
+            />
+            <SectionTabs
+              tabs={[
+                { id: 'status', label: '集群状态详情' },
+                { id: 'custody', label: '初始化与密钥托管', title: '控制面托管 Vault Unseal Key（Shamir 门限分片）与短时效运维 Token，支持自动解封、Rekey 轮换及签发临时 Root Token' },
+                { id: 'snapshots', label: 'Raft 快照', badge: snapshots.length, title: '对 Vault Integrated Storage (Raft) 后端状态执行一致性快照备份与在线恢复' },
+                { id: 'manage', label: 'Auth / Policy / KV', title: '管理 Vault 认证挂载（Userpass/JWT/AppRole）、HCL 权限策略（Policy）以及 KV v2 密钥引擎' },
+              ]}
+              active={tab}
+              onChange={(t) => {
+                setTab(t);
+                if (t === 'manage') void loadManage();
+              }}
+            />
+          </div>
 
           {tab === 'status' && (
             <div className="space-y-4">
@@ -438,14 +522,10 @@ export function VaultPage() {
                     .catch((ex) => setErr(ex.message))
                 }
                 quickActions={
-                  <>
-                    <Button size="sm" onClick={() => setTab('custody')}>
-                      密钥托管
-                    </Button>
-                    <Button size="sm" variant="primary" onClick={() => { setTab('manage'); void loadManage(); }}>
-                      Auth / Policy / KV
-                    </Button>
-                  </>
+                  <Link to="/integrations" className="primary-button">
+                    <Link2 className="h-3.5 w-3.5" />
+                    <span>配置集群联动</span>
+                  </Link>
                 }
                 onUpgrade={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', use_proxy: useProxy, confirm: true })
@@ -591,7 +671,7 @@ export function VaultPage() {
                               <Unlock className="h-3.5 w-3.5" /> 全集群解封
                             </Button>
                             <Button
-                              variant="danger"
+                              variant="danger-outline"
                               disabled={!isInitialized}
                               onClick={async () => {
                                 if (!(await askConfirm('确定要安全封存整个 Vault 集群吗？封存后将暂停对外提供密钥读写服务。', { title: '封存 Vault 集群', confirmText: '确认封存', danger: true }))) return;
@@ -742,7 +822,7 @@ export function VaultPage() {
                         </Button>
                         <Button
                           size="sm"
-                          variant="danger"
+                          variant="danger-outline"
                           onClick={() =>
                             setPwAction({
                               title: `恢复 Raft 快照 ${sn.id}`,
@@ -757,7 +837,7 @@ export function VaultPage() {
                         </Button>
                         <Button
                           size="sm"
-                          variant="danger"
+                          variant="danger-outline"
                           onClick={async () => {
                             if (!(await askConfirm(`确定要删除快照 ${sn.id} 吗？`, { title: '删除 Raft 快照', confirmText: '确认删除', danger: true }))) return;
                             void apiDelete(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}`)
@@ -779,54 +859,254 @@ export function VaultPage() {
           )}
 
           {tab === 'manage' && (
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-              <Card title="Auth 方法 & Policies">
-                <div className="space-y-3 text-xs">
-                  <div className="font-semibold">已启用 Auth 方法</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {auths.map((a, i) => (
-                      <div key={i} className="flex items-center gap-1">
-                        <Badge>{a.path || a.type}</Badge>
-                        {isAdmin && a.type !== 'token' && (
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={async () => {
-                              if (!(await askConfirm(`确认停用 Auth 方法「${a.path}」吗？`, { title: '停用 Auth 方法', confirmText: '确认停用', danger: true }))) return;
-                              void apiDelete(`/api/v1/vault/${selectedId}/auth?path=${encodeURIComponent(a.path)}`)
-                                .then(() => {
-                                  toast.success(`已停用 ${a.path}`);
-                                  return loadManage();
-                                })
-                                .catch((ex) => setErr(ex.message));
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <SectionTabs
+                  variant="underline"
+                  tabs={[
+                    { id: 'kv', label: '应用密钥 · KV v2', badge: mounts.length },
+                    { id: 'policies', label: 'ACL Policies', badge: policies.length },
+                    { id: 'auth', label: 'Auth 认证方法', badge: auths.length },
+                  ]}
+                  active={manageTab}
+                  onChange={(next) => setManageTab(next as 'kv' | 'policies' | 'auth')}
+                />
+                <Button size="sm" onClick={() => void loadManage()}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>刷新数据</span>
+                </Button>
+              </div>
+
+              {manageTab === 'kv' && (
+                <Card
+                  title="应用密钥 · KV v2"
+                  description="选择密钥存储空间（Mount）并浏览目录或新建应用 Secret，自动生成 Nomad Job 引用路径。"
+                  actions={
+                    isAdmin && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button size="sm" onClick={() => setShowKVMount(true)}>
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>启用 KV v2 挂载</span>
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          disabled={!kvMount}
+                          onClick={() => {
+                            const suggestedPath = kvPath.trim().replace(/^\/+/, '');
+                            openKVEditor({ path: suggestedPath, data: '{}', cas: 0 });
+                          }}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>新建 Secret</span>
+                        </Button>
+                      </div>
+                    )
+                  }
+                >
+                  <div className="space-y-4 text-xs">
+                    {mounts.length === 0 ? (
+                      <EmptyState
+                        icon={<KeyRound className="h-6 w-6" />}
+                        title="尚未启用 KV v2 密钥引擎"
+                        description="先启用一个 KV v2 存储空间（例如 secret），即可在其中分类存放数据库密码、API Key 等应用密钥。"
+                        action={
+                          isAdmin && (
+                            <Button variant="primary" onClick={() => setShowKVMount(true)}>
+                              启用第一个 KV v2 挂载
+                            </Button>
+                          )
+                        }
+                      />
+                    ) : (
+                      <>
+                        <div className="grid gap-3 sm:grid-cols-[200px_minmax(0,1fr)_auto] sm:items-end">
+                          <Select
+                            label="密钥存储空间（Mount）"
+                            value={kvMount}
+                            onChange={(e) => {
+                              const nextM = e.target.value;
+                              setKvMount(nextM);
+                              setKvPath('');
+                              void listKVKeys(nextM, '');
                             }}
                           >
-                            停用 {a.path}
+                            {mounts.map((m: any) => (
+                              <option key={m.path || m} value={m.path || m}>{m.path || m}</option>
+                            ))}
+                          </Select>
+                          <Input
+                            label="密钥路径（目录或 Secret 名称）"
+                            placeholder="例如 apps/postgres；留空浏览根目录"
+                            value={kvPath}
+                            onChange={(e) => setKvPath(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                void listKVKeys(kvMount, kvPath);
+                              }
+                            }}
+                          />
+                          <Button
+                            disabled={!kvMount}
+                            loading={kvListing}
+                            onClick={() => void listKVKeys(kvMount, kvPath)}
+                          >
+                            浏览 / 刷新
                           </Button>
-                        )}
-                      </div>
-                    ))}
-                    {isAdmin && <Button size="sm" onClick={() => setShowAuth(true)}>启用 Auth 方法</Button>}
-                  </div>
-                  <div className="border-t border-slate-200 pt-3 dark:border-slate-800 space-y-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <div className="font-semibold">ACL Policies（权限规则）</div>
-                        <p className="text-[11px] text-slate-500">点击下方策略名即可查看或修改规则；需要新建自定义权限时点右侧「新建 Policy」。</p>
-                      </div>
-                      {isAdmin && (
-                        <Button size="sm" variant={policyIsNew ? 'primary' : 'secondary'} onClick={startNewPolicy}>
-                          <Plus className="h-3.5 w-3.5" />
-                          <span>新建 Policy</span>
-                        </Button>
-                      )}
-                    </div>
+                        </div>
 
-                    {policies.length === 0 ? (
-                      <p className="text-[11px] text-slate-500">暂无 Policy，可点击「新建 Policy」创建。</p>
-                    ) : (
-                      <div className="flex flex-wrap gap-1.5">
-                        {policies.map((p) => {
+                        {/* 目录面包屑导航 */}
+                        <div className="flex flex-wrap items-center gap-1 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2 text-xs dark:border-slate-800 dark:bg-slate-950/40">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setKvPath('');
+                              void listKVKeys(kvMount, '');
+                            }}
+                            className="font-mono font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                          >
+                            {kvMount.replace(/\/+$/, '')}/
+                          </button>
+                          {kvPath
+                            .split('/')
+                            .filter(Boolean)
+                            .map((seg, idx, arr) => {
+                              const target = arr.slice(0, idx + 1).join('/') + (idx < arr.length - 1 || kvPath.endsWith('/') ? '/' : '');
+                              return (
+                                <React.Fragment key={`${target}-${idx}`}>
+                                  <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setKvPath(target);
+                                      if (target.endsWith('/')) void listKVKeys(kvMount, target);
+                                    }}
+                                    className="font-mono text-slate-700 hover:text-indigo-600 hover:underline dark:text-slate-200 dark:hover:text-indigo-300"
+                                  >
+                                    {seg}
+                                  </button>
+                                </React.Fragment>
+                              );
+                            })}
+                        </div>
+
+                        {kvKeys.length === 0 ? (
+                          <div className="rounded-xl border border-dashed border-slate-200 py-8 text-center text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                            {kvListing ? '正在读取目录…' : '当前路径下暂无密钥或子目录，可点击右上角「新建 Secret」创建。'}
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                            {kvKeys.map((k) => {
+                              const isDir = k.endsWith('/');
+                              const base = kvPath.replace(/\/+$/, '');
+                              const full = base ? `${base}/${k}` : k;
+                              return (
+                                <button
+                                  key={k}
+                                  type="button"
+                                  onClick={() => {
+                                    if (isDir) {
+                                      setKvPath(full);
+                                      void listKVKeys(kvMount, full);
+                                      return;
+                                    }
+                                    setKvPath(full);
+                                    if (!isAdmin) return;
+                                    void apiGet(`/api/v1/vault/${selectedId}/kv/item?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(full)}`)
+                                      .then((r) =>
+                                        openKVEditor({
+                                          path: full,
+                                          data: JSON.stringify(r.secret?.data || r.secret, null, 2),
+                                          cas: Number(r.secret?.metadata?.version ?? 0),
+                                        }),
+                                      )
+                                      .catch((ex) => setErr(ex.message));
+                                  }}
+                                  className="flex items-center justify-between gap-2 rounded-xl border border-slate-200/90 bg-white px-3.5 py-2.5 text-left transition hover:border-indigo-400 hover:bg-indigo-50/40 dark:border-slate-800 dark:bg-slate-900/70 dark:hover:border-indigo-500/50 dark:hover:bg-indigo-950/25"
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    {isDir ? (
+                                      <Folder className="h-4 w-4 shrink-0 text-amber-500" />
+                                    ) : (
+                                      <KeyRound className="h-4 w-4 shrink-0 text-indigo-500" />
+                                    )}
+                                    <span className="font-mono font-medium text-slate-800 dark:text-slate-100 truncate">{k}</span>
+                                  </div>
+                                  <span className="text-[11px] text-slate-400 shrink-0">{isDir ? '进入目录' : '查看/编辑'}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {kvMount && kvPath.trim() && !kvPath.trim().endsWith('/') && (() => {
+                          const cleanMount = kvMount.replace(/^\/+|\/+$/g, '');
+                          const cleanPath = kvPath.trim().replace(/^\/+|\/+$/g, '');
+                          const parsed = parseKVPath(`${cleanMount}/${cleanPath}`, cleanMount);
+                          const envSnippet = buildTemplateData(parsed.templatePath, [], 'env');
+                          return (
+                            <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-3.5 space-y-2.5 dark:border-indigo-500/30 dark:bg-indigo-950/25">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="font-semibold text-indigo-950 dark:text-indigo-100">用于 Nomad 联动（路径对照）</span>
+                                <Link to="/integrations" className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-300">
+                                  <span>去集群联动配置 Role</span>
+                                  <ArrowRight className="h-3 w-3" />
+                                </Link>
+                              </div>
+                              <p className="text-[11px] leading-4 text-slate-600 dark:text-slate-300">
+                                在联动 Role 里授权填<strong>不带 data/</strong> 的路径；在 Nomad Job 的 <code className="font-mono">template</code> 里读 KV v2 必须多加一层 <code className="font-mono">/data/</code>。
+                              </p>
+                              <div className="grid gap-2 md:grid-cols-2">
+                                <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
+                                  <span className="truncate text-[11px] text-slate-500">Role 权限路径：<code className="font-mono text-slate-900 dark:text-slate-100">{parsed.rolePath}</code></span>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => void copyText(parsed.rolePath).then(() => toast.success('已复制 Role 权限路径')).catch((ex) => toast.error(ex.message))}
+                                  >
+                                    <Copy className="h-3 w-3" />
+                                    <span>复制</span>
+                                  </Button>
+                                </div>
+                                <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
+                                  <span className="truncate text-[11px] text-slate-500">Job 模板读取路径：<code className="font-mono text-slate-900 dark:text-slate-100">{parsed.templatePath}</code></span>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => void copyText(envSnippet).then(() => toast.success('已复制 template 读取片段')).catch((ex) => toast.error(ex.message))}
+                                  >
+                                    <Copy className="h-3 w-3" />
+                                    <span>复制模板</span>
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
+                </Card>
+              )}
+
+              {manageTab === 'policies' && (
+                <Card
+                  title="ACL Policies（权限规则）"
+                  description="选择左侧策略查看或编辑 HCL 规则；由「集群联动」自动维护的策略建议在联动页面修改。"
+                  actions={
+                    isAdmin && (
+                      <Button size="sm" variant={policyIsNew ? 'primary' : 'secondary'} onClick={startNewPolicy}>
+                        <Plus className="h-3.5 w-3.5" />
+                        <span>新建 Policy</span>
+                      </Button>
+                    )
+                  }
+                >
+                  <div className="grid grid-cols-1 gap-5 lg:grid-cols-[260px_minmax(0,1fr)] text-xs">
+                    <div className="space-y-1.5 rounded-xl border border-slate-200/80 bg-slate-50/50 p-2.5 dark:border-slate-800 dark:bg-slate-950/40 max-h-[440px] overflow-y-auto">
+                      {policies.length === 0 ? (
+                        <p className="px-2 py-4 text-center text-[11px] text-slate-500">暂无 Policy，可点击右上角新建。</p>
+                      ) : (
+                        policies.map((p) => {
                           const active = !policyIsNew && selectedPolicy === p;
                           const isBuiltin = ['root', 'default', 'nomad-deck-admin'].includes(p);
                           const isManaged = p.startsWith('nomad-') && !isBuiltin;
@@ -835,208 +1115,171 @@ export function VaultPage() {
                               key={p}
                               type="button"
                               onClick={() => void selectPolicy(p)}
-                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
+                              className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium transition ${
                                 active
-                                  ? 'border-indigo-500 bg-indigo-50 text-indigo-800 shadow-xs dark:border-indigo-400 dark:bg-indigo-950/60 dark:text-indigo-100'
-                                  : 'border-slate-200 bg-white text-slate-700 hover:border-indigo-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+                                  ? 'bg-indigo-50 text-indigo-800 ring-1 ring-indigo-300 dark:bg-indigo-500/20 dark:text-indigo-100 dark:ring-indigo-500/40'
+                                  : 'text-slate-700 hover:bg-white dark:text-slate-300 dark:hover:bg-slate-800/80'
                               }`}
                             >
-                              <span className="font-mono">{p}</span>
+                              <span className="font-mono truncate">{p}</span>
                               {isBuiltin && (
-                                <span className="rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-500 dark:bg-slate-700 dark:text-slate-300">
+                                <span className="shrink-0 rounded bg-slate-200/80 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                                   内置
                                 </span>
                               )}
                               {isManaged && (
-                                <span className="rounded bg-indigo-100/80 px-1 py-0.5 text-[10px] text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">
+                                <span className="shrink-0 rounded bg-indigo-100/90 px-1.5 py-0.5 text-[10px] text-indigo-700 dark:bg-indigo-500/25 dark:text-indigo-200">
                                   联动
                                 </span>
                               )}
                             </button>
                           );
-                        })}
-                      </div>
-                    )}
+                        })
+                      )}
+                    </div>
 
-                    {!policyIsNew && selectedPolicy.startsWith('nomad-') && selectedPolicy !== 'nomad-deck-admin' && (
-                      <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 px-3 py-2 text-[11px] text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-200">
-                        该策略由「集群联动」自动生成并维护，建议前往 <Link to="/integrations" className="font-semibold underline">集群联动</Link> 修改对应的 Role；在此手动改动会在下次「应用联动」时被覆盖。
-                      </div>
-                    )}
-                    {!policyIsNew && selectedPolicy === 'root' && (
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                        <code className="font-mono">root</code> 为 Vault 内置最高权限策略，不可修改或删除。
-                      </div>
-                    )}
+                    <div className="space-y-3 min-w-0">
+                      {!policyIsNew && selectedPolicy.startsWith('nomad-') && selectedPolicy !== 'nomad-deck-admin' && (
+                        <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 px-3.5 py-2.5 text-[11px] text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-200">
+                          该策略由「集群联动」自动生成并维护，建议前往 <Link to="/integrations" className="font-semibold underline">集群联动</Link> 修改对应的 Role；在此手动改动会在下次「应用联动」时被覆盖。
+                        </div>
+                      )}
+                      {!policyIsNew && selectedPolicy === 'root' && (
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                          <code className="font-mono">root</code> 为 Vault 内置最高权限策略，不可修改或删除。
+                        </div>
+                      )}
 
-                    <Input
-                      label={policyIsNew ? '新建 Policy 名称' : 'Policy 名称'}
-                      placeholder="例如 app-readonly"
-                      disabled={!policyIsNew && Boolean(selectedPolicy)}
-                      hint={
-                        policyIsNew
-                          ? '填写英文名称后，在下方编写 HCL 权限规则并点击「保存 Policy」。'
-                          : selectedPolicy
-                            ? '当前正在编辑上方选中的 Policy；如需新增，请点「新建 Policy」。'
-                            : '请先在上方点击任意 Policy，或点「新建 Policy」输入名称。'
-                      }
-                      value={policyEdit.name}
-                      onChange={(e) => setPolicyEdit({ ...policyEdit, name: e.target.value })}
-                    />
-                    <CodeEditor
-                      label={policyLoading ? '正在加载规则内容…' : 'Policy 规则（HCL）'}
-                      value={policyEdit.rules}
-                      onChange={(v) => setPolicyEdit({ ...policyEdit, rules: v })}
-                      readOnly={!isAdmin || (!policyIsNew && selectedPolicy === 'root')}
-                      height="190px"
-                    />
-                    {isAdmin && (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          variant="primary"
-                          disabled={!policyEdit.name.trim() || (!policyIsNew && selectedPolicy === 'root') || policyLoading}
-                          title={!policyEdit.name.trim() ? '请先选择已有 Policy 或点击「新建 Policy」输入名称' : undefined}
-                          onClick={() => {
-                            const targetName = policyEdit.name.trim();
-                            if (!targetName) return;
-                            void apiPut(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(targetName)}`, { policy: policyEdit.rules })
-                              .then(async () => {
-                                toast.success(`Policy「${targetName}」已保存`);
-                                setPolicyIsNew(false);
-                                setSelectedPolicy(targetName);
-                                await loadManage();
-                              })
-                              .catch((ex) => setErr(ex.message));
-                          }}
-                        >
-                          保存 Policy
-                        </Button>
-                        {!policyIsNew && selectedPolicy && !['root', 'default', 'nomad-deck-admin'].includes(selectedPolicy) && (
+                      <Input
+                        label={policyIsNew ? '新建 Policy 名称' : 'Policy 名称'}
+                        placeholder="例如 app-readonly"
+                        disabled={!policyIsNew && Boolean(selectedPolicy)}
+                        hint={
+                          policyIsNew
+                            ? '填写英文名称后，在下方编写 HCL 权限规则并点击「保存 Policy」。'
+                            : selectedPolicy
+                              ? '当前正在编辑左侧选中的 Policy；如需新增，请点右上角「新建 Policy」。'
+                              : '请在左侧选择任意 Policy，或点右上角「新建 Policy」。'
+                        }
+                        value={policyEdit.name}
+                        onChange={(e) => setPolicyEdit({ ...policyEdit, name: e.target.value })}
+                      />
+                      <CodeEditor
+                        label={policyLoading ? '正在加载规则内容…' : 'Policy 规则（HCL）'}
+                        value={policyEdit.rules}
+                        onChange={(v) => setPolicyEdit({ ...policyEdit, rules: v })}
+                        readOnly={!isAdmin || (!policyIsNew && selectedPolicy === 'root')}
+                        height="260px"
+                      />
+                      {isAdmin && (
+                        <div className="flex flex-wrap items-center gap-2">
                           <Button
-                            variant="danger"
-                            onClick={async () => {
-                              if (!(await askConfirm(`确认删除 Policy「${selectedPolicy}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
-                              void apiDelete(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(selectedPolicy)}`)
-                                .then(() => {
-                                  setPolicyEdit({ name: '', rules: '' });
-                                  setSelectedPolicy('');
-                                  toast.success('Policy 已删除');
-                                  return loadManage();
+                            variant="primary"
+                            disabled={!policyEdit.name.trim() || (!policyIsNew && selectedPolicy === 'root') || policyLoading}
+                            title={!policyEdit.name.trim() ? '请先选择已有 Policy 或点击「新建 Policy」输入名称' : undefined}
+                            onClick={() => {
+                              const targetName = policyEdit.name.trim();
+                              if (!targetName) return;
+                              void apiPut(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(targetName)}`, { policy: policyEdit.rules })
+                                .then(async () => {
+                                  toast.success(`Policy「${targetName}」已保存`);
+                                  setPolicyIsNew(false);
+                                  setSelectedPolicy(targetName);
+                                  await loadManage();
                                 })
                                 .catch((ex) => setErr(ex.message));
                             }}
                           >
-                            删除 Policy
+                            保存 Policy
                           </Button>
-                        )}
-                      </div>
-                    )}
+                          {!policyIsNew && selectedPolicy && !['root', 'default', 'nomad-deck-admin'].includes(selectedPolicy) && (
+                            <Button
+                              variant="danger-outline"
+                              onClick={async () => {
+                                if (!(await askConfirm(`确认删除 Policy「${selectedPolicy}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
+                                void apiDelete(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(selectedPolicy)}`)
+                                  .then(() => {
+                                    setPolicyEdit({ name: '', rules: '' });
+                                    setSelectedPolicy('');
+                                    toast.success('Policy 已删除');
+                                    return loadManage();
+                                  })
+                                  .catch((ex) => setErr(ex.message));
+                              }}
+                            >
+                              删除 Policy
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </Card>
+                </Card>
+              )}
 
-              <Card title="应用密钥 · KV v2">
-                <div className="space-y-3 text-xs">
-                  <p className="leading-5 text-slate-500">先启用密钥存储空间（挂载），再填写密钥路径并新建 Secret。例如挂载 secret、路径 apps/postgres，可用于保存数据库凭据。</p>
-                  {isAdmin && (
-                    <Button size="sm" onClick={() => setShowKVMount(true)}>启用 KV v2 挂载</Button>
-                  )}
-                  <div className="grid gap-3 sm:grid-cols-[1fr_1.4fr_auto] sm:items-end">
-                    <Select label="密钥存储空间" value={kvMount} onChange={(e) => setKvMount(e.target.value)}>
-                      {mounts.map((m: any) => (
-                        <option key={m.path || m} value={m.path || m}>{m.path || m}</option>
-                      ))}
-                    </Select>
-                    <Input label="密钥路径" placeholder="例如 apps/postgres；留空浏览根目录" value={kvPath} onChange={(e) => setKvPath(e.target.value)} />
-                    <Button
-                      disabled={!kvMount}
-                      onClick={() =>
-                        void apiGet(`/api/v1/vault/${selectedId}/kv/list?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(kvPath)}`)
-                          .then((r) => setKvKeys(r.keys || []))
-                          .catch((ex) => setErr(ex.message))
-                      }
-                    >
-                      列出
-                    </Button>
-                  </div>
-                  {isAdmin && (
-                    <Button
-                      size="sm"
-                      disabled={!kvMount || !kvPath.trim()}
-                      onClick={() => setKvItem({ path: kvPath.trim().replace(/^\/+|\/+$/g, ''), data: '{}', cas: 0 })}
-                    >
-                      新建 Secret
-                    </Button>
-                  )}
-                  <div className="flex flex-wrap gap-1.5">
-                    {kvKeys.map((k) => (
-                      <Button
-                        key={k}
-                        size="sm"
-                        onClick={() => {
-                          const full = kvPath ? `${kvPath.replace(/\/$/, '')}/${k}` : k;
-                          if (k.endsWith('/')) {
-                            setKvPath(full);
-                            return;
-                          }
-                          if (!isAdmin) return;
-                          void apiGet(`/api/v1/vault/${selectedId}/kv/item?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(full)}`)
-                            .then((r) =>
-                              setKvItem({
-                                path: full,
-                                data: JSON.stringify(r.secret?.data || r.secret, null, 2),
-                                cas: Number(r.secret?.metadata?.version ?? 0),
-                              }),
-                            )
-                            .catch((ex) => setErr(ex.message));
-                        }}
-                      >
-                        {k}
+              {manageTab === 'auth' && (
+                <Card
+                  title="已启用的 Auth 认证方法"
+                  description="管理 Vault 登录认证挂载（例如 Token、JWT、Userpass、AppRole）。与 Nomad 联动相关的 JWT 挂载由集群联动自动维护。"
+                  actions={
+                    isAdmin && (
+                      <Button size="sm" variant="primary" onClick={() => setShowAuth(true)}>
+                        <Plus className="h-3.5 w-3.5" />
+                        <span>启用 Auth 方法</span>
                       </Button>
-                    ))}
-                  </div>
-                  {kvMount && kvPath.trim() && !kvPath.trim().endsWith('/') && (() => {
-                    const cleanMount = kvMount.replace(/^\/+|\/+$/g, '');
-                    const cleanPath = kvPath.trim().replace(/^\/+|\/+$/g, '');
-                    const parsed = parseKVPath(`${cleanMount}/${cleanPath}`, cleanMount);
-                    const envSnippet = buildTemplateData(parsed.templatePath, [], 'env');
-                    return (
-                      <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/60 p-3 space-y-2 dark:border-indigo-500/30 dark:bg-indigo-950/30">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="font-semibold text-indigo-950 dark:text-indigo-100">用于 Nomad 联动（路径对照）</span>
-                          <Link to="/integrations" className="inline-flex items-center gap-1 text-indigo-600 hover:underline dark:text-indigo-300">
-                            <span>去集群联动配置 Role</span>
-                            <ArrowRight className="h-3 w-3" />
-                          </Link>
-                        </div>
-                        <p className="text-[11px] leading-4 text-slate-600 dark:text-slate-300">
-                          在联动 Role 里授权填<strong>不带 data/</strong> 的路径；在 Nomad Job 的 <code className="font-mono">template</code> 里读 KV v2 必须多加一层 <code className="font-mono">/data/</code>。
-                        </p>
-                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">
-                          <span className="text-[11px] text-slate-500">Role 权限路径：<code className="font-mono text-slate-900 dark:text-slate-100">{parsed.rolePath}</code></span>
-                          <Button
-                            size="sm"
-                            onClick={() => void copyText(parsed.rolePath).then(() => toast.success('已复制 Role 权限路径')).catch((ex) => toast.error(ex.message))}
-                          >
-                            <Copy className="h-3 w-3" />
-                            <span>复制</span>
-                          </Button>
-                        </div>
-                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">
-                          <span className="text-[11px] text-slate-500">Job 模板读取路径：<code className="font-mono text-slate-900 dark:text-slate-100">{parsed.templatePath}</code></span>
-                          <Button
-                            size="sm"
-                            onClick={() => void copyText(envSnippet).then(() => toast.success('已复制 template 读取片段')).catch((ex) => toast.error(ex.message))}
-                          >
-                            <Copy className="h-3 w-3" />
-                            <span>复制模板片段</span>
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </div>
-              </Card>
+                    )
+                  }
+                >
+                  {auths.length === 0 ? (
+                    <EmptyState title="暂无 Auth 方法" description="Vault 初始化完成后将自动加载已启用的认证挂载。" />
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
+                            <th className="py-2.5 pr-4">挂载路径</th>
+                            <th className="py-2.5 pr-4">类型</th>
+                            <th className="py-2.5 pr-4">说明</th>
+                            <th className="py-2.5 text-right">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {auths.map((a, i) => (
+                            <tr key={a.path || i}>
+                              <td className="py-3 pr-4 font-mono font-semibold text-slate-900 dark:text-slate-100">{a.path || '-'}</td>
+                              <td className="py-3 pr-4">
+                                <Badge tone={a.type === 'jwt' ? 'blue' : 'neutral'}>{a.type || '-'}</Badge>
+                              </td>
+                              <td className="py-3 pr-4 text-slate-500 dark:text-slate-400">{a.description || '—'}</td>
+                              <td className="py-3 text-right">
+                                {isAdmin && a.type !== 'token' ? (
+                                  <Button
+                                    size="sm"
+                                    variant="danger-outline"
+                                    onClick={async () => {
+                                      if (!(await askConfirm(`确认停用 Auth 方法「${a.path}」吗？`, { title: '停用 Auth 方法', confirmText: '确认停用', danger: true }))) return;
+                                      void apiDelete(`/api/v1/vault/${selectedId}/auth?path=${encodeURIComponent(a.path)}`)
+                                        .then(() => {
+                                          toast.success(`已停用 ${a.path}`);
+                                          return loadManage();
+                                        })
+                                        .catch((ex) => setErr(ex.message));
+                                    }}
+                                  >
+                                    停用
+                                  </Button>
+                                ) : (
+                                  <span className="text-slate-400">内置</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </Card>
+              )}
             </div>
           )}
         </div>
@@ -1057,30 +1300,152 @@ export function VaultPage() {
         )}
       </Modal>
 
-      <Modal open={Boolean(isAdmin && kvItem)} title={`编辑 KV Secret：${kvItem?.path || ''}`} onClose={() => setKvItem(null)} wide>
+      <Modal
+        open={Boolean(isAdmin && kvItem)}
+        title={kvItem?.cas === 0 ? '新建 KV Secret' : `编辑 KV Secret：${kvItem?.path || ''}`}
+        busy={kvSaving}
+        onClose={() => { setKvItem(null); setKvErr(''); }}
+        wide
+      >
         {kvItem && (
-          <div className="space-y-3 text-xs">
-            <div className="flex items-center justify-between text-slate-500">
-              <span className="font-mono">挂载：{kvMount} · 路径：{kvItem.path}</span>
-              <span className="font-mono">版本 v{kvItem.cas}</span>
+          <div className="space-y-3.5 text-xs">
+            <ErrorAlert message={kvErr} onClose={() => setKvErr('')} />
+            <div className="flex flex-wrap items-center justify-between gap-2 text-slate-500">
+              <span className="font-mono">挂载：{kvMount}</span>
+              <span className="font-mono">{kvItem.cas === 0 ? '新 Secret（v1）' : `当前版本 v${kvItem.cas}`}</span>
             </div>
-            <CodeEditor label="Secret 数据（JSON）" value={kvItem.data} onChange={(v) => setKvItem({ ...kvItem, data: v })} height="240px" />
+
+            {kvItem.cas === 0 ? (
+              <Input
+                label="Secret 路径（不含挂载名与 data/）"
+                required
+                placeholder="例如 apps/postgres 或 apps/redis"
+                value={kvItem.path}
+                onChange={(e) => setKvItem({ ...kvItem, path: e.target.value })}
+              />
+            ) : (
+              <div className="rounded-lg border border-slate-200/80 bg-slate-50/70 px-3 py-2 font-mono text-slate-700 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200">
+                路径：{kvItem.path}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <SectionTabs
+                variant="underline"
+                tabs={[
+                  { id: 'form', label: '键值对表单' },
+                  { id: 'json', label: 'JSON 源码' },
+                ]}
+                active={kvEditMode}
+                onChange={(next) => {
+                  setKvErr('');
+                  if (next === 'json' && kvEditMode === 'form') {
+                    const obj = serializeKVRows(kvRows);
+                    setKvItem((cur) => (cur ? { ...cur, data: JSON.stringify(obj, null, 2) } : null));
+                    setKvEditMode('json');
+                  } else if (next === 'form' && kvEditMode === 'json') {
+                    try {
+                      const parsed = JSON.parse(kvItem.data || '{}');
+                      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                        setKvErr('JSON 顶层必须是键值对对象才能切换到表单模式');
+                        return;
+                      }
+                      const entries = Object.entries(parsed);
+                      const allFlat = entries.every(([, v]) => v === null || ['string', 'number', 'boolean'].includes(typeof v));
+                      if (!allFlat) {
+                        setKvErr('包含嵌套对象或数组，请继续在 JSON 源码模式下编辑');
+                        return;
+                      }
+                      setKvRows(entries.length ? entries.map(([k, v]) => ({ key: k, value: v == null ? '' : String(v) })) : [{ key: '', value: '' }]);
+                      setKvEditMode('form');
+                    } catch {
+                      setKvErr('当前 JSON 语法不合法，请修正后再切换到表单模式');
+                    }
+                  }
+                }}
+              />
+              {kvEditMode === 'form' && (
+                <Button
+                  size="sm"
+                  onClick={() => setKvRows((prev) => [...prev, { key: '', value: '' }])}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>添加字段</span>
+                </Button>
+              )}
+            </div>
+
+            {kvEditMode === 'form' ? (
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                {kvRows.map((row, idx) => (
+                  <div key={idx} className="grid grid-cols-[minmax(120px,0.9fr)_minmax(0,1.5fr)_auto] items-center gap-2">
+                    <input
+                      aria-label={`字段名 ${idx + 1}`}
+                      placeholder="键名，如 password"
+                      value={row.key}
+                      onChange={(e) => setKvRows((prev) => prev.map((r, i) => (i === idx ? { ...r, key: e.target.value } : r)))}
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    />
+                    <input
+                      aria-label={`字段值 ${idx + 1}`}
+                      placeholder="字段值"
+                      value={row.value}
+                      onChange={(e) => setKvRows((prev) => prev.map((r, i) => (i === idx ? { ...r, value: e.target.value } : r)))}
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    />
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        title="生成 24 位随机强密码"
+                        aria-label="生成随机强密码"
+                        onClick={() => {
+                          const pwd = generateRandomSecret(24);
+                          setKvRows((prev) => prev.map((r, i) => (i === idx ? { ...r, value: pwd } : r)));
+                        }}
+                        className="rounded-lg border border-slate-200 bg-white p-1.5 text-indigo-600 hover:border-indigo-300 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-900 dark:text-indigo-400 dark:hover:bg-indigo-950/50"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        title="删除字段"
+                        aria-label="删除字段"
+                        disabled={kvRows.length <= 1}
+                        onClick={() => setKvRows((prev) => prev.filter((_, i) => i !== idx))}
+                        className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-400 hover:border-rose-300 hover:text-rose-600 disabled:opacity-35 dark:border-slate-700 dark:bg-slate-900"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <CodeEditor label="Secret 数据（JSON）" value={kvItem.data} onChange={(v) => setKvItem({ ...kvItem, data: v })} height="240px" />
+            )}
+
             {(() => {
               const cleanMount = kvMount.replace(/^\/+|\/+$/g, '') || 'secret';
-              const parsed = parseKVPath(`${cleanMount}/${kvItem.path}`, cleanMount);
+              const cleanSecretPath = kvItem.path.trim().replace(/^\/+|\/+$/g, '');
+              if (!cleanSecretPath) return null;
+              const parsed = parseKVPath(`${cleanMount}/${cleanSecretPath}`, cleanMount);
               let keys: string[] = [];
-              try {
-                const obj = JSON.parse(kvItem.data);
-                if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
-                  keys = Object.keys(obj);
+              if (kvEditMode === 'form') {
+                keys = kvRows.map((r) => r.key.trim()).filter(Boolean);
+              } else {
+                try {
+                  const obj = JSON.parse(kvItem.data);
+                  if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+                    keys = Object.keys(obj);
+                  }
+                } catch {
+                  // Ignore incomplete JSON while user is typing.
                 }
-              } catch {
-                // Ignore incomplete JSON while user is typing.
               }
               const envSnippet = buildTemplateData(parsed.templatePath, keys, 'env');
               const fileSnippet = buildTemplateData(parsed.templatePath, keys, 'file');
               return (
-                <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/60 p-3 space-y-2 dark:border-indigo-500/30 dark:bg-indigo-950/30">
+                <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-3 space-y-2 dark:border-indigo-500/30 dark:bg-indigo-950/25">
                   <div className="font-semibold text-indigo-950 dark:text-indigo-100">在 Nomad Job 中引用此 Secret</div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">
@@ -1109,24 +1474,49 @@ export function VaultPage() {
                 </div>
               );
             })()}
-            <div className="flex justify-end gap-2">
-              <Button type="button" onClick={() => setKvItem(null)}>关闭</Button>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" disabled={kvSaving} onClick={() => { setKvItem(null); setKvErr(''); }}>关闭</Button>
               <Button
                 variant="primary"
-                onClick={() => {
+                loading={kvSaving}
+                onClick={async () => {
+                  const targetPath = kvItem.path.trim().replace(/^\/+|\/+$/g, '');
+                  if (!targetPath) {
+                    setKvErr('请填写 Secret 路径，例如 apps/postgres');
+                    return;
+                  }
+                  let payloadData: Record<string, unknown>;
+                  if (kvEditMode === 'form') {
+                    payloadData = serializeKVRows(kvRows);
+                    if (Object.keys(payloadData).length === 0) {
+                      setKvErr('请至少填写一个字段名');
+                      return;
+                    }
+                  } else {
+                    try {
+                      payloadData = JSON.parse(kvItem.data);
+                    } catch {
+                      setKvErr('KV 数据必须是合法 JSON');
+                      return;
+                    }
+                  }
+                  setKvErr('');
+                  setKvSaving(true);
                   try {
-                    const parsed = JSON.parse(kvItem.data);
-                    void apiPut(`/api/v1/vault/${selectedId}/kv/item?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(kvItem.path)}`, {
-                      data: parsed,
-                      cas: kvItem.cas,
-                    })
-                      .then((r) => {
-                        toast.success(kvItem.cas === 0 ? 'Secret 已创建' : 'KV 已更新');
-                        setKvItem((cur) => (cur ? { ...cur, cas: Number(r.result?.version ?? cur.cas + 1) } : null));
-                      })
-                      .catch((ex) => setErr(ex.message));
-                  } catch {
-                    setErr('KV 数据必须是合法 JSON');
+                    const r = await apiPut(
+                      `/api/v1/vault/${selectedId}/kv/item?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(targetPath)}`,
+                      { data: payloadData, cas: kvItem.cas },
+                    );
+                    toast.success(kvItem.cas === 0 ? 'Secret 已创建' : 'KV 已更新');
+                    const nextVer = Number(r.result?.version ?? kvItem.cas + 1);
+                    setKvItem({ path: targetPath, data: JSON.stringify(payloadData, null, 2), cas: nextVer });
+                    const parentDir = targetPath.includes('/') ? `${targetPath.slice(0, targetPath.lastIndexOf('/') + 1)}` : '';
+                    setKvPath(parentDir);
+                    await listKVKeys(kvMount, parentDir);
+                  } catch (ex: any) {
+                    setKvErr(ex?.message || '保存 Secret 失败');
+                  } finally {
+                    setKvSaving(false);
                   }
                 }}
               >

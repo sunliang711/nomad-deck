@@ -329,17 +329,6 @@ export function NomadPage() {
         }
       />
 
-      <ItemSwitcher
-        label="Nomad 集群"
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-        items={clusters.map((c) => ({
-          id: c.id,
-          name: c.name,
-          status: c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status,
-        }))}
-      />
-
       <ErrorAlert message={err} onClose={() => setErr('')} />
       {newToken && <MaskedSecret value={newToken} label="新签发 ACL Token Secret（仅展示一次）：" />}
 
@@ -349,16 +338,28 @@ export function NomadPage() {
         </Card>
       ) : (
         <div className="space-y-4">
-          <SectionTabs
-            tabs={[
-              { id: 'status', label: '集群状态详情' },
-              { id: 'workbench', label: '运行态工作台', tip: '实时查看与管理 Nomad Clients、Servers、Allocations、Deployments、CSI 存储与 Variables。' },
-              { id: 'snapshots', label: 'Raft 快照', badge: snapshots.length, tip: '保存与恢复 Nomad Server Raft 状态机中的任务、变量与 ACL 快照。' },
-              { id: 'governance', label: '治理 (Namespace / Pool / ACL)', tip: '配置多租户命名空间（Namespace）、节点资源池（Node Pool）与访问控制（ACL Policy / Role / Token）。' },
-            ]}
-            active={tab}
-            onChange={setTab}
-          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <ItemSwitcher
+              label="Nomad 集群"
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              items={clusters.map((c) => ({
+                id: c.id,
+                name: c.name,
+                status: c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status,
+              }))}
+            />
+            <SectionTabs
+              tabs={[
+                { id: 'status', label: '集群状态详情' },
+                { id: 'workbench', label: '运行态工作台', title: '实时查看与管理 Nomad Clients、Servers、Allocations、Deployments、CSI 存储与 Variables' },
+                { id: 'snapshots', label: 'Raft 快照', badge: snapshots.length, title: '保存与恢复 Nomad Server Raft 状态机中的任务、变量与 ACL 快照' },
+                { id: 'governance', label: '治理 (Namespace / Pool / ACL)', title: '配置多租户命名空间（Namespace）、节点资源池（Node Pool）与访问控制（ACL Policy / Role / Token）' },
+              ]}
+              active={tab}
+              onChange={setTab}
+            />
+          </div>
 
           {tab === 'status' && (
             <div className="space-y-4">
@@ -455,15 +456,10 @@ export function NomadPage() {
                   }
                 }}
                 quickActions={
-                  <>
-                    <Button size="sm" onClick={() => setTab('workbench')}>
-                      运行态工作台
-                    </Button>
-                    <Link to={`/jobs?cluster_id=${encodeURIComponent(selectedId)}`} className="primary-button">
-                      <FileCode2 className="h-3.5 w-3.5" />
-                      <span>前往 Job 中心</span>
-                    </Link>
-                  </>
+                  <Link to={`/jobs?cluster_id=${encodeURIComponent(selectedId)}`} className="primary-button">
+                    <FileCode2 className="h-3.5 w-3.5" />
+                    <span>前往 Job 中心</span>
+                  </Link>
                 }
                 onError={setErr}
               />
@@ -539,7 +535,7 @@ export function NomadPage() {
                         </Button>
                         <Button
                           size="sm"
-                          variant="danger"
+                          variant="danger-outline"
                           onClick={() =>
                             setPwAction({
                               title: `恢复 Nomad 快照 ${sn.id}`,
@@ -554,7 +550,7 @@ export function NomadPage() {
                         </Button>
                         <Button
                           size="sm"
-                          variant="danger"
+                          variant="danger-outline"
                           onClick={async () => {
                             if (!(await askConfirm(`确定要删除快照 ${sn.id} 吗？`, { title: '删除 Raft 快照', confirmText: '确认删除', danger: true }))) return;
                             void apiDelete(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}`)
@@ -607,7 +603,7 @@ export function NomadPage() {
                     <div className="flex flex-wrap gap-2">
                       <Button variant="primary" onClick={() => policyEdit.name && void apiPut(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(policyEdit.name)}`, { rules: policyEdit.rules }).then(() => { toast.success('Policy 已保存'); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>保存 Policy</Button>
                       <Button
-                        variant="danger"
+                        variant="danger-outline"
                         disabled={!policyEdit.name}
                         onClick={async () => {
                           if (!policyEdit.name) return;
@@ -635,7 +631,7 @@ export function NomadPage() {
                         {isAdmin && (
                           <Button
                             size="sm"
-                            variant="danger"
+                            variant="danger-outline"
                             onClick={async () => {
                               if (!(await askConfirm(`确认吊销 ACL Token「${tk.name}」吗？`, { title: '吊销 Token', confirmText: '确认吊销', danger: true }))) return;
                               void apiDelete(`/api/v1/nomad/${selectedId}/acl/tokens/${tk.accessor_id}`)

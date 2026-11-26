@@ -6,6 +6,7 @@ export interface SwitcherItem {
   id: string;
   name: string;
   status: string;
+  statusLabel?: string;
   subtitle?: string;
 }
 
@@ -79,15 +80,18 @@ export function ItemSwitcher({
         aria-expanded={open}
         aria-label={`切换${label}`}
         onClick={() => { if (!disabled) setOpen((v) => !v); }}
-        className="inline-flex max-w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 shadow-xs transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+        className="inline-flex h-[42px] max-w-full items-center gap-2 rounded-xl border border-[#e3e8f1] bg-white px-3.5 text-xs font-medium text-slate-800 shadow-[0_2px_8px_rgba(15,23,42,0.02)] transition hover:border-indigo-300 hover:bg-slate-50/80 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-700 dark:hover:bg-slate-800/80"
       >
-        <span className="text-slate-400 dark:text-slate-500 shrink-0">{label}：</span>
-        <span className="truncate font-semibold">{selected?.name || '-'}</span>
-        {selected && <StatusBadge value={selected.status} />}
-        <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400 shrink-0">
-          共 {items.length} 个
-        </span>
-        <ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition-transform shrink-0 ${open ? 'rotate-180' : ''}`} />
+        <span className="text-slate-400 dark:text-slate-500 shrink-0">{label}</span>
+        <span className="h-3.5 w-px bg-slate-200 dark:bg-slate-700 shrink-0" aria-hidden="true" />
+        <span className="truncate font-semibold max-w-[180px]">{selected?.name || '-'}</span>
+        {selected && <StatusBadge value={selected.status} label={selected.statusLabel} />}
+        {items.length > 1 && (
+          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400 shrink-0">
+            {items.length}
+          </span>
+        )}
+        <ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition-transform shrink-0 ${open ? 'rotate-180 text-indigo-500' : ''}`} />
       </button>
 
       {open && (
@@ -138,7 +142,7 @@ export function ItemSwitcher({
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
-                      <StatusBadge value={item.status} />
+                      <StatusBadge value={item.status} label={item.statusLabel} />
                       {isSelected && <Check className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-300" />}
                     </div>
                   </button>

@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { AlertTriangle, ArrowRight, CheckCircle2, Circle, KeyRound, Loader2, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, ArrowUpCircle, CheckCircle2, Circle, KeyRound, Loader2, Server, ShieldAlert, ShieldCheck, SlidersHorizontal, Terminal, Trash2, Wrench } from 'lucide-react';
 import { apiGet, fmtTime } from '../lib/api';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { isTaskActiveStatus } from '../lib/actionLabels';
@@ -228,21 +228,23 @@ export function ClusterOpsSection({
           )}
         </div>
 
-        <ol className="mt-5 grid grid-cols-1 gap-2 border-t border-slate-100 pt-4 sm:grid-cols-3 dark:border-slate-800" aria-label="集群搭建进度">
-          {progressSteps.map((step, i) => (
-            <li
-              key={step.label}
-              className={`flex items-center gap-2 text-xs font-medium ${
-                step.done ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-500 dark:text-slate-400'
-              }`}
-            >
-              {step.done ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <Circle className="h-4 w-4 shrink-0" />}
-              <span>
-                {i + 1}. {step.label}
-              </span>
-            </li>
-          ))}
-        </ol>
+        {!(initialized && healthy) && (
+          <ol className="mt-5 grid grid-cols-1 gap-2 border-t border-slate-100 pt-4 sm:grid-cols-3 dark:border-slate-800" aria-label="集群搭建进度">
+            {progressSteps.map((step, i) => (
+              <li
+                key={step.label}
+                className={`flex items-center gap-2 text-xs font-medium ${
+                  step.done ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                {step.done ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <Circle className="h-4 w-4 shrink-0" />}
+                <span>
+                  {i + 1}. {step.label}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
       </div>
 
       {/* 后台执行状态条 */}
@@ -631,7 +633,7 @@ export function ClusterOpsSection({
                                     return (
                                       <Button
                                         size="sm"
-                                        variant="danger"
+                                        variant="danger-outline"
                                         loading={busyKey === 'uninstall'}
                                         disabled={blocked}
                                         title={
@@ -648,7 +650,7 @@ export function ClusterOpsSection({
                                   return (
                                     <Button
                                       size="sm"
-                                      variant="danger"
+                                      variant="danger-outline"
                                       loading={busyKey === `remove:${n.node_id}`}
                                       disabled={blocked || mustUninstallInstead}
                                       title={
@@ -696,87 +698,123 @@ export function ClusterOpsSection({
                 </div>
               }
             >
-              <div className="space-y-3">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 {!needsDeploy && (
-                  <details className="ops-disclosure">
-                    <summary>
-                      版本升级<span>按节点逐一滚动升级服务</span>
-                    </summary>
-                    <div className="ops-disclosure-body space-y-3 max-w-lg">
+                  <div className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                    <div className="space-y-3">
+                      <div className="flex items-start gap-2.5">
+                        <div className="rounded-lg bg-indigo-50 p-2 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300 shrink-0">
+                          <ArrowUpCircle className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">版本升级</h3>
+                            {clusterVersion !== '-' && <Badge>当前 v{clusterVersion}</Badge>}
+                          </div>
+                          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">按节点逐一滚动升级服务，降低业务中断风险。</p>
+                        </div>
+                      </div>
                       {versionPicker(upVer, setUpVer, '目标版本')}
-                      {proxyOption}
-                      {!isVault && setDrainClients && (
-                        <label className="flex items-center gap-2 text-xs">
-                          <input type="checkbox" checked={drainClients} onChange={(e) => setDrainClients(e.target.checked)} />
-                          升级前疏散 Client，将任务迁移到其他节点
-                        </label>
-                      )}
-                      <Button loading={busyKey === 'upgrade'} disabled={blocked} onClick={() => void runBusy('upgrade', onUpgrade)}>
+                      <div className="space-y-1.5">
+                        {proxyOption}
+                        {!isVault && setDrainClients && (
+                          <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                            <input type="checkbox" checked={drainClients} onChange={(e) => setDrainClients(e.target.checked)} />
+                            升级前疏散 Client，将任务迁移到其他节点
+                          </label>
+                        )}
+                      </div>
+                    </div>
+                    <div className="pt-1">
+                      <Button size="sm" loading={busyKey === 'upgrade'} disabled={blocked} onClick={() => void runBusy('upgrade', onUpgrade)}>
                         开始滚动升级
                       </Button>
                     </div>
-                  </details>
+                  </div>
                 )}
-                <details className="ops-disclosure">
-                  <summary>
-                    证书与访问凭据<span>续期、轮换与管理员凭据</span>
-                  </summary>
-                  <div className="ops-disclosure-body">
-                    <p className="mb-3 text-xs leading-5 text-slate-500">
-                      证书和密钥轮换会更新节点配置。请在集群健康时执行，并在后台任务中确认结果。
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <Button size="sm" loading={busyKey === 'renew'} disabled={blocked || !initialized} onClick={() => void runBusy('renew', onRenewCerts)}>
-                        续期证书
-                      </Button>
-                      <Button size="sm" disabled={blocked || !initialized} onClick={() => void runBusy('ca', onRotateCA)}>
-                        轮换 CA
-                      </Button>
-                      {!isVault && onRotateGossip && (
-                        <Button size="sm" disabled={blocked || !initialized} onClick={() => void runBusy('gossip', onRotateGossip)}>
-                          轮换 Gossip
-                        </Button>
-                      )}
-                      {onRevealRootToken && initialized && (
-                        <Button size="sm" disabled={blocked} onClick={() => void runBusy('root-token', onRevealRootToken)}>
-                          {isVault ? '签发临时 Root Token' : '查看 Root Token'}
-                        </Button>
-                      )}
-                      {isVault && initialized && !onRevealRootToken && (
-                        <span className="self-center text-[11px] text-slate-500">
-                          如需签发临时 Root Token，请前往「初始化与密钥托管」页签。
-                        </span>
-                      )}
+
+                <div className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                  <div className="space-y-2.5">
+                    <div className="flex items-start gap-2.5">
+                      <div className="rounded-lg bg-emerald-50 p-2 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300 shrink-0">
+                        <KeyRound className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">证书与访问凭据</h3>
+                        <p className="mt-0.5 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                          {isVault
+                            ? '续期节点 TLS 证书或轮换集群根 CA。请在集群健康时执行，并在后台任务中确认结果。'
+                            : '续期节点证书、轮换 CA / Gossip 密钥或查看管理员凭据。请在集群健康时执行，并在后台任务中确认结果。'}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </details>
-                <details className="ops-disclosure">
-                  <summary>
-                    异常恢复<span>核对实际状态后解除维护锁</span>
-                  </summary>
-                  <div className="ops-disclosure-body">
-                    <p className="mb-3 text-xs leading-5 text-slate-500">
-                      任务中断或状态不一致时，先核对远端服务。核对成功后解除维护屏障。
-                    </p>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <Button size="sm" loading={busyKey === 'renew'} disabled={blocked || !initialized} onClick={() => void runBusy('renew', onRenewCerts)}>
+                      续期证书
+                    </Button>
+                    <Button size="sm" disabled={blocked || !initialized} onClick={() => void runBusy('ca', onRotateCA)}>
+                      轮换 CA
+                    </Button>
+                    {!isVault && onRotateGossip && (
+                      <Button size="sm" disabled={blocked || !initialized} onClick={() => void runBusy('gossip', onRotateGossip)}>
+                        轮换 Gossip
+                      </Button>
+                    )}
+                    {onRevealRootToken && initialized && (
+                      <Button size="sm" disabled={blocked} onClick={() => void runBusy('root-token', onRevealRootToken)}>
+                        {isVault ? '签发临时 Root Token' : '查看 Root Token'}
+                      </Button>
+                    )}
+                    {isVault && initialized && !onRevealRootToken && (
+                      <span className="w-full text-[11px] text-slate-500 dark:text-slate-400">
+                        如需签发临时 Root Token，请前往「初始化与密钥托管」页签。
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                  <div className="flex items-start gap-2.5">
+                    <div className="rounded-lg bg-amber-50 p-2 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300 shrink-0">
+                      <Wrench className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">异常恢复与维护</h3>
+                        {(status?.maintenance_mode ?? cluster.maintenance_mode) && <Badge tone="amber">维护锁开启</Badge>}
+                      </div>
+                      <p className="mt-0.5 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        任务中断或状态不一致时，核对远端实际服务并在确认一致后解除维护屏障。
+                      </p>
+                    </div>
+                  </div>
+                  <div className="pt-1">
                     <Button size="sm" loading={busyKey === 'reconcile'} disabled={blocked} onClick={() => void runBusy('reconcile', onReconcile)}>
                       核对并解锁
                     </Button>
                   </div>
-                </details>
+                </div>
+
                 {onUninstall && (
-                  <details className="ops-disclosure border-rose-200 dark:border-rose-900/60">
-                    <summary className="text-rose-700 dark:text-rose-300">
-                      危险操作<span>卸载服务并清除集群数据</span>
-                    </summary>
-                    <div className="ops-disclosure-body">
-                      <p className="mb-3 text-xs leading-5 text-slate-500">
-                        将影响此集群的全部节点，请先保存需要的数据。操作前需要确认集群名称及管理员密码。
-                      </p>
-                      <Button size="sm" variant="danger" loading={busyKey === 'uninstall'} disabled={blocked} onClick={() => void runBusy('uninstall', onUninstall)}>
+                  <div className="flex flex-col justify-between gap-3 rounded-xl border border-rose-200/80 bg-rose-50/35 p-4 dark:border-rose-900/50 dark:bg-rose-950/20">
+                    <div className="flex items-start gap-2.5">
+                      <div className="rounded-lg bg-rose-100/80 p-2 text-rose-600 dark:bg-rose-500/15 dark:text-rose-300 shrink-0">
+                        <ShieldAlert className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-semibold text-rose-800 dark:text-rose-200">危险操作区</h3>
+                        <p className="mt-0.5 text-xs leading-5 text-slate-600 dark:text-slate-400">
+                          卸载服务并清除此集群全部节点的数据，操作前请先备份快照并二次确认管理员密码。
+                        </p>
+                      </div>
+                    </div>
+                    <div className="pt-1">
+                      <Button size="sm" variant="danger-outline" loading={busyKey === 'uninstall'} disabled={blocked} onClick={() => void runBusy('uninstall', onUninstall)}>
                         卸载集群
                       </Button>
                     </div>
-                  </details>
+                  </div>
                 )}
               </div>
             </Card>

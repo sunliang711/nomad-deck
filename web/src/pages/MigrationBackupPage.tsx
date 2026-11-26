@@ -159,29 +159,33 @@ export function MigrationBackupPage() {
 
       {tab === 'backup' && (
         <div className="space-y-5">
-          {backupCfg?.missing_offsite_target && (
+          {backupCfg?.missing_offsite_target && targets.length > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
-              <span>尚未配置已启用的 SafeKeep 灾备目标，生产环境建议在定时任务中配置并开启定时灾备。</span>
+              <span>当前已添加的 SafeKeep 目标均处于停用状态，生产环境建议在定时任务中启用灾备目标。</span>
               <Link to="/cron" className="inline-flex items-center gap-1 font-medium underline">
-                前往定时任务配置 <ArrowUpRight className="h-3.5 w-3.5" />
+                前往定时任务启用 <ArrowUpRight className="h-3.5 w-3.5" />
               </Link>
             </div>
           )}
 
           <Card
-            title="已配置 SafeKeep 灾备目标与异地快照"
+            title="SafeKeep 灾备目标与异地快照"
             actions={
               <div className="flex flex-wrap items-center gap-2">
-                <Link
-                  to="/cron"
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-                >
-                  <span>在定时任务中管理 SafeKeep</span>
-                  <ArrowUpRight className="h-3.5 w-3.5" />
-                </Link>
+                {targets.length > 0 && (
+                  <Link
+                    to="/cron"
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <span>在定时任务中管理 SafeKeep</span>
+                    <ArrowUpRight className="h-3.5 w-3.5" />
+                  </Link>
+                )}
                 <Button
                   size="sm"
                   variant="primary"
+                  disabled={targets.length === 0}
+                  title={targets.length === 0 ? '请先在「定时任务 → 配置 SafeKeep」中添加存储目标' : '立即触发一次控制面灾备备份'}
                   onClick={() =>
                     void apiPost('/api/v1/backup/run')
                       .then(() => {

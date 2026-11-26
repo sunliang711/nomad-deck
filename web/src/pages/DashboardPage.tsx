@@ -61,34 +61,46 @@ export function DashboardPage() {
 
   const cards = [
     {
-      icon: <Server className="w-5 h-5" />,
+      icon: <Server className="w-4 h-4" />,
       label: '托管主机',
       value: nodes.total ?? 0,
       sub: `在线 ${nodes.online ?? 0} · 离线 ${nodes.offline ?? 0}`,
+      tone: (nodes.offline ?? 0) > 0 ? 'amber' : (nodes.online ?? 0) > 0 ? 'green' : 'indigo',
       to: '/infra',
     },
     {
-      icon: <Boxes className="w-5 h-5" />,
+      icon: <Boxes className="w-4 h-4" />,
       label: '纳管集群',
       value: clusters.total ?? 0,
       sub: `Nomad ${clusters.nomad ?? 0} · Vault ${clusters.vault ?? 0}`,
+      tone: (clusters.total ?? 0) > 0 ? 'indigo' : 'neutral',
       to: hasNomad ? '/nomad' : '/vault',
     },
     {
-      icon: <ShieldCheck className="w-5 h-5" />,
+      icon: <ShieldCheck className="w-4 h-4" />,
       label: '证书临期预警',
       value: certAlerts.length,
       sub: certAlerts.length > 0 ? '请尽快执行续期或轮换' : (clusters.total ?? 0) > 0 ? '所有集群证书有效期正常' : '部署集群后自动监控',
+      tone: certAlerts.length > 0 ? 'amber' : (clusters.total ?? 0) > 0 ? 'green' : 'neutral',
       to: hasVault ? '/vault' : '/nomad',
     },
     {
-      icon: <FileWarning className="w-5 h-5" />,
+      icon: <FileWarning className="w-4 h-4" />,
       label: '待核对异常任务',
       value: reconcileTasks.length,
       sub: reconcileTasks.length > 0 ? '需人工确认远端实际状态' : '所有编排任务状态一致',
+      tone: reconcileTasks.length > 0 ? 'red' : 'neutral',
       onClick: openTaskList,
     },
   ];
+
+  const kpiIconTones: Record<string, string> = {
+    green: 'text-emerald-600 bg-emerald-50 dark:text-emerald-300 dark:bg-emerald-500/15',
+    amber: 'text-amber-600 bg-amber-50 dark:text-amber-300 dark:bg-amber-500/15',
+    red: 'text-rose-600 bg-rose-50 dark:text-rose-300 dark:bg-rose-500/15',
+    indigo: 'text-indigo-600 bg-indigo-50 dark:text-indigo-300 dark:bg-indigo-500/15',
+    neutral: 'text-slate-500 bg-slate-100 dark:text-slate-400 dark:bg-slate-800',
+  };
 
   const hasAlertsOrTips =
     vaultAlerts.length > 0 ||
@@ -176,14 +188,14 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 min-[420px]:grid-cols-2 xl:grid-cols-4 gap-4">
         {cards.map((c: any) => {
           const cardClass =
-            'group text-left bg-white dark:bg-slate-900 rounded-2xl border border-[#e3e8f1] dark:border-slate-800 shadow-[0_3px_12px_rgba(15,23,42,0.03)] p-5 flex flex-col justify-between hover:border-indigo-300 dark:hover:border-indigo-500/40 transition';
+            'group text-left bg-white dark:bg-[#0f172a]/95 rounded-2xl border border-[#e3e8f1] dark:border-slate-800/90 shadow-[0_2px_10px_rgba(15,23,42,0.03)] p-4 sm:p-5 flex flex-col justify-between hover:border-indigo-300 dark:hover:border-indigo-500/40 transition';
           const content = (
             <>
               <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
                 <span className="font-medium group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
                   {c.label}
                 </span>
-                <span className="text-indigo-500 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/15 p-2 rounded-lg shrink-0">
+                <span className={`p-2 rounded-xl shrink-0 ${kpiIconTones[c.tone] || kpiIconTones.indigo}`}>
                   {c.icon}
                 </span>
               </div>
@@ -343,11 +355,11 @@ export function DashboardPage() {
               {backupAlerts?.missing_offsite_target && (clusters.total ?? 0) > 0 && (
                 <Link
                   to="/cron"
-                  className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200 dark:hover:border-indigo-500/40"
+                  className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200 dark:hover:border-indigo-500/40 transition"
                 >
-                  <span className="flex items-center gap-2">
-                    <Info className="h-4 w-4 shrink-0 text-indigo-500" />
-                    <span>尚未配置 SafeKeep 灾备目标，生产环境建议在定时任务中开启定时灾备。</span>
+                  <span className="flex items-start gap-2 min-w-0 leading-5">
+                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-indigo-500" />
+                    <span>尚未配置 SafeKeep 异地灾备目标，生产环境建议在定时任务中开启定时灾备。</span>
                   </span>
                   <Badge tone="blue">建议配置</Badge>
                 </Link>

@@ -128,13 +128,15 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     (kind: ToastKind, text: string, arg?: ToastArg) => {
       if (!text) return;
       const opts = normalizeToastArg(arg);
-      const position: ToastPosition = opts.position || 'bottom-right';
+      // 统一放右下角，避免遮挡顶部栏与页面操作按钮
+      const position: ToastPosition = 'bottom-right';
       const id = nextToastId++;
       setItems((prev) => [
-        ...prev.slice(-4),
+        ...prev.slice(-3),
         { id, kind, text, action: opts.action, details: opts.details, position },
       ]);
       if (opts.recordHistory !== false) {
+        const hasAttentionContent = kind === 'error' || Boolean(opts.details && opts.details.length > 0);
         const entry: ToastHistoryItem = {
           id: `${Date.now()}-${id}`,
           kind,
@@ -142,11 +144,11 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           details: opts.details && opts.details.length > 0 ? [...opts.details] : undefined,
           path: typeof window !== 'undefined' ? window.location.pathname : '/',
           createdAt: Date.now(),
-          read: false,
+          read: !hasAttentionContent,
         };
         updateHistory((prev) => [entry, ...prev]);
       }
-      const duration = opts.durationMs ?? (kind === 'error' ? 6000 : 4000);
+      const duration = opts.durationMs ?? (kind === 'error' ? 6000 : 3800);
       window.setTimeout(() => {
         dismiss(id);
       }, duration);
@@ -179,15 +181,15 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       <div
         aria-live="polite"
         aria-relevant="additions"
-        className={`fixed ${positionClass} z-[110] flex flex-col gap-2 max-w-md w-[calc(100vw-2rem)] pointer-events-none`}
+        className={`fixed ${positionClass} z-[110] flex flex-col gap-2 max-w-sm w-[calc(100vw-2rem)] pointer-events-none`}
       >
         {slotItems.map((item) => {
           const style =
             item.kind === 'success'
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/95 dark:border-emerald-800 dark:text-emerald-100'
+              ? 'bg-emerald-50/95 border-emerald-200/90 text-emerald-900 dark:bg-emerald-950/95 dark:border-emerald-800/80 dark:text-emerald-100'
               : item.kind === 'error'
-              ? 'bg-rose-50 border-rose-200 text-rose-900 dark:bg-rose-950/95 dark:border-rose-800 dark:text-rose-100'
-              : 'bg-indigo-50 border-indigo-200 text-indigo-900 dark:bg-indigo-950/95 dark:border-indigo-800 dark:text-indigo-100';
+              ? 'bg-rose-50/95 border-rose-200/90 text-rose-900 dark:bg-rose-950/95 dark:border-rose-800/80 dark:text-rose-100'
+              : 'bg-white/95 border-indigo-200/90 text-slate-900 dark:bg-slate-900/95 dark:border-indigo-500/40 dark:text-slate-100';
           const icon =
             item.kind === 'success' ? (
               <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
@@ -200,7 +202,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             <div
               key={item.id}
               role={item.kind === 'error' ? 'alert' : 'status'}
-              className={`pointer-events-auto flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border shadow-lg text-sm ${style}`}
+              className={`nd-toast-in pointer-events-auto flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border shadow-xl backdrop-blur-md text-[13px] ${style}`}
             >
               {icon}
               <div className="flex-1 min-w-0 break-words">

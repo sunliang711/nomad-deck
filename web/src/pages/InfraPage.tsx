@@ -45,6 +45,32 @@ function timeSyncLabelOf(sync?: string): string {
   return sync || '-';
 }
 
+function formatHostOS(osInfo?: string, arch?: string): { primary: string; secondary: string } {
+  const raw = (osInfo || '').trim();
+  const cleanArch = (arch || '').trim();
+  if (!raw) return { primary: '-', secondary: cleanArch || '-' };
+  const [distro, kernel] = raw.split(/\s+\/\s+/);
+  const shortDistro = (distro || raw).replace(/^Debian GNU\/Linux\s+/i, 'Debian ');
+  const parts: string[] = [];
+  if (kernel) {
+    const cleanKernel = cleanArch && kernel.endsWith(`-${cleanArch}`) ? kernel.slice(0, -(cleanArch.length + 1)) : kernel;
+    parts.push(cleanKernel);
+  }
+  if (cleanArch) parts.push(cleanArch);
+  return {
+    primary: shortDistro,
+    secondary: parts.join(' · ') || '-',
+  };
+}
+
+function formatCompactBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '0';
+  const gib = bytes / (1024 * 1024 * 1024);
+  if (gib >= 1) return `${gib.toFixed(1)}G`;
+  const mib = bytes / (1024 * 1024);
+  return `${Math.round(mib)}M`;
+}
+
 function setupCommandForKey(k?: { public_key?: string; setup_command?: string } | null): string {
   if (!k) return '';
   if (k.setup_command) return k.setup_command;
@@ -694,6 +720,47 @@ export function InfraPage() {
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
       {tab === 'nodes' && (
+        <div className="space-y-4">
+          {nodes.length > 0 && (() => {
+            const onlineCount = nodes.filter((n) => n.status === 'online').length;
+            const dockerReadyCount = nodes.filter((n) => n.docker_status === 'running' || n.docker_status === 'active').length;
+            const totalCPU = nodes.reduce((sum, n) => sum + (Number(n.cpu_cores) || 0), 0);
+            const totalMem = nodes.reduce((sum, n) => sum + (Number(n.mem_total_bytes) || 0), 0);
+            return (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="rounded-xl border border-[#e3e8f1] bg-white px-4 py-3 dark:border-slate-800/90 dark:bg-[#0f172a]/95">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">主机在线状态</div>
+                  <div className="mt-1 flex items-baseline gap-1.5">
+                    <span className="text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">{onlineCount}</span>
+                    <span className="text-xs text-slate-400">/ {nodes.length} 台在线</span>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[#e3e8f1] bg-white px-4 py-3 dark:border-slate-800/90 dark:bg-[#0f172a]/95">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">Docker 运行环境</div>
+                  <div className="mt-1 flex items-baseline gap-1.5">
+                    <span className="text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">{dockerReadyCount}</span>
+                    <span className="text-xs text-slate-400">/ {nodes.length} 台就绪</span>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[#e3e8f1] bg-white px-4 py-3 dark:border-slate-800/90 dark:bg-[#0f172a]/95">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">CPU 核心汇总</div>
+                  <div className="mt-1 flex items-baseline gap-1.5">
+                    <span className="text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">{totalCPU}</span>
+                    <span className="text-xs text-slate-400">vCPU</span>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-[#e3e8f1] bg-white px-4 py-3 dark:border-slate-800/90 dark:bg-[#0f172a]/95">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">内存容量汇总</div>
+                  <div className="mt-1 flex items-baseline gap-1.5">
+                    <span className="text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">
+                      {totalMem > 0 ? fmtBytes(totalMem) : '-'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
         <Card>
           {nodes.length === 0 ? (
             (() => {
@@ -747,32 +814,33 @@ export function InfraPage() {
             })()
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[740px] text-left text-xs">
+              <table className="w-full min-w-[760px] text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
-                    <th className="py-2.5 pr-3">名称 / 地址</th>
-                    <th className="py-2.5 pr-3">状态</th>
-                    <th className="py-2.5 pr-3">CPU / 内存利用率</th>
-                    <th className="py-2.5 pr-3">系统 / 架构</th>
-                    <th className="py-2.5 pr-3">Docker</th>
+                    <th className="py-2.5 pr-4">主机 / SSH 地址</th>
+                    <th className="py-2.5 pr-4">状态</th>
+                    <th className="py-2.5 pr-4 min-w-[190px]">CPU / 内存利用率</th>
+                    <th className="py-2.5 pr-4">系统 / 内核</th>
+                    <th className="py-2.5 pr-4">Docker</th>
                     <th className="py-2.5 text-right">操作</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
                   {nodes.map((n) => {
                     const cpuPct = typeof n.cpu_percent === 'number' && n.cpu_percent >= 0 ? n.cpu_percent : null;
                     const memPct = typeof n.mem_percent === 'number' && n.mem_percent >= 0 ? n.mem_percent : null;
                     const dockerModeLabel = dockerModeLabelOf(n.docker_mode);
                     const dockerStatusLabel = dockerStatusLabelOf(n.docker_status);
+                    const osDisplay = formatHostOS(n.os_info, n.arch);
                     return (
                     <tr key={n.id}>
-                      <td className="py-3 pr-3">
+                      <td className="py-3.5 pr-4">
                         <div className="flex flex-wrap items-center gap-1.5 font-medium">
-                          <ServerIcon className="h-3.5 w-3.5 text-slate-400" />
+                          <ServerIcon className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                           <button
                             type="button"
                             onClick={() => void openNodeDetail(n)}
-                            className="text-left text-slate-900 hover:text-indigo-600 hover:underline underline-offset-2 dark:text-slate-100 dark:hover:text-indigo-400"
+                            className="text-left text-[13px] font-semibold text-slate-900 hover:text-indigo-600 hover:underline underline-offset-2 dark:text-slate-100 dark:hover:text-indigo-400"
                           >
                             {n.name}
                           </button>
@@ -783,80 +851,93 @@ export function InfraPage() {
                             </span>
                           )}
                         </div>
-                        <div className="font-mono text-slate-500 mt-0.5">
+                        <div className="font-mono text-[11px] text-slate-500 mt-0.5 whitespace-nowrap">
                           {n.ssh_user}@{n.host}:{n.ssh_port}
                         </div>
                       </td>
-                      <td className="py-3 pr-3">
+                      <td className="py-3.5 pr-4 whitespace-nowrap">
                         <StatusBadge value={n.status || 'unknown'} />
                         {n.status === 'online' && (n.time_sync === 'unsynced' || n.time_sync === 'skewed') && (
                           <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">待校时</div>
                         )}
                       </td>
-                      <td className="py-3 pr-3 min-w-[160px]">
+                      <td className="py-3.5 pr-4 min-w-[190px]">
                         <div className="space-y-1.5 text-[11px]">
                           <div>
-                            <div className="flex justify-between">
-                              <span className="text-slate-500">CPU{n.cpu_cores > 0 ? ` (${n.cpu_cores}C)` : ''}</span>
-                              <span className="font-mono">{cpuPct !== null ? `${cpuPct.toFixed(1)}%` : '-'}</span>
+                            <div className="flex items-center justify-between gap-2 whitespace-nowrap">
+                              <span className="text-slate-500">CPU{n.cpu_cores > 0 ? ` · ${n.cpu_cores}C` : ''}</span>
+                              <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300">{cpuPct !== null ? `${cpuPct.toFixed(1)}%` : '-'}</span>
                             </div>
-                            <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded bg-slate-200 dark:bg-slate-800">
+                            <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
                               <div
-                                className={`h-full ${cpuPct !== null && cpuPct >= 85 ? 'bg-rose-500' : cpuPct !== null && cpuPct >= 65 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                                className={`h-full rounded-full ${cpuPct !== null && cpuPct >= 85 ? 'bg-rose-500' : cpuPct !== null && cpuPct >= 65 ? 'bg-amber-500' : 'bg-emerald-500'}`}
                                 style={{ width: `${Math.min(100, Math.max(0, cpuPct ?? 0))}%` }}
                               />
                             </div>
                           </div>
                           <div>
-                            <div className="flex justify-between">
-                              <span className="text-slate-500">
-                                内存{n.mem_total_bytes > 0 ? ` (${fmtBytes(n.mem_used_bytes)}/${fmtBytes(n.mem_total_bytes)})` : ''}
+                            <div className="flex items-center justify-between gap-2 whitespace-nowrap">
+                              <span className="text-slate-500 tabular-nums">
+                                内存{n.mem_total_bytes > 0 ? ` ${formatCompactBytes(n.mem_used_bytes)}/${formatCompactBytes(n.mem_total_bytes)}` : ''}
                               </span>
-                              <span className="font-mono">{memPct !== null ? `${memPct.toFixed(1)}%` : '-'}</span>
+                              <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300">{memPct !== null ? `${memPct.toFixed(1)}%` : '-'}</span>
                             </div>
-                            <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded bg-slate-200 dark:bg-slate-800">
+                            <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
                               <div
-                                className={`h-full ${memPct !== null && memPct >= 85 ? 'bg-rose-500' : memPct !== null && memPct >= 65 ? 'bg-amber-500' : 'bg-sky-500'}`}
+                                className={`h-full rounded-full ${memPct !== null && memPct >= 85 ? 'bg-rose-500' : memPct !== null && memPct >= 65 ? 'bg-amber-500' : 'bg-sky-500'}`}
                                 style={{ width: `${Math.min(100, Math.max(0, memPct ?? 0))}%` }}
                               />
                             </div>
                           </div>
                         </div>
                       </td>
-                      <td className="py-3 pr-3">
-                        <div className="text-slate-800 dark:text-slate-200">{n.os_info || '-'}</div>
-                        <div className="font-mono text-slate-500">{n.arch || '-'}</div>
-                      </td>
-                      <td className="py-3 pr-3">
-                        <div className="flex items-center gap-1.5">
-                          <Badge tone={n.docker_mode === 'absent' ? 'neutral' : 'blue'}>{dockerModeLabel}</Badge>
-                          {n.docker_version && <span className="font-mono text-[11px] text-slate-500">{n.docker_version}</span>}
+                      <td className="py-3.5 pr-4 max-w-[220px]">
+                        <div className="truncate font-medium text-slate-800 dark:text-slate-200" title={n.os_info || ''}>
+                          {osDisplay.primary}
                         </div>
-                        {dockerStatusLabel && <div className="text-slate-500 mt-0.5">{dockerStatusLabel}</div>}
+                        <div className="mt-0.5 truncate font-mono text-[11px] text-slate-500" title={`${n.os_info || ''} (${n.arch || ''})`}>
+                          {osDisplay.secondary}
+                        </div>
                       </td>
-                      <td className="py-3 text-right">
+                      <td className="py-3.5 pr-4 whitespace-nowrap">
+                        {isAdmin ? (
+                          <button
+                            type="button"
+                            onClick={() => void openDocker(n)}
+                            title="点击管理或安装 Docker Engine"
+                            className="group text-left rounded-lg border border-transparent px-2 py-1 -mx-2 hover:border-indigo-200 hover:bg-indigo-50/50 dark:hover:border-indigo-500/30 dark:hover:bg-indigo-500/10 transition"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <Badge tone={n.docker_mode === 'absent' ? 'neutral' : 'blue'}>{dockerModeLabel}</Badge>
+                              {n.docker_version && <span className="font-mono text-[11px] text-slate-600 dark:text-slate-300">{n.docker_version}</span>}
+                            </div>
+                            <div className="mt-0.5 text-[11px] text-slate-500 group-hover:text-indigo-600 dark:group-hover:text-indigo-300">
+                              {dockerStatusLabel || '点击安装 →'}
+                            </div>
+                          </button>
+                        ) : (
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <Badge tone={n.docker_mode === 'absent' ? 'neutral' : 'blue'}>{dockerModeLabel}</Badge>
+                              {n.docker_version && <span className="font-mono text-[11px] text-slate-500">{n.docker_version}</span>}
+                            </div>
+                            {dockerStatusLabel && <div className="text-slate-500 mt-0.5">{dockerStatusLabel}</div>}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3.5 text-right">
                         <div className="relative inline-flex items-center justify-end gap-1.5 whitespace-nowrap">
                           {isAdmin && n.status !== 'online' && (
-                            <Button size="sm" onClick={() => openPushModal(n)}>
+                            <Button size="sm" variant="primary" onClick={() => openPushModal(n)}>
                               推送公钥
-                            </Button>
-                          )}
-                          {isAdmin && (
-                            <Button size="sm" onClick={() => void testNode(n)}>
-                              测试连接
                             </Button>
                           )}
                           <Button size="sm" onClick={() => void openNodeDetail(n)}>
                             详情
                           </Button>
                           {isAdmin && (
-                            <Button size="sm" onClick={() => void openDocker(n)}>
-                              Docker
-                            </Button>
-                          )}
-                          {isAdmin && (
-                            <Button size="sm" onClick={() => openEditNode(n)}>
-                              编辑
+                            <Button size="sm" onClick={() => void testNode(n)}>
+                              测试连接
                             </Button>
                           )}
                           {isAdmin && (
@@ -868,8 +949,8 @@ export function InfraPage() {
                               onClick={(e) => {
                                 e.stopPropagation();
                                 const rect = e.currentTarget.getBoundingClientRect();
-                                const flipUp = rect.bottom + 210 > window.innerHeight;
-                                const top = flipUp ? Math.max(8, rect.top - 198) : rect.bottom + 6;
+                                const flipUp = rect.bottom + 260 > window.innerHeight;
+                                const top = flipUp ? Math.max(8, rect.top - 248) : rect.bottom + 6;
                                 const right = Math.max(8, window.innerWidth - rect.right);
                                 setOpenMenu((cur) => (cur?.id === n.id ? null : { id: n.id, top, right }));
                               }}
@@ -883,6 +964,22 @@ export function InfraPage() {
                                 style={{ top: openMenu.top, right: openMenu.right }}
                                 className="fixed z-50 flex w-44 flex-col gap-0.5 rounded-xl border border-slate-200 bg-white p-1.5 text-left shadow-xl dark:border-slate-700 dark:bg-slate-900"
                               >
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => { setOpenMenu(null); void openDocker(n); }}
+                                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+                                >
+                                  Docker 管理
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => { setOpenMenu(null); openEditNode(n); }}
+                                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+                                >
+                                  编辑主机
+                                </button>
                                 <button
                                   type="button"
                                   role="menuitem"
@@ -959,6 +1056,7 @@ export function InfraPage() {
             </div>
           )}
         </Card>
+        </div>
       )}
 
       {tab === 'keys' && (
@@ -1017,7 +1115,7 @@ export function InfraPage() {
                     {isAdmin && (
                       <Button
                         size="sm"
-                        variant="danger"
+                        variant="danger-outline"
                         onClick={async () => {
                           if (
                             !(await askConfirm(`确定要删除 SSH 密钥「${k.name}」吗？`, {

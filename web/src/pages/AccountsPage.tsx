@@ -210,7 +210,9 @@ export function AccountsPage() {
                             </Button>
                             <Button
                               size="sm"
-                              variant={a.disabled ? 'primary' : 'danger'}
+                              variant={a.disabled ? 'primary' : 'danger-outline'}
+                              disabled={!a.disabled && a.username === user?.username}
+                              title={!a.disabled && a.username === user?.username ? '不能停用当前登录账号' : undefined}
                               onClick={() => {
                                 const act = a.disabled ? 'enable' : 'disable';
                                 setPwAction({

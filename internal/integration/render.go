@@ -432,14 +432,16 @@ EOT
 			checkCmd = `test -s "${NOMAD_SECRETS_DIR}/vault_token" && echo vault login ok`
 		}
 		return fmt.Sprintf(`job %q {
-  namespace = %q
-  type      = "batch"
+  datacenters = ["dc1"]
+  namespace   = %q
+  type        = "batch"
 
   group "probe" {
     task "read" {
-      driver = "raw_exec"
+      driver = "docker"
 
       config {
+        image   = "alpine:3.20"
         command = "/bin/sh"
         args    = ["-c", %q]
       }
@@ -447,7 +449,12 @@ EOT
       vault {
         role = %q
       }
-%s    }
+%s
+      resources {
+        cpu    = 50
+        memory = 64
+      }
+    }
   }
 }
 `, job, ns, checkCmd, r.Name, tpl)

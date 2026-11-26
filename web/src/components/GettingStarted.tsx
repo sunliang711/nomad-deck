@@ -1,5 +1,18 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, ArrowUpRight, Boxes, CheckCircle2, FileCode2, Server, Shield } from 'lucide-react';
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Boxes,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  FileCode2,
+  Link2,
+  Server,
+  Shield,
+  Sparkles,
+} from 'lucide-react';
 
 export function GettingStarted({
   hasHosts,
@@ -16,6 +29,8 @@ export function GettingStarted({
 }) {
   const nomadReady = hasReadyNomad ?? hasNomad;
   const vaultReady = hasReadyVault ?? hasVault;
+  const allInfraReady = hasHosts && nomadReady;
+  const [expanded, setExpanded] = useState(false);
 
   const steps = [
     {
@@ -56,34 +71,109 @@ export function GettingStarted({
     },
   ];
 
-  // 定位当前推荐进行的下一步：主机 -> Nomad -> Job（Vault 为可选但若已创建未就绪则提示）
+  // 核心集群已就绪时默认折叠为紧凑快捷操作条，把首屏空间留给监控指标与集群状态
+  if (allInfraReady && !expanded) {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200/80 bg-gradient-to-r from-emerald-50/70 via-white to-indigo-50/40 px-4 py-3 text-xs dark:border-emerald-500/25 dark:from-emerald-950/30 dark:via-slate-900/95 dark:to-indigo-950/30">
+        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+          <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">
+            <Sparkles className="h-3.5 w-3.5" />
+          </span>
+          <span className="font-semibold text-slate-900 dark:text-slate-100">
+            {vaultReady ? 'Nomad 与 Vault 集群均已就绪' : 'Nomad 集群已就绪'}
+          </span>
+          <span className="hidden md:inline text-slate-500 dark:text-slate-400">
+            · 常用快捷入口
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            to="/jobs"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 font-medium text-white hover:bg-indigo-700 transition shadow-xs"
+          >
+            <FileCode2 className="h-3.5 w-3.5" />
+            <span>编排 Job</span>
+          </Link>
+          <Link
+            to="/integrations"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200 dark:hover:border-indigo-500/40 dark:hover:text-indigo-300 transition"
+          >
+            <Link2 className="h-3.5 w-3.5" />
+            <span>集群联动</span>
+          </Link>
+          {vaultReady ? (
+            <Link
+              to="/vault?tab=manage"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200 dark:hover:border-indigo-500/40 dark:hover:text-indigo-300 transition"
+            >
+              <Shield className="h-3.5 w-3.5" />
+              <span>管理密钥</span>
+            </Link>
+          ) : (
+            <Link
+              to="/vault"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200 dark:hover:border-indigo-500/40 dark:hover:text-indigo-300 transition"
+            >
+              <Shield className="h-3.5 w-3.5" />
+              <span>搭建 Vault</span>
+            </Link>
+          )}
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 transition"
+            title="展开搭建引导"
+          >
+            <span className="hidden sm:inline">引导</span>
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const activeIndex = !hasHosts ? 0 : !nomadReady ? 1 : hasVault && !vaultReady ? 2 : 3;
   const activeStep = steps[activeIndex];
-  const allInfraReady = hasHosts && nomadReady;
+  const doneCount = steps.filter((s) => s.done).length;
 
   return (
-    <div className="rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-indigo-50/90 via-white to-white p-5 sm:p-6 dark:border-indigo-500/25 dark:from-indigo-950/50 dark:via-slate-900 dark:to-slate-900">
+    <div className="rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-indigo-50/90 via-white to-white p-5 sm:p-6 dark:border-indigo-500/25 dark:from-indigo-950/45 dark:via-slate-900 dark:to-slate-900">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="min-w-0">
           <div className="inline-flex items-center gap-2 text-xs font-medium text-indigo-600 dark:text-indigo-300">
             <span>{allInfraReady ? '集群控制面就绪' : '快速开始 · 新手引导'}</span>
+            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-mono text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">
+              {doneCount}/4
+            </span>
           </div>
           <h2 className="mt-1 text-lg font-semibold text-slate-900 dark:text-slate-100">
-            {allInfraReady ? '核心服务已就绪，开始编排你的第一个工作负载' : '4 步搭建你的第一个集群'}
+            {allInfraReady ? '核心服务已就绪，开始编排工作负载' : '4 步搭建你的第一个集群'}
           </h2>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {allInfraReady
-              ? '可直接进入 Job 中心提交示例任务，或按需搭建 Vault 密钥库并开启集群联动。'
+              ? '可直接进入 Job 中心提交任务，或管理 Vault 密钥与集群联动。'
               : '按顺序完成以下几步，即可从空白主机快速上线 Nomad 与 Vault。'}
           </p>
         </div>
-        <Link to={activeStep.to} className="primary-button shrink-0">
-          <span>{activeStep.cta}</span>
-          <ArrowRight className="w-3.5 h-3.5" />
-        </Link>
+        <div className="flex items-center gap-2 shrink-0">
+          {allInfraReady && (
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition"
+            >
+              <span>收起</span>
+              <ChevronUp className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <Link to={activeStep.to} className="primary-button">
+            <span>{activeStep.cta}</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
       </div>
 
-      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {steps.map((step, index) => {
           const Icon = step.icon;
           const isCurrent = index === activeIndex;

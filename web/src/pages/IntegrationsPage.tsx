@@ -5,6 +5,8 @@ import {
   ArrowRight,
   ArrowUpRight,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Link2,
   Pencil,
@@ -89,7 +91,8 @@ export function IntegrationsPage() {
   const [doctorWithLogin, setDoctorWithLogin] = useState(false);
   const [doctorLoginRole, setDoctorLoginRole] = useState('');
   const [doctorSecretPath, setDoctorSecretPath] = useState('');
-  const [doctorDriver, setDoctorDriver] = useState<'raw_exec' | 'docker'>('raw_exec');
+  const [doctorDriver, setDoctorDriver] = useState<'raw_exec' | 'docker'>('docker');
+  const [guideExpanded, setGuideExpanded] = useState(false);
 
   const [exampleModal, setExampleModal] = useState<{
     role: any;
@@ -659,64 +662,120 @@ export function IntegrationsPage() {
         }
       />
 
-      {/* 6 步通关向导 */}
-      <div className="rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-indigo-50/80 via-white to-white p-5 text-sm dark:border-indigo-500/30 dark:from-indigo-950/40 dark:via-slate-900 dark:to-slate-900">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="font-semibold text-slate-900 dark:text-slate-100">联动上手 6 步通关路线</h2>
-            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              只需照着顺序完成每一步。小提醒：<strong>Role 里填路径不写 data/，Job 模板里读 KV v2 必须多写一层 /data/</strong>。
-            </p>
-          </div>
-          {selected && isAdmin && (
-            <div className="flex flex-wrap gap-2">
-              {!selected.roles?.length && (
-                <Button size="sm" variant="primary" onClick={openAddRole}>
-                  <Plus className="h-3.5 w-3.5" />
-                  <span>添加第一个 Role</span>
-                </Button>
-              )}
-              {needsApply && (
-                <Button size="sm" variant="primary" loading={applying} disabled={applyPending || deletePending} onClick={() => void applyIntegration()}>
-                  {applyPending ? '正在应用…' : '立即应用联动'}
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="mt-4 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-          {pipelineSteps.map((st) => (
-            <div
-              key={st.num}
-              className={`flex flex-col justify-between rounded-xl border p-3 text-xs transition ${
-                st.done
-                  ? 'border-emerald-200 bg-emerald-50/40 dark:border-emerald-500/30 dark:bg-emerald-950/20'
-                  : 'border-slate-200/90 bg-white/80 dark:border-slate-800 dark:bg-slate-950/40'
-              }`}
-            >
-              <div>
-                <div className="flex items-center justify-between gap-1.5">
-                  <span className="font-semibold text-slate-800 dark:text-slate-100">
-                    {st.num}. {st.title}
-                  </span>
-                  {st.done && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />}
-                </div>
-                <p className="mt-1 leading-4 text-[11px] text-slate-500 dark:text-slate-400">{st.desc}</p>
+      {/* 6 步通关向导：未应用时展开；已应用时默认收起为一行状态条，按需展开 */}
+      {(() => {
+        const showFullGuide = !isApplied || guideExpanded;
+        const doneCount = pipelineSteps.filter((s) => s.done).length;
+        if (!showFullGuide) {
+          return (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200/80 bg-emerald-50/40 px-4 py-3 text-xs dark:border-emerald-500/25 dark:bg-emerald-950/20">
+              <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700 dark:text-emerald-300 shrink-0">
+                  <CheckCircle2 className="h-4 w-4" />
+                  联动配置已下发生效
+                </span>
+                <span className="text-slate-500 dark:text-slate-400">
+                  已完成 {doneCount}/{pipelineSteps.length} 步 · Role 填路径不写 <code className="font-mono">data/</code>，Job 模板读 KV v2 需加 <code className="font-mono">/data/</code>
+                </span>
               </div>
-              {st.cta && (
+              <div className="flex flex-wrap items-center gap-3 shrink-0">
                 <Link
-                  to={st.cta.to}
-                  className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                  to={targetVaultId ? `/vault?id=${targetVaultId}&tab=manage` : '/vault'}
+                  className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                 >
-                  <span>{st.cta.label}</span>
-                  <ArrowRight className="h-3 w-3" />
+                  <span>Vault 密钥</span>
+                  <ArrowUpRight className="h-3 w-3" />
                 </Link>
-              )}
+                <Link
+                  to={readyNomad ? `/jobs?cluster_id=${readyNomad.id}` : '/jobs'}
+                  className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  <span>Job 中心</span>
+                  <ArrowUpRight className="h-3 w-3" />
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setGuideExpanded(true)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200/80 bg-white px-2.5 py-1 font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                >
+                  <span>展开 6 步指南</span>
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
-          ))}
-        </div>
-      </div>
+          );
+        }
+        return (
+          <div className="rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-indigo-50/70 via-white to-white p-5 text-sm dark:border-indigo-500/30 dark:from-indigo-950/35 dark:via-slate-900 dark:to-slate-900">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-semibold text-slate-900 dark:text-slate-100">联动上手 6 步通关路线</h2>
+                  <Badge tone={isApplied ? 'green' : 'blue'}>{doneCount} / {pipelineSteps.length}</Badge>
+                </div>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                  照着顺序完成每一步。小提醒：<strong>Role 里填路径不写 data/，Job 模板里读 KV v2 必须多写一层 /data/</strong>。
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {selected && isAdmin && !selected.roles?.length && (
+                  <Button size="sm" variant="primary" onClick={openAddRole}>
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>添加第一个 Role</span>
+                  </Button>
+                )}
+                {selected && isAdmin && needsApply && (
+                  <Button size="sm" variant="primary" loading={applying} disabled={applyPending || deletePending} onClick={() => void applyIntegration()}>
+                    {applyPending ? '正在应用…' : '立即应用联动'}
+                  </Button>
+                )}
+                {isApplied && (
+                  <button
+                    type="button"
+                    onClick={() => setGuideExpanded(false)}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200/80 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                  >
+                    <span>收起指南</span>
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {pipelineSteps.map((st) => (
+                <div
+                  key={st.num}
+                  className={`flex flex-col justify-between rounded-xl border p-3.5 text-xs transition ${
+                    st.done
+                      ? 'border-emerald-200 bg-emerald-50/40 dark:border-emerald-500/30 dark:bg-emerald-950/20'
+                      : 'border-slate-200/90 bg-white/80 dark:border-slate-800 dark:bg-slate-950/40'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-800 dark:text-slate-100">
+                        {st.num}. {st.title}
+                      </span>
+                      {st.done && <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />}
+                    </div>
+                    <p className="mt-1.5 leading-5 text-slate-500 dark:text-slate-400">{st.desc}</p>
+                  </div>
+                  {st.cta && (
+                    <Link
+                      to={st.cta.to}
+                      className="mt-2.5 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      <span>{st.cta.label}</span>
+                      <ArrowRight className="h-3 w-3" />
+                    </Link>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 草稿/未应用醒目提醒 */}
       {selected && needsApply && (
@@ -783,68 +842,74 @@ export function IntegrationsPage() {
                   </Button>
                   <Button
                     size="sm"
-                    variant="primary"
+                    variant={needsApply ? 'primary' : 'secondary'}
                     loading={applying}
                     disabled={applyPending || deletePending}
                     onClick={() => void applyIntegration()}
                   >
-                    {applyPending ? '正在应用…' : '应用联动'}
+                    {applyPending ? '正在应用…' : needsApply ? '应用联动' : '重新应用'}
                   </Button>
                   <Button size="sm" onClick={openDoctorModal}>
                     <ShieldCheck className="h-3.5 w-3.5" />
                     <TermLabel term="链路体检" tip="依次检验 Nomad JWKS 公钥、节点配置、Vault JWT 挂载与 Role，并支持直接跑一次真实任务验证登录读密钥。" />
                   </Button>
-                  <Button size="sm" variant="danger" loading={deleting} disabled={deletePending} onClick={() => void deleteIntegration()}>
+                  <Button size="sm" variant="danger-outline" loading={deleting} disabled={deletePending} onClick={() => void deleteIntegration()}>
                     {deletePending ? '正在删除…' : '删除'}
                   </Button>
                 </div>
               )
             }
           >
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 dark:text-slate-300">
-              <div className="flex flex-wrap items-center gap-4">
-                <span>
-                  <TermLabel term="Auth Mount" tip="Vault 中启用 JWT 认证引擎的挂载路径，用于校验 Nomad 签发给工作负载的身份 JWT（OIDC / JWKS）。" />:{' '}
-                  <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.auth_path}</code>
-                </span>
-                <span>
-                  JWKS 模式: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config?.jwks_mode || 'url'}</code>
-                </span>
-                <span>
-                  Audience: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{(selected.config?.aud || ['vault.io']).join(', ')}</code>
-                </span>
-                <span>
-                  身份 TTL: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config?.identity_ttl || '1h'}</code>
-                </span>
-                {selected.config?.default_role && (
-                  <span>
-                    默认 Role: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config.default_role}</code>
-                  </span>
-                )}
-                <span className="inline-flex items-center gap-1.5">
-                  状态: <StatusBadge value={selected.status} />
-                </span>
+            <div className="mb-5 space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-slate-950/40">
+                <div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                    <TermLabel term="Auth Mount" tip="Vault 中启用 JWT 认证引擎的挂载路径，用于校验 Nomad 签发给工作负载的身份 JWT（OIDC / JWKS）。" />
+                  </div>
+                  <div className="mt-1 font-mono font-semibold text-slate-900 dark:text-slate-100 truncate">{selected.auth_path}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">JWKS 模式</div>
+                  <div className="mt-1 font-mono font-semibold text-slate-900 dark:text-slate-100">{selected.config?.jwks_mode || 'url'}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">Audience</div>
+                  <div className="mt-1 font-mono font-semibold text-slate-900 dark:text-slate-100 truncate">{(selected.config?.aud || ['vault.io']).join(', ')}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">身份 TTL</div>
+                  <div className="mt-1 font-mono font-semibold text-slate-900 dark:text-slate-100">{selected.config?.identity_ttl || '1h'}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">当前状态</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <StatusBadge value={selected.status} />
+                    {selected.config?.default_role && (
+                      <Badge>默认 {selected.config.default_role}</Badge>
+                    )}
+                  </div>
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-3 shrink-0">
+              <div className="flex flex-wrap items-center justify-end gap-4 text-[11px]">
                 <Link
                   to={`/nomad?id=${encodeURIComponent(selected.source_cluster_id)}`}
                   className="inline-flex items-center gap-0.5 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                 >
-                  <span>Nomad 集群</span>
+                  <span>查看 Nomad 集群</span>
                   <ArrowUpRight className="h-3 w-3" />
                 </Link>
                 <Link
                   to={`/vault?id=${encodeURIComponent(selected.target_cluster_id)}`}
                   className="inline-flex items-center gap-0.5 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                 >
-                  <span>Vault 集群</span>
+                  <span>查看 Vault 集群</span>
                   <ArrowUpRight className="h-3 w-3" />
                 </Link>
                 <Link
                   to={`/jobs?cluster_id=${encodeURIComponent(selected.source_cluster_id)}`}
                   className="inline-flex items-center gap-0.5 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                 >
-                  <span>Job 中心</span>
+                  <span>前往 Job 中心</span>
                   <ArrowUpRight className="h-3 w-3" />
                 </Link>
               </div>
@@ -881,11 +946,11 @@ export function IntegrationsPage() {
                           <Pencil className="h-3.5 w-3.5" />
                           <span>编辑</span>
                         </Button>
-                        <Button size="sm" variant="primary" onClick={() => openExampleForRole(r)}>
-                          <Play className="h-3.5 w-3.5" />
+                        <Button size="sm" onClick={() => openExampleForRole(r)}>
+                          <Play className="h-3.5 w-3.5 text-indigo-500" />
                           <span>示例 Job</span>
                         </Button>
-                        <Button size="sm" variant="danger" aria-label={`删除 Role ${r.role_name}`} onClick={() => void deleteRole(r)}>
+                        <Button size="sm" variant="danger-outline" aria-label={`删除 Role ${r.role_name}`} onClick={() => void deleteRole(r)}>
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
@@ -984,8 +1049,8 @@ export function IntegrationsPage() {
                   value={doctorDriver}
                   onChange={(e) => setDoctorDriver(e.target.value as 'raw_exec' | 'docker')}
                 >
-                  <option value="raw_exec">raw_exec（免容器镜像，最快）</option>
-                  <option value="docker">docker（busybox:1.36）</option>
+                  <option value="docker">docker（推荐，默认开箱可用）</option>
+                  <option value="raw_exec">raw_exec（需在节点启用 raw_exec）</option>
                 </Select>
               </div>
             )}

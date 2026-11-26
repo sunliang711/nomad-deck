@@ -117,7 +117,7 @@ func TestJobExampleWithOptions(t *testing.T) {
 	}
 
 	probe := JobExampleWithOptions(role, JobExampleOptions{SecretPath: "secret/apps/postgres", TemplateKind: "probe"})
-	if !strings.Contains(probe, `secret "secret/data/apps/postgres"`) || !strings.Contains(probe, `role = "postgres"`) {
+	if !strings.Contains(probe, `secret "secret/data/apps/postgres"`) || !strings.Contains(probe, `role = "postgres"`) || !strings.Contains(probe, `driver = "docker"`) {
 		t.Fatalf("probe HCL unexpected:\n%s", probe)
 	}
 

@@ -27,26 +27,33 @@ export function PageHeader({
 
 export function Card({
   title,
+  description,
   actions,
   children,
   className = '',
+  bodyClassName = 'p-5',
 }: {
   title?: React.ReactNode;
+  description?: React.ReactNode;
   actions?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
+  bodyClassName?: string;
 }) {
   return (
     <div
-      className={`rounded-2xl border border-[#e3e8f1] bg-white shadow-[0_3px_12px_rgba(15,23,42,0.03)] dark:border-slate-800 dark:bg-slate-900 dark:shadow-[0_3px_16px_rgba(2,6,23,0.35)] ${className}`}
+      className={`rounded-2xl border border-[#e3e8f1] bg-white shadow-[0_2px_10px_rgba(15,23,42,0.03)] dark:border-slate-800/90 dark:bg-[#0f172a]/95 dark:shadow-[0_4px_20px_rgba(2,6,23,0.4)] ${className}`}
     >
       {(title || actions) && (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-3.5 dark:border-slate-800">
-          <div className="font-semibold text-sm text-slate-900 dark:text-slate-100">{title}</div>
-          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-3.5 dark:border-slate-800/90">
+          <div className="min-w-0">
+            <div className="font-semibold text-sm text-slate-900 dark:text-slate-100">{title}</div>
+            {description && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{description}</p>}
+          </div>
+          {actions && <div className="flex flex-wrap items-center gap-2 min-w-0 max-w-full">{actions}</div>}
         </div>
       )}
-      <div className="p-5">{children}</div>
+      <div className={bodyClassName}>{children}</div>
     </div>
   );
 }
@@ -54,7 +61,7 @@ export function Card({
 type Tone = 'neutral' | 'green' | 'amber' | 'red' | 'blue';
 
 const statusLabels: Record<string, string> = {
-  healthy: '健康', online: '在线', running: '运行中', success: '成功', succeeded: '成功',
+  healthy: '健康', online: '在线', running: '运行中', success: '成功', succeeded: '成功', successful: '成功',
   active: '运行中', ok: '正常', completed: '已完成', complete: '已完成', enabled: '已启用', ready: '就绪',
   alive: '存活', leaving: '离开中', left: '已退出', stopped: '已停止', ineligible: '不可调度', draining: '排空中',
   initialized: '已初始化', uninitialized: '待部署', unknown: '待探测', degraded: '状态异常',
@@ -104,6 +111,7 @@ export function statusTone(status?: string): Tone {
     case 'running':
     case 'success':
     case 'succeeded':
+    case 'successful':
     case 'active':
     case 'ok':
     case 'completed':
@@ -158,17 +166,19 @@ export function Button({
   children,
   ...rest
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
+  variant?: 'primary' | 'secondary' | 'danger' | 'danger-outline' | 'ghost';
   size?: 'sm' | 'md';
   loading?: boolean;
 }) {
   const variants = {
     primary:
-      'bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-indigo-400 shadow-[0_2px_6px_rgba(79,70,229,0.18)]',
+      'bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-indigo-400 shadow-[0_2px_6px_rgba(79,70,229,0.22)]',
     secondary:
-      'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700',
-    danger: 'bg-rose-600 text-white hover:bg-rose-700 disabled:bg-rose-400',
-    ghost: 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800',
+      'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-300 dark:border-slate-700/90 dark:bg-slate-800/90 dark:text-slate-200 dark:hover:bg-slate-700/90 dark:hover:border-slate-600',
+    danger: 'bg-rose-600 text-white hover:bg-rose-700 disabled:bg-rose-400 shadow-[0_2px_6px_rgba(225,29,72,0.18)]',
+    'danger-outline':
+      'border border-rose-200/90 bg-white text-rose-600 hover:bg-rose-50 hover:border-rose-300 dark:border-rose-500/35 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20 dark:hover:border-rose-500/50',
+    ghost: 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white',
   };
   const sizes = {
     sm: 'px-2.5 py-1.5 text-xs rounded-lg',
@@ -180,7 +190,7 @@ export function Button({
       {...rest}
       disabled={Boolean(disabled || loading)}
       aria-busy={loading || undefined}
-      className={`inline-flex items-center justify-center gap-1.5 font-medium transition disabled:cursor-not-allowed disabled:opacity-55 ${variants[variant]} ${sizes[size]} ${className}`}
+      className={`inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-medium transition disabled:cursor-not-allowed disabled:opacity-55 ${variants[variant]} ${sizes[size]} ${className}`}
     >
       {loading && <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />}
       {children}
@@ -250,9 +260,9 @@ export function InfoTip({ text }: { text: string }) {
         onFocus={show}
         onBlur={() => setOpen(false)}
         onClick={(e) => e.stopPropagation()}
-        className="ml-0.5 inline-flex -translate-y-0.5 cursor-help items-center align-super text-slate-400 transition hover:text-indigo-600 focus:outline-none dark:text-slate-500 dark:hover:text-indigo-400"
+        className="ml-1 inline-flex cursor-help items-center align-middle text-slate-400 transition hover:text-indigo-600 focus:outline-none dark:text-slate-500 dark:hover:text-indigo-400"
       >
-        <Info className="h-3 w-3" />
+        <Info className="h-3.5 w-3.5" />
       </span>
       {open &&
         typeof document !== 'undefined' &&
@@ -276,7 +286,7 @@ export function InfoTip({ text }: { text: string }) {
 
 export function TermLabel({ term, tip }: { term: React.ReactNode; tip: string }) {
   return (
-    <span className="inline-flex items-baseline">
+    <span className="inline-flex items-center">
       <span>{term}</span>
       <InfoTip text={tip} />
     </span>
@@ -1154,37 +1164,95 @@ export function SectionTabs({
   tabs,
   active,
   onChange,
+  variant = 'pill',
 }: {
-  tabs: Array<{ id: string; label: React.ReactNode; tip?: string; badge?: string | number }>;
+  tabs: Array<{ id: string; label: React.ReactNode; tip?: string; title?: string; badge?: string | number }>;
   active: string;
   onChange: (id: string) => void;
+  variant?: 'pill' | 'underline';
 }) {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    const index = buttons.indexOf(event.target as HTMLButtonElement);
+    if (index < 0) return;
+    event.preventDefault();
+    const next =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? tabs.length - 1
+          : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    onChange(tabs[next].id);
+    buttons[next]?.focus();
+  };
+
+  if (variant === 'underline') {
+    return (
+      <nav
+        role="tablist"
+        aria-label="页面分区"
+        onKeyDown={handleKeyDown}
+        className="max-w-full overflow-x-auto scrollbar-none inline-flex items-center gap-1 border-b border-slate-200/80 dark:border-slate-800"
+      >
+        {tabs.map((t) => {
+          const isActive = active === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              title={t.title || t.tip}
+              onClick={() => onChange(t.id)}
+              className={`relative inline-flex shrink-0 items-center gap-1.5 px-3 py-2.5 text-xs sm:text-[13px] whitespace-nowrap transition ${
+                isActive
+                  ? 'font-semibold text-indigo-600 dark:text-indigo-300'
+                  : 'font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+              }`}
+            >
+              <span>{t.label}</span>
+              {t.badge !== undefined && (
+                <span
+                  className={`inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full font-medium leading-none ${
+                    isActive
+                      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/25 dark:text-indigo-200'
+                      : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                  }`}
+                >
+                  {t.badge}
+                </span>
+              )}
+              {isActive && (
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-indigo-600 dark:bg-indigo-400"
+                />
+              )}
+            </button>
+          );
+        })}
+      </nav>
+    );
+  }
+
   return (
     <nav
       role="tablist"
       aria-label="页面分区"
-      onKeyDown={(event) => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
-        const index = buttons.indexOf(event.target as HTMLButtonElement);
-        if (index < 0) return;
-        event.preventDefault();
-        const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
-          : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
-        onChange(tabs[next].id);
-        buttons[next]?.focus();
-      }}
-      className="max-w-full overflow-x-auto bg-white dark:bg-slate-900 rounded-xl border border-[#e3e8f1] dark:border-slate-800 p-1.5 inline-flex items-center gap-1 shadow-[0_2px_8px_rgba(15,23,42,0.02)]"
+      onKeyDown={handleKeyDown}
+      className="max-w-full overflow-x-auto scrollbar-none bg-white dark:bg-slate-900/95 rounded-xl border border-[#e3e8f1] dark:border-slate-800 p-1 inline-flex items-center gap-1 shadow-[0_2px_8px_rgba(15,23,42,0.02)]"
     >
       {tabs.map((t) => {
         const isActive = active === t.id;
         return (
           <div
             key={t.id}
-            className={`inline-flex shrink-0 items-center rounded-[10px] transition border ${
+            className={`inline-flex shrink-0 items-center rounded-[9px] transition border ${
               isActive
-                ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30'
-                : 'border-transparent text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-indigo-50/90 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-200 border-indigo-200/80 dark:border-indigo-500/35 shadow-[0_1px_2px_rgba(79,70,229,0.08)]'
+                : 'border-transparent text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-slate-100'
             }`}
           >
             <button
@@ -1192,17 +1260,18 @@ export function SectionTabs({
               role="tab"
               aria-selected={isActive}
               tabIndex={isActive ? 0 : -1}
+              title={t.title}
               onClick={() => onChange(t.id)}
-              className={`inline-flex items-center gap-1.5 rounded-[10px] py-2 text-xs sm:text-sm whitespace-nowrap ${
-                t.tip ? 'pl-3.5 pr-1.5' : 'px-3.5'
+              className={`inline-flex items-center gap-1.5 rounded-[9px] py-1.5 text-xs sm:text-[13px] whitespace-nowrap ${
+                t.tip ? 'pl-3 pr-1' : 'px-3'
               } ${isActive ? 'font-semibold' : 'font-medium'}`}
             >
               <span>{t.label}</span>
               {t.badge !== undefined && (
                 <span
-                  className={`inline-flex items-center text-[11px] px-1.5 py-0.5 rounded font-medium leading-none ${
+                  className={`inline-flex items-center text-[11px] px-1.5 py-0.5 rounded-md font-medium leading-none ${
                     isActive
-                      ? 'bg-indigo-100 dark:bg-indigo-500/25 text-indigo-700 dark:text-indigo-200'
+                      ? 'bg-indigo-100 dark:bg-indigo-500/30 text-indigo-700 dark:text-indigo-100'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
                   }`}
                 >
@@ -1211,7 +1280,7 @@ export function SectionTabs({
               )}
             </button>
             {t.tip && (
-              <span className="pr-2.5 flex items-center">
+              <span className="pr-2 flex items-center">
                 <InfoTip text={t.tip} />
               </span>
             )}

@@ -41,34 +41,9 @@ import { VisualJobBuilder, type VisualJobBuilderHandle } from '../components/Vis
 
 const STARTER_SAMPLES: Array<{ id: string; label: string; desc: string; hcl: string }> = [
   {
-    id: 'raw_exec',
-    label: 'Shell 入门 (raw_exec)',
-    desc: '无需 Docker，直接在节点运行轻量脚本',
-    hcl: `job "hello-shell" {
-  datacenters = ["dc1"]
-  type        = "service"
-
-  group "app" {
-    count = 1
-    task "echo" {
-      driver = "raw_exec"
-      config {
-        command = "/bin/sh"
-        args    = ["-c", "while true; do echo 'NomadDeck hello at '$(date); sleep 15; done"]
-      }
-      resources {
-        cpu    = 50
-        memory = 64
-      }
-    }
-  }
-}
-`,
-  },
-  {
     id: 'docker',
     label: 'Nginx 容器 (docker)',
-    desc: '标准 Docker 容器服务示例',
+    desc: '标准 Docker 容器服务示例，默认开箱即可在 Nomad Client 运行',
     hcl: `job "hello" {
   datacenters = ["dc1"]
   type        = "service"
@@ -83,31 +58,6 @@ const STARTER_SAMPLES: Array<{ id: string; label: string; desc: string; hcl: str
       resources {
         cpu    = 100
         memory = 128
-      }
-    }
-  }
-}
-`,
-  },
-  {
-    id: 'batch',
-    label: '一次性批处理 (batch)',
-    desc: '执行完即退出的短任务示例',
-    hcl: `job "hello-batch" {
-  datacenters = ["dc1"]
-  type        = "batch"
-
-  group "job" {
-    count = 1
-    task "run" {
-      driver = "raw_exec"
-      config {
-        command = "/bin/sh"
-        args    = ["-c", "echo 'Batch task finished on '$(hostname); uname -a"]
-      }
-      resources {
-        cpu    = 50
-        memory = 32
       }
     }
   }
@@ -183,7 +133,110 @@ EOT
 }
 `,
   },
+  {
+    id: 'redis',
+    label: 'Redis + Vault',
+    desc: '先配置 redis Role 与 secret/apps/redis（含 password 字段），通过 0600 内存密码文件安全注入 requirepass。',
+    hcl: `job "redis" {
+  datacenters = ["dc1"]
+  type        = "service"
 
+  group "cache" {
+    count = 1
+    network {
+      port "redis" {
+        static = 6379
+        to     = 6379
+      }
+    }
+
+    ephemeral_disk {
+      size   = 512
+      sticky = true
+    }
+
+    task "redis" {
+      driver = "docker"
+      config {
+        image      = "redis:7-alpine"
+        ports      = ["redis"]
+        entrypoint = ["/bin/sh", "-c"]
+        args       = ["exec docker-entrypoint.sh redis-server --bind 0.0.0.0 --port 6379 --appendonly yes --requirepass \\"$(cat /secrets/redis-password)\\""]
+      }
+
+      vault {
+        role = "redis"
+        env  = false
+      }
+
+      template {
+        destination = "secrets/redis-password"
+        perms       = "0600"
+        change_mode = "restart"
+        data        = <<EOT
+{{ with secret "secret/data/apps/redis" }}{{ .Data.data.password }}{{ end }}
+EOT
+      }
+
+      resources {
+        cpu    = 150
+        memory = 128
+      }
+    }
+  }
+}
+`,
+  },
+  {
+    id: 'raw_exec',
+    label: 'Shell 入门 (需开启 raw_exec)',
+    desc: '无需 Docker，直接在节点运行轻量脚本（需在节点插件配置中开启 raw_exec 驱动）',
+    hcl: `job "hello-shell" {
+  datacenters = ["dc1"]
+  type        = "service"
+
+  group "app" {
+    count = 1
+    task "echo" {
+      driver = "raw_exec"
+      config {
+        command = "/bin/sh"
+        args    = ["-c", "while true; do echo 'NomadDeck hello at '$(date); sleep 15; done"]
+      }
+      resources {
+        cpu    = 50
+        memory = 64
+      }
+    }
+  }
+}
+`,
+  },
+  {
+    id: 'batch',
+    label: '一次性批处理 (batch · 需开启 raw_exec)',
+    desc: '执行完即退出的短任务示例（需在节点插件配置中开启 raw_exec 驱动）',
+    hcl: `job "hello-batch" {
+  datacenters = ["dc1"]
+  type        = "batch"
+
+  group "job" {
+    count = 1
+    task "run" {
+      driver = "raw_exec"
+      config {
+        command = "/bin/sh"
+        args    = ["-c", "echo 'Batch task finished on '$(hostname); uname -a"]
+      }
+      resources {
+        cpu    = 50
+        memory = 32
+      }
+    }
+  }
+}
+`,
+  },
 ];
 
 const sampleHCL = STARTER_SAMPLES[0].hcl;
@@ -637,67 +690,63 @@ export function JobCenterPage() {
         subtitle="编写任务 → 校验配置 → 预览计划 → 确认运行，支持 HCL、可视化与 JSON"
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={() => { void loadClusters(); void loadJobs(); }}>
-              <RefreshCw className="h-3.5 w-3.5" />
+            <Button onClick={() => { void loadClusters(); void loadJobs(); }}>
+              <RefreshCw className="h-4 w-4" />
               <span>刷新</span>
             </Button>
             {isAdmin && clusterId && (
-              <Button
-                size="sm"
-                onClick={() =>
-                  void apiDownload(`/api/v1/nomad/${clusterId}/job-ops/export`, { namespace }, 'nomad-jobs.zip')
-                    .catch((ex) => toast.error(ex.message))
-                }
-              >
-                <Download className="h-3.5 w-3.5" />
-                <span>批量导出 HCL</span>
-              </Button>
+              <>
+                <Button
+                  onClick={() =>
+                    void apiDownload(`/api/v1/nomad/${clusterId}/job-ops/export`, { namespace }, 'nomad-jobs.zip')
+                      .catch((ex) => toast.error(ex.message))
+                  }
+                >
+                  <Download className="h-4 w-4" />
+                  <span>批量导出 HCL</span>
+                </Button>
+                <Button variant="primary" onClick={startFreshDraft}>
+                  <FilePlus2 className="h-4 w-4" />
+                  <span>新建任务</span>
+                </Button>
+              </>
             )}
           </div>
         }
       />
 
-      <div className="flex flex-wrap items-center gap-3">
-        <ItemSwitcher
-          label="Nomad 集群"
-          selectedId={clusterId}
-          disabled={modeBusy || (editMode === 'visual' && !visualReady)}
-          onSelect={(id) => {
-            setClusterId(id);
-            clearPlan();
-          }}
-          items={clusters.map((c) => ({
-            id: c.id,
-            name: c.name,
-            status: c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status,
-          }))}
-        />
-        <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-          <span className="shrink-0">命名空间</span>
-          <div className="w-36">
-            <Select
-              aria-label="任务命名空间"
-              size="sm"
-              value={namespace}
-              disabled={modeBusy || (editMode === 'visual' && !visualReady)}
-              onChange={(e) => { setNamespace(e.target.value); clearPlan(); }}
-            >
-              {namespaceOptions.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-            </Select>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <ItemSwitcher
+            label="Nomad 集群"
+            selectedId={clusterId}
+            disabled={modeBusy || (editMode === 'visual' && !visualReady)}
+            onSelect={(id) => {
+              setClusterId(id);
+              clearPlan();
+            }}
+            items={clusters.map((c) => ({
+              id: c.id,
+              name: c.name,
+              status: c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status,
+            }))}
+          />
+          <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+            <span className="shrink-0">命名空间</span>
+            <div className="w-36">
+              <Select
+                aria-label="任务命名空间"
+                size="sm"
+                value={namespace}
+                disabled={modeBusy || (editMode === 'visual' && !visualReady)}
+                onChange={(e) => { setNamespace(e.target.value); clearPlan(); }}
+              >
+                {namespaceOptions.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+              </Select>
+            </div>
           </div>
         </div>
-      </div>
 
-      <ErrorAlert message={err} onClose={() => setErr('')} />
-
-      {needsDeployment && (
-        <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
-          <p>「{selectedCluster.name}」尚未部署。可以先编写配置，部署完成后再校验和运行。</p>
-          <Link to={`/nomad?id=${clusterId}`} className="primary-button">前往部署集群</Link>
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionTabs
           tabs={[
             { id: 'list', label: '任务与模板', badge: jobs.length + templates.length },
@@ -709,13 +758,16 @@ export function JobCenterPage() {
           active={pageTab}
           onChange={(next) => setPageTab(next as 'list' | 'builder')}
         />
-        {isAdmin && pageTab === 'list' && (
-          <Button size="sm" variant="primary" onClick={startFreshDraft}>
-            <FilePlus2 className="h-3.5 w-3.5" />
-            <span>新建任务</span>
-          </Button>
-        )}
       </div>
+
+      <ErrorAlert message={err} onClose={() => setErr('')} />
+
+      {needsDeployment && (
+        <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
+          <p>「{selectedCluster.name}」尚未部署。可以先编写配置，部署完成后再校验和运行。</p>
+          <Link to={`/nomad?id=${clusterId}`} className="primary-button">前往部署集群</Link>
+        </div>
+      )}
 
       {pageTab === 'list' && (
         <div className="space-y-5">
@@ -732,24 +784,14 @@ export function JobCenterPage() {
             </div>
           )}
 
-          <Card
-            title={`运行中的 Job (${jobs.length})`}
-            actions={
-              isAdmin ? (
-                <Button size="sm" variant="primary" onClick={startFreshDraft}>
-                  <FilePlus2 className="h-3.5 w-3.5" />
-                  <span>新建任务</span>
-                </Button>
-              ) : undefined
-            }
-          >
+          <Card title={`运行中的 Job (${jobs.length})`}>
             {jobs.length === 0 ? (
               <EmptyState
                 title="暂无运行中的 Job"
-                description="工作台已准备好示例配置，先校验再预览计划即可提交运行。"
+                description="工作台已内置 Nginx、PostgreSQL + Vault、Redis + Vault 等示例模板，前往编排工作台即可一键校验并提交运行。"
                 action={
                   isAdmin ? (
-                    <Button size="sm" variant="primary" onClick={startFreshDraft}>
+                    <Button size="sm" onClick={startFreshDraft}>
                       <FilePlus2 className="h-3.5 w-3.5" />
                       <span>前往编排工作台</span>
                     </Button>
@@ -986,8 +1028,9 @@ export function JobCenterPage() {
           <div className="space-y-3 text-xs">
             <div className="flex flex-wrap items-center justify-between gap-2.5">
               <SectionTabs
+                variant="underline"
                 tabs={[
-                  { id: 'hcl', label: '原生 HCL', tip: 'Nomad 原生 HashiCorp Configuration Language 声明式任务定义。' },
+                  { id: 'hcl', label: '原生 HCL', title: 'Nomad 原生 HashiCorp Configuration Language 声明式任务定义' },
                   ...(isAdmin ? [{ id: 'visual', label: '可视化编排' }] : []),
                   { id: 'json', label: 'JSON 定义' },
                 ]}
@@ -1117,28 +1160,27 @@ export function JobCenterPage() {
             )}
 
             {plan && (
-              <div className="space-y-2 rounded-xl border border-indigo-300 bg-indigo-50/40 p-3.5 dark:border-indigo-500/40 dark:bg-indigo-950/30">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="font-semibold text-indigo-900 dark:text-indigo-200 break-all">
-                    调度变更预览 · 请核对后点击上方或右侧「3. 确认运行」{' '}
-                    <span className="font-mono font-normal text-xs opacity-75">{plan.plan_id}</span>
+              <div className="space-y-2.5 rounded-xl border border-indigo-200/90 bg-indigo-50/40 p-4 dark:border-indigo-500/40 dark:bg-indigo-950/30">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-indigo-950 dark:text-indigo-100">
+                      调度变更预览 · 请核对后点击上方「3. 确认运行」
+                    </span>
+                    <Badge tone="blue">{({ Added: '创建任务', Edited: '更新任务', None: '配置无变化', Deleted: '删除任务' } as Record<string, string>)[plan.diff?.Type] || '配置变更'}</Badge>
+                  </div>
+                  <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400" title={plan.plan_id}>
+                    Plan #{String(plan.plan_id || '').slice(0, 8)}
                   </span>
-                  {isAdmin && (
-                    <Button size="sm" variant="primary" onClick={() => void runApply()}>
-                      <Play className="h-3.5 w-3.5" />
-                      <span>3. 确认运行</span>
-                    </Button>
-                  )}
                 </div>
-                <p className="leading-5 text-indigo-900 dark:text-indigo-200">
-                  任务 {plan.job_id} · 命名空间 {plan.namespace} · {({ Added: '创建任务', Edited: '更新任务', None: '配置无变化', Deleted: '删除任务' } as Record<string, string>)[plan.diff?.Type] || '配置变更'}
+                <p className="leading-5 text-slate-700 dark:text-slate-200">
+                  任务 <code className="font-mono font-semibold">{plan.job_id}</code> · 命名空间 <code className="font-mono">{plan.namespace}</code>
                 </p>
                 {(plan.warnings || plan.validation_warnings) && <p role="alert" className="whitespace-pre-wrap text-amber-700 dark:text-amber-300">{[plan.validation_warnings, plan.warnings].filter(Boolean).join('\n')}</p>}
                 {plan.failed_tg_allocs && Object.keys(plan.failed_tg_allocs).length > 0 && <p role="alert" className="text-red-700 dark:text-red-300">部分任务无法调度，请展开详情检查资源或约束条件。</p>}
                 <details>
-                  <summary className="cursor-pointer py-1 font-medium">查看调度变更详情</summary>
+                  <summary className="cursor-pointer py-1 font-medium text-indigo-700 dark:text-indigo-300">查看调度变更详情</summary>
                   <pre className="mt-2 max-h-56 overflow-auto rounded-lg bg-slate-950 p-2.5 font-mono text-[11px] text-slate-100">
-                    {JSON.stringify({ diff: plan.diff, failed_tg_allocs: plan.failed_tg_allocs }, null, 2)}
+                    {JSON.stringify({ plan_id: plan.plan_id, diff: plan.diff, failed_tg_allocs: plan.failed_tg_allocs }, null, 2)}
                   </pre>
                 </details>
               </div>

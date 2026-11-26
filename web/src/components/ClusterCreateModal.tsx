@@ -296,7 +296,12 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
 
             <details className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5">
               <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-200">
-                高级配置 <span className="text-xs font-normal text-slate-400">· CNI / Host Volume / 驱动插件 / TLS 与端口（初次使用保留默认即可）</span>
+                高级配置{' '}
+                <span className="text-xs font-normal text-slate-400">
+                  {isNomad
+                    ? '· Region / Datacenter / CNI / Host Volume / 驱动插件 / TLS 与端口（初次使用保留默认即可）'
+                    : '· 统一业务入口 URL（初次使用保留默认即可）'}
+                </span>
               </summary>
               <div className="mt-4 space-y-4">
                 {isNomad && (

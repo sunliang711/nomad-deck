@@ -27,7 +27,7 @@ type DoctorInput struct {
 	// DeniedNamespace runs the same probe from another namespace, which
 	// Vault must refuse.
 	DeniedNamespace string `json:"denied_namespace"`
-	// Driver is the task driver of the probe job (default raw_exec).
+	// Driver is the task driver of the probe job (default docker).
 	Driver string `json:"driver"`
 }
 
@@ -269,7 +269,7 @@ func (s *Service) loginProbe(ctx context.Context, l *loaded, in DoctorInput, add
 	run := func(ns string) (bool, string) {
 		driver := in.Driver
 		if driver == "" {
-			driver = "raw_exec"
+			driver = "docker"
 		}
 		if driver != "raw_exec" && driver != "docker" {
 			return false, "不支持的探测 Driver：" + driver

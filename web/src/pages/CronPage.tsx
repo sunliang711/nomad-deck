@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Loader2, Plus, RefreshCw, Shield, Trash2 } from 'lucide-react';
+import { Loader2, Play, Plus, RefreshCw, Shield, Trash2 } from 'lucide-react';
 import { apiDelete, apiGet, apiPost, apiPut, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { describeCron } from '../lib/cron';
@@ -618,7 +618,7 @@ export function CronPage() {
           <>
             <Button onClick={() => void load()}>
               <RefreshCw className="h-4 w-4" />
-              <span>刷新任务状态</span>
+              <span>刷新</span>
             </Button>
             {isAdmin && (
               <>
@@ -737,11 +737,11 @@ export function CronPage() {
                             <>
                               <Button
                                 size="sm"
-                                variant="primary"
+                                variant="secondary"
                                 disabled={Boolean(runningId)}
                                 onClick={() => void triggerJob(j)}
                               >
-                                {isRunning && <Loader2 className="w-3 h-3 animate-spin" />}
+                                {isRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />}
                                 <span>{isRunning ? '执行中' : '立即执行'}</span>
                               </Button>
                               <Button size="sm" onClick={() => openEditDrawer(j)}>
@@ -755,7 +755,7 @@ export function CronPage() {
                           {isAdmin && !j.is_builtin && (
                             <Button
                               size="sm"
-                              variant="danger"
+                              variant="danger-outline"
                               aria-label={`删除 ${j.name}`}
                               onClick={() => void deleteCustomJob(j)}
                             >

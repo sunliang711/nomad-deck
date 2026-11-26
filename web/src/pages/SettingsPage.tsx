@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { RefreshCw, RotateCw } from 'lucide-react';
+import { CheckCircle2, RefreshCw, RotateCw, X, XCircle } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../components/Toast';
@@ -95,6 +95,12 @@ export function SettingsPage() {
     use_for_self_update: false,
   });
   const [savedProxySnap, setSavedProxySnap] = useState('');
+  const [proxyTestReport, setProxyTestReport] = useState<{
+    title: string;
+    tone: 'ok' | 'partial' | 'fail';
+    exit_ip?: string;
+    results: Array<{ name: string; ok: boolean; status_code?: number; latency_ms?: number; error?: string }>;
+  } | null>(null);
   const [masterKey, setMasterKey] = useState<any>(null);
   const [showRotatePw, setShowRotatePw] = useState(false);
   const [err, setErr] = useState('');
@@ -369,15 +375,28 @@ export function SettingsPage() {
           : okCount > 0
           ? `代理部分连通 (${okCount}/${results.length})`
           : `代理测试失败 (0/${results.length})`;
-      if (okCount === results.length && results.length > 0) {
-        toast.success(title, { position: 'top-right', durationMs: 3000, details });
-      } else if (okCount > 0) {
-        toast.info(title, { position: 'top-right', durationMs: 3000, details });
+      const tone: 'ok' | 'partial' | 'fail' =
+        okCount === results.length && results.length > 0 ? 'ok' : okCount > 0 ? 'partial' : 'fail';
+      setProxyTestReport({
+        title,
+        tone,
+        exit_ip: rep.exit_ip,
+        results,
+      });
+      if (tone === 'ok') {
+        toast.success(title);
+      } else if (tone === 'partial') {
+        toast.info(title);
       } else {
-        toast.error(title, { position: 'top-right', durationMs: 3000, details });
+        toast.error(title, { details });
       }
     } catch (ex: any) {
-      toast.error(ex?.message || '代理测试失败', { position: 'top-right', durationMs: 3000 });
+      setProxyTestReport({
+        title: ex?.message || '代理测试失败',
+        tone: 'fail',
+        results: [],
+      });
+      toast.error(ex?.message || '代理测试失败');
     } finally {
       setTestingProxy(false);
     }
@@ -403,12 +422,12 @@ export function SettingsPage() {
       <SectionTabs
         tabs={[
           { id: 'general', label: '基础与调度' },
-          { id: 'releases', label: '版本与分发源', tip: '控制 Nomad / Vault / Docker 默认版本、镜像源与下载限速。' },
-          { id: 'clusters', label: '集群与快照', tip: '管理 Raft 快照目录与保留数、证书告警阈值及终端超时。' },
+          { id: 'releases', label: '版本与分发源', title: '控制 Nomad / Vault / Docker 默认版本、镜像源与下载限速' },
+          { id: 'clusters', label: '集群与快照', title: '管理 Raft 快照目录与保留数、证书告警阈值及终端超时' },
           {
             id: 'proxy',
             label: '下载代理',
-            tip: '配置控制面访问 HashiCorp / GitHub / Release 下载时使用的代理与默认生效范围。',
+            title: '配置控制面访问 HashiCorp / GitHub / Release 下载时使用的代理与默认生效范围',
             badge: proxy.configured ? '已启用' : '直连',
           },
           ...(isAdmin
@@ -416,7 +435,7 @@ export function SettingsPage() {
                 {
                   id: 'security',
                   label: '主密钥与安全',
-                  tip: '用于加密数据库中 SSH 私钥、Vault 解封密钥和灾备凭据的主密钥状态与轮换。',
+                  title: '用于加密数据库中 SSH 私钥、Vault 解封密钥和灾备凭据的主密钥状态与轮换',
                 },
               ]
             : []),
@@ -433,7 +452,7 @@ export function SettingsPage() {
         <>
           {(tab === 'general' || tab === 'releases' || tab === 'clusters') && (
             <Card title={activeGroupTitle}>
-              <form onSubmit={saveSettings} className="space-y-5 max-w-4xl">
+              <form onSubmit={saveSettings} className="space-y-5">
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   {visibleMeta.map((m) => {
                     const labelNode = m.tip ? <TermLabel term={m.label} tip={m.tip} /> : m.label;
@@ -515,7 +534,7 @@ export function SettingsPage() {
               title="下载代理（HTTP / HTTPS / SOCKS5）"
               actions={<StatusBadge value={proxy.configured ? 'enabled' : 'disabled'} label={proxy.configured ? '已启用自定义代理' : '直连'} />}
             >
-              <form onSubmit={saveProxy} className="space-y-6 max-w-4xl">
+              <form onSubmit={saveProxy} className="space-y-6">
                 <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                   作用于控制面拉取 Nomad / Vault 官方安装包、控制面 GitHub Release 自更新以及版本检查请求，保存后立即生效。
                 </p>
@@ -590,6 +609,10 @@ export function SettingsPage() {
                             onPaste={(e) => {
                               const text = e.clipboardData?.getData('text') || '';
                               if (pasteProxyURL(text)) e.preventDefault();
+                            }}
+                            onBlur={(e) => {
+                              const val = e.target.value.trim();
+                              if (/^(https?|socks5h?):\/\//i.test(val)) pasteProxyURL(val);
                             }}
                             onChange={(e) => setProxy({ ...proxy, host: e.target.value })}
                           />
@@ -676,6 +699,62 @@ export function SettingsPage() {
                   </div>
                 )}
 
+                {proxyTestReport && (
+                  <div
+                    role="status"
+                    className={`rounded-xl border p-4 text-xs space-y-2.5 ${
+                      proxyTestReport.tone === 'ok'
+                        ? 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/30 dark:bg-emerald-950/25'
+                        : proxyTestReport.tone === 'partial'
+                          ? 'border-amber-200 bg-amber-50/60 dark:border-amber-500/30 dark:bg-amber-950/25'
+                          : 'border-rose-200 bg-rose-50/60 dark:border-rose-500/30 dark:bg-rose-950/25'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2 font-semibold text-slate-900 dark:text-slate-100">
+                        <span>{proxyTestReport.title}</span>
+                        {proxyTestReport.exit_ip && (
+                          <span className="rounded-md bg-white/80 px-2 py-0.5 font-mono text-[11px] font-normal text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+                            出口 IP：{proxyTestReport.exit_ip}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="关闭测试报告"
+                        onClick={() => setProxyTestReport(null)}
+                        className="rounded p-1 text-slate-400 hover:bg-white/60 hover:text-slate-700 dark:hover:bg-slate-800"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    {proxyTestReport.results.length > 0 && (
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {proxyTestReport.results.map((r) => (
+                          <div
+                            key={r.name}
+                            className="flex items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-white/90 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/80"
+                          >
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              {r.ok ? (
+                                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                              ) : (
+                                <XCircle className="h-3.5 w-3.5 shrink-0 text-rose-500" />
+                              )}
+                              <span className="truncate font-medium text-slate-800 dark:text-slate-200">{r.name}</span>
+                            </div>
+                            <span className="shrink-0 font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                              {r.ok
+                                ? `HTTP ${r.status_code ?? 200}${typeof r.latency_ms === 'number' ? ` · ${r.latency_ms}ms` : ''}`
+                                : r.error || '失败'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {isAdmin && (
                   <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200 dark:border-slate-800">
                     <span role="status" className={`text-xs ${proxyDirty ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'}`}>
@@ -683,7 +762,7 @@ export function SettingsPage() {
                     </span>
                     <div className="flex flex-wrap items-center gap-2">
                       {proxy.configured && (
-                        <Button variant="danger" loading={clearingProxy} onClick={() => void clearProxy()}>
+                        <Button variant="danger-outline" loading={clearingProxy} onClick={() => void clearProxy()}>
                           清空代理
                         </Button>
                       )}

@@ -499,27 +499,27 @@ export function VersionPage() {
 
       <Card title="系统信息">
         {info ? (
-          <dl className="divide-y divide-slate-100 dark:divide-slate-800 text-xs sm:text-sm">
-            <div className="grid grid-cols-[100px_1fr] sm:grid-cols-[130px_1fr] py-2 gap-3">
-              <dt className="text-slate-500 dark:text-slate-400">提交</dt>
-              <dd className="font-mono text-slate-800 dark:text-slate-200">{info.commit || 'dev'}</dd>
+          <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs sm:text-sm">
+            <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/40">
+              <dt className="text-[11px] text-slate-500 dark:text-slate-400">构建提交</dt>
+              <dd className="mt-1 font-mono font-medium text-slate-800 dark:text-slate-200 truncate">{info.commit || 'dev'}</dd>
             </div>
-            <div className="grid grid-cols-[100px_1fr] sm:grid-cols-[130px_1fr] py-2 gap-3">
-              <dt className="text-slate-500 dark:text-slate-400">构建时间</dt>
-              <dd className="font-mono text-slate-800 dark:text-slate-200">{info.build_date || '-'}</dd>
+            <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/40">
+              <dt className="text-[11px] text-slate-500 dark:text-slate-400">构建时间</dt>
+              <dd className="mt-1 font-mono font-medium text-slate-800 dark:text-slate-200 truncate">{info.build_date || '-'}</dd>
             </div>
-            <div className="grid grid-cols-[100px_1fr] sm:grid-cols-[130px_1fr] py-2 gap-3">
-              <dt className="text-slate-500 dark:text-slate-400">运行环境</dt>
-              <dd className="font-mono text-slate-800 dark:text-slate-200">
+            <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/40">
+              <dt className="text-[11px] text-slate-500 dark:text-slate-400">运行环境</dt>
+              <dd className="mt-1 font-mono font-medium text-slate-800 dark:text-slate-200 truncate">
                 {[info.go_version, info.platform].filter(Boolean).join(' · ') || '-'}
               </dd>
             </div>
-            <div className="grid grid-cols-[100px_1fr] sm:grid-cols-[130px_1fr] py-2 gap-3">
-              <dt className="text-slate-500 dark:text-slate-400">发布通道</dt>
-              <dd className="flex flex-wrap items-center gap-2 text-slate-800 dark:text-slate-200">
-                <span>{info.channel === 'prerelease' ? '预发布（prerelease）' : '正式版（stable）'}</span>
+            <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/40">
+              <dt className="text-[11px] text-slate-500 dark:text-slate-400">发布通道</dt>
+              <dd className="mt-1 flex flex-wrap items-center gap-2 text-slate-800 dark:text-slate-200">
+                <span className="font-medium">{info.channel === 'prerelease' ? '预发布' : '正式版 (stable)'}</span>
                 <Link to="/settings" className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
-                  前往系统设置调整
+                  调整
                 </Link>
               </dd>
             </div>
@@ -790,7 +790,7 @@ export function VersionPage() {
 
           {isAdmin &&
             (info?.manual_rollback?.available ? (
-              <Button variant="danger" loading={rollbackBusy} onClick={() => void handleManualRollback()}>
+              <Button variant="danger-outline" loading={rollbackBusy} onClick={() => void handleManualRollback()}>
                 <RotateCcw className="h-3.5 w-3.5" />
                 <span>回退到 {info.manual_rollback.target_version}</span>
               </Button>

@@ -226,7 +226,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="lg:pl-64 min-h-screen flex flex-col">
-        <header className="h-[72px] border-b border-slate-200/70 dark:border-slate-800 bg-white/90 dark:bg-slate-900/85 backdrop-blur flex items-center justify-between gap-3 px-5 sm:px-8 sticky top-0 z-20">
+        <header className="h-16 border-b border-slate-200/70 dark:border-slate-800/90 bg-white/90 dark:bg-[#0d1425]/90 backdrop-blur-md flex items-center justify-between gap-3 px-5 sm:px-8 sticky top-0 z-20">
           <div className="flex items-center gap-2.5 text-xs text-slate-400 dark:text-slate-500 min-w-0">
             <button
               type="button"

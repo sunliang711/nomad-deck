@@ -325,14 +325,15 @@ export function NomadWorkbench({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SectionTabs
+          variant="underline"
           tabs={[
-            { id: 'jobs', label: 'Jobs', tip: 'Nomad 调度编排的工作负载单元（包含 service/batch/system 等类型）。' },
-            { id: 'clients', label: 'Clients', tip: '运行任务容器/Allocations 的计算工作节点，可执行调度启用/禁用与 Drain 排空。' },
-            { id: 'servers', label: 'Servers', tip: '通过 Raft 共识维护集群状态和执行调度决策的控制面节点。' },
-            { id: 'topology', label: '拓扑容量', tip: '按数据中心与节点汇总的 CPU/内存分配率与剩余调度容量视图。' },
-            { id: 'storage', label: '存储 / CSI', tip: 'Container Storage Interface 持久化卷及对应存储插件（如 Ceph/NFS/EBS）。' },
-            { id: 'variables', label: 'Variables', tip: 'Nomad 内置键值密钥/配置存储，支持带 CAS（乐观锁版本号）的原子更新。' },
-            { id: 'evaluations', label: 'Evaluations', tip: '每次 Job 变更、节点故障或周期触发产生的调度计算请求，用于决定 Allocation 迁移。' },
+            { id: 'jobs', label: 'Jobs', title: 'Nomad 调度编排的工作负载单元（包含 service/batch/system 等类型）' },
+            { id: 'clients', label: 'Clients', title: '运行任务容器/Allocations 的计算工作节点，可执行调度启用/禁用与 Drain 排空' },
+            { id: 'servers', label: 'Servers', title: '通过 Raft 共识维护集群状态和执行调度决策的控制面节点' },
+            { id: 'topology', label: '拓扑容量', title: '按数据中心与节点汇总的 CPU/内存分配率与剩余调度容量视图' },
+            { id: 'storage', label: '存储 / CSI', title: 'Container Storage Interface 持久化卷及对应存储插件（如 Ceph/NFS/EBS）' },
+            { id: 'variables', label: 'Variables', title: 'Nomad 内置键值密钥/配置存储，支持带 CAS（乐观锁版本号）的原子更新' },
+            { id: 'evaluations', label: 'Evaluations', title: '每次 Job 变更、节点故障或周期触发产生的调度计算请求，用于决定 Allocation 迁移' },
           ]}
           active={subTab}
           onChange={(next) => {
@@ -536,7 +537,7 @@ export function NomadWorkbench({
                             {isAdmin && d.Status === 'running' && (
                               <div className="flex gap-1">
                                 <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/promote`, {}).then(() => { toast.success('已放行 Deployment (Promote)'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Promote</Button>
-                                <Button size="sm" variant="danger" onClick={() => void askConfirm(`确定要将 Deployment ${d.ID.slice(0, 8)} 标记为失败并触发回滚吗？`, { title: '回滚 Deployment', confirmText: '确认 Fail', danger: true }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/fail`, {}).then(() => { toast.success('已触发 Deployment Fail'); return inspectJob(selectedJob); }) : undefined).catch((ex) => setErr(ex.message))}>Fail</Button>
+                                <Button size="sm" variant="danger-outline" onClick={() => void askConfirm(`确定要将 Deployment ${d.ID.slice(0, 8)} 标记为失败并触发回滚吗？`, { title: '回滚 Deployment', confirmText: '确认 Fail', danger: true }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/fail`, {}).then(() => { toast.success('已触发 Deployment Fail'); return inspectJob(selectedJob); }) : undefined).catch((ex) => setErr(ex.message))}>Fail</Button>
                                 <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/pause`, {}).then(() => { toast.success('已暂停 Deployment'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Pause</Button>
                                 <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/resume`, {}).then(() => { toast.success('已恢复 Deployment'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Resume</Button>
                               </div>
@@ -547,37 +548,57 @@ export function NomadWorkbench({
                     )}
 
                     <div>
-                      <div className="mb-1 font-semibold"><TermLabel term={`Allocations (${jobAllocs.length})`} tip="Task Group 在具体 Client 节点上的实例化副本，可查看实时 CPU/内存、日志与进入 Web 终端。" /></div>
-                      <div className="space-y-1.5">
-                        {jobAllocs.map((a) => (
-                          <div key={a.ID} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
-                            <div>
-                              <span className="font-mono font-medium">{a.ID.slice(0, 8)}</span>
-                              <span className="ml-2 text-slate-500">{a.TaskGroup} · 节点 {a.NodeName}</span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <StatusBadge value={a.ClientStatus} />
-                              <Button
-                                size="sm"
-                                variant={selectedAlloc?.ID === a.ID ? 'primary' : 'secondary'}
-                                onClick={() => void inspectAlloc(a)}
-                              >
-                                详情 / 日志 / 终端
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                      <div className="mb-2 font-semibold"><TermLabel term={`Allocations (${jobAllocs.length})`} tip="Task Group 在具体 Client 节点上的实例化副本，可查看实时 CPU/内存、日志与进入 Web 终端。" /></div>
+                      {jobAllocs.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-slate-200 py-5 text-center text-slate-400 dark:border-slate-800">暂无 Allocation 实例</div>
+                      ) : (
+                        <div className="overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800">
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-slate-50/70 text-slate-500 dark:bg-slate-950/40 dark:text-slate-400">
+                              <tr className="border-b border-slate-200/80 dark:border-slate-800">
+                                <th className="px-3 py-2 font-medium">Allocation ID</th>
+                                <th className="px-3 py-2 font-medium">Task Group</th>
+                                <th className="px-3 py-2 font-medium">运行节点</th>
+                                <th className="px-3 py-2 font-medium">状态</th>
+                                <th className="px-3 py-2 text-right font-medium">操作</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                              {jobAllocs.map((a) => (
+                                <tr key={a.ID} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
+                                  <td className="px-3 py-2.5 font-mono font-semibold text-slate-900 dark:text-slate-100">{a.ID.slice(0, 8)}</td>
+                                  <td className="px-3 py-2.5 text-slate-700 dark:text-slate-300">{a.TaskGroup || '-'}</td>
+                                  <td className="px-3 py-2.5 font-mono text-slate-600 dark:text-slate-300">{a.NodeName || '-'}</td>
+                                  <td className="px-3 py-2.5"><StatusBadge value={a.ClientStatus} /></td>
+                                  <td className="px-3 py-2.5 text-right">
+                                    <Button
+                                      size="sm"
+                                      variant={selectedAlloc?.ID === a.ID ? 'primary' : 'secondary'}
+                                      onClick={() => void inspectAlloc(a)}
+                                    >
+                                      详情 / 日志 / 终端
+                                    </Button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
 
                     {jobEvals.length > 0 && (
                       <div>
-                        <div className="mb-1 font-semibold">最近 Evaluations</div>
-                        {jobEvals.slice(0, 5).map((ev) => (
-                          <div key={ev.ID} className="text-[11px] text-slate-600 dark:text-slate-300">
-                            {ev.ID.slice(0, 8)} · {ev.Status} {ev.BlockedEval ? '(blocked)' : ''}
-                          </div>
-                        ))}
+                        <div className="mb-2 font-semibold">最近 Evaluations</div>
+                        <div className="flex flex-wrap gap-2">
+                          {jobEvals.slice(0, 5).map((ev) => (
+                            <div key={ev.ID} className="inline-flex items-center gap-2 rounded-lg border border-slate-200/80 bg-slate-50/60 px-2.5 py-1.5 text-[11px] dark:border-slate-800 dark:bg-slate-950/40">
+                              <span className="font-mono font-medium text-slate-700 dark:text-slate-200">{ev.ID.slice(0, 8)}</span>
+                              <StatusBadge value={ev.Status} />
+                              {ev.BlockedEval && <Badge tone="amber">blocked</Badge>}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -623,7 +644,7 @@ export function NomadWorkbench({
                         </Button>
                         <Button
                           size="sm"
-                          variant="danger"
+                          variant="danger-outline"
                           onClick={() =>
                             void askConfirm(
                               c.drain ? `确定要取消节点 ${c.name} 的 Drain 状态吗？` : `确定要对节点 ${c.name} 执行 Drain 吗？将驱逐其上运行实例。`,
@@ -809,7 +830,7 @@ export function NomadWorkbench({
                   {isAdmin && (
                     <Button
                       size="sm"
-                      variant="danger"
+                      variant="danger-outline"
                       onClick={() =>
                         void askConfirm(`确定要注销 CSI 卷「${vid}」吗？`, { title: '注销 CSI 卷', confirmText: '确认注销', danger: true })
                           .then((ok) => ok ? apiDelete(`/api/v1/nomad/${clusterId}/volumes/${encodeURIComponent(vid)}?namespace=${encodeURIComponent(vns)}`).then(() => { toast.success('CSI 卷已注销'); return loadInfraViews('storage'); }) : undefined)
@@ -866,7 +887,7 @@ export function NomadWorkbench({
                     </Button>
                     <Button
                       size="sm"
-                      variant="danger"
+                      variant="danger-outline"
                       onClick={() =>
                         void askConfirm(`确定要删除变量「${v.namespace} / ${v.path}」吗？`, { title: '删除 Variable', confirmText: '确认删除', danger: true })
                           .then((ok) => ok ? apiDelete(`/api/v1/nomad/${clusterId}/variables/item?path=${encodeURIComponent(v.path)}&namespace=${encodeURIComponent(v.namespace)}&cas=${v.modify_index}`).then(() => { toast.success('Variable 已删除'); return loadInfraViews('variables'); }) : undefined)
@@ -1027,19 +1048,20 @@ export function NomadWorkbench({
                     <Button size="sm" disabled={selectedAlloc.TaskStates?.[logTask]?.State !== 'running'} onClick={() => void askConfirm(`确定要重启 Allocation ${selectedAlloc.ID.slice(0, 8)} 中的任务 ${logTask} 吗？`, { title: '重启 Task', confirmText: '确认重启' }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/restart`, { task: logTask }).then(() => { toast.success('已请求重启 Task'); }) : undefined).catch((ex) => setErr(ex.message))}>
                       重启 Task
                     </Button>
-                    <Button size="sm" variant="danger" disabled={['complete', 'failed', 'lost'].includes(selectedAlloc.ClientStatus)} onClick={() => void askConfirm(`确定要停止 Allocation ${selectedAlloc.ID.slice(0, 8)} 吗？调度器可能会重新拉起新副本。`, { title: '停止 Allocation', confirmText: '确认停止', danger: true }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stop`, {}).then(() => { toast.success('已请求停止 Alloc'); }) : undefined).catch((ex) => setErr(ex.message))}>
+                    <Button size="sm" variant="danger-outline" disabled={['complete', 'failed', 'lost'].includes(selectedAlloc.ClientStatus)} onClick={() => void askConfirm(`确定要停止 Allocation ${selectedAlloc.ID.slice(0, 8)} 吗？调度器可能会重新拉起新副本。`, { title: '停止 Allocation', confirmText: '确认停止', danger: true }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stop`, {}).then(() => { toast.success('已请求停止 Alloc'); }) : undefined).catch((ex) => setErr(ex.message))}>
                       停止 Alloc
                     </Button>
                   </>
                 )}
               </div>
-              <Button size="sm" variant="primary" onClick={closeAllocDrawer}>关闭</Button>
+              <Button size="sm" variant="secondary" onClick={closeAllocDrawer}>关闭</Button>
             </div>
           }
         >
           <div className="space-y-4 text-xs">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <SectionTabs
+                variant="underline"
                 tabs={[
                   { id: 'logs', label: '实时日志' },
                   { id: 'events', label: '事件与资源' },

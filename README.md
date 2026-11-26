@@ -27,6 +27,9 @@ curl -fsSL https://raw.githubusercontent.com/sunliang711/nomad-deck/main/scripts
 ```bash
 # 卸载服务（保留 /opt/nomad-deck-control/etc 与 data 数据目录）
 curl -fsSL https://raw.githubusercontent.com/sunliang711/nomad-deck/main/scripts/install.sh | sudo bash -s -- --uninstall
+
+# 彻底卸载服务并删除所有配置、数据与系统用户 nomad-deck（不可恢复；不影响已纳管主机上运行的 Nomad/Vault 集群）
+curl -fsSL https://raw.githubusercontent.com/sunliang711/nomad-deck/main/scripts/install.sh | sudo bash -s -- --uninstall --purge
 ```
 
 安装完成后常用管理命令：

@@ -5,6 +5,7 @@ REPO="${NOMAD_DECK_REPO:-sunliang711/nomad-deck}"
 VERSION="${NOMAD_DECK_VERSION:-latest}"
 LISTEN_ADDR="${NOMAD_DECK_LISTEN:-}"
 UNINSTALL=0
+PURGE=0
 REPAIR_SERVICE=0
 
 INSTALL_ROOT="/opt/nomad-deck-control"
@@ -32,6 +33,7 @@ NomadDeck Linux systemd 一键安装/升级/卸载脚本
   --repo <repo>     指定 GitHub 仓库（默认 sunliang711/nomad-deck）
   --listen <addr>   首次生成配置时写入监听地址（默认 0.0.0.0:8555）
   --uninstall       卸载 NomadDeck systemd 服务与程序文件（保留配置与数据）
+  --purge           彻底卸载服务并删除所有配置、数据与系统用户 nomad-deck（可与 --uninstall 连用）
   --repair-service  修复已有 systemd 单元并重启（保留程序、配置与数据）
   -h, --help        显示帮助
 EOF
@@ -56,6 +58,11 @@ while [ "$#" -gt 0 ]; do
       ;;
     --uninstall)
       UNINSTALL=1
+      shift
+      ;;
+    --purge)
+      UNINSTALL=1
+      PURGE=1
       shift
       ;;
     --repair-service)
@@ -238,16 +245,38 @@ fetch_or_fallback() {
 
 do_uninstall() {
   check_linux_systemd
+  local custom_data_dir=""
+  if [ "${PURGE}" -eq 1 ] && [ -f "${CONFIG_FILE}" ]; then
+    custom_data_dir="$(sed -n 's/^[[:space:]]*data_dir[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${CONFIG_FILE}" | head -n 1 || true)"
+  fi
+
   log "停止并禁用 nomad-deck systemd 服务..."
   systemctl stop nomad-deck.service >/dev/null 2>&1 || true
   systemctl stop nomad-deck-rollback.service >/dev/null 2>&1 || true
   systemctl disable nomad-deck.service >/dev/null 2>&1 || true
   rm -f "${SYSTEMD_DIR}/nomad-deck.service" "${SYSTEMD_DIR}/nomad-deck-rollback.service"
+  systemctl reset-failed nomad-deck.service >/dev/null 2>&1 || true
+  systemctl reset-failed nomad-deck-rollback.service >/dev/null 2>&1 || true
   systemctl daemon-reload
-  rm -rf "${BIN_DIR}"
-  log "已完成服务卸载并清理 ${BIN_DIR}。"
-  log "为防止误删数据，保留了配置与数据目录：${ETC_DIR}、${DATA_DIR}"
-  log "如需彻底删除全部数据，请手动执行：rm -rf ${INSTALL_ROOT} && userdel ${SERVICE_USER}"
+
+  if [ "${PURGE}" -eq 1 ]; then
+    if [ -n "${custom_data_dir}" ] && [ "${custom_data_dir}" != "/" ] && [ "${custom_data_dir}" != "${DATA_DIR}" ]; then
+      rm -rf "${custom_data_dir}"
+    fi
+    rm -rf "${DATA_DIR}" "${ETC_DIR}" "${BIN_DIR}" "${INSTALL_ROOT}"
+    if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+      userdel "${SERVICE_USER}" >/dev/null 2>&1 || true
+    fi
+    if getent group "${SERVICE_USER}" >/dev/null 2>&1; then
+      groupdel "${SERVICE_USER}" >/dev/null 2>&1 || true
+    fi
+    log "已彻底卸载服务并删除全部配置、数据目录与系统用户 ${SERVICE_USER}。"
+  else
+    rm -rf "${BIN_DIR}"
+    log "已完成服务卸载并清理 ${BIN_DIR}。"
+    log "为防止误删数据，保留了配置与数据目录：${ETC_DIR}、${DATA_DIR}"
+    log "如需彻底删除全部数据，请执行：bash scripts/install.sh --uninstall --purge"
+  fi
 }
 
 do_install() {

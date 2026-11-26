@@ -487,6 +487,41 @@ func (c *Client) TokenSelf(ctx context.Context) (*ACLToken, error) {
 	return &t, nil
 }
 
+// OneTimeToken is a short-lived single-use token returned by POST /v1/acl/token/onetime.
+type OneTimeToken struct {
+	AccessorID      string    `json:"AccessorID"`
+	OneTimeSecretID string    `json:"OneTimeSecretID"`
+	ExpiresAt       time.Time `json:"ExpiresAt"`
+}
+
+// CreateOneTimeToken mints a single-use token bound to the client's ACL token.
+func (c *Client) CreateOneTimeToken(ctx context.Context) (*OneTimeToken, error) {
+	var r struct {
+		OneTimeToken *OneTimeToken `json:"OneTimeToken"`
+	}
+	if err := c.Request(ctx, http.MethodPost, "acl/token/onetime", nil, &r); err != nil {
+		return nil, err
+	}
+	if r.OneTimeToken == nil || r.OneTimeToken.OneTimeSecretID == "" {
+		return nil, errors.New("nomad: empty one-time token response")
+	}
+	return r.OneTimeToken, nil
+}
+
+// ExchangeOneTimeToken exchanges a single-use secret for its underlying ACL token.
+func (c *Client) ExchangeOneTimeToken(ctx context.Context, secret string) (*ACLToken, error) {
+	var r struct {
+		Token *ACLToken `json:"Token"`
+	}
+	if err := c.Request(ctx, http.MethodPost, "acl/token/onetime/exchange", map[string]string{"OneTimeSecretID": secret}, &r); err != nil {
+		return nil, err
+	}
+	if r.Token == nil || r.Token.SecretID == "" {
+		return nil, errors.New("nomad: empty exchanged token response")
+	}
+	return r.Token, nil
+}
+
 // ---- Nodes ----
 
 // NodeStub is one client node in the node list.

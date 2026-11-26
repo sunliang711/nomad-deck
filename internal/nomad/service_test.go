@@ -7,8 +7,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -349,5 +351,46 @@ func TestUndeployedNodeConfigAndCNISettings(t *testing.T) {
 	mc := memberConfig(m1)
 	if !mc.CNI || !mc.RawExec || len(mc.HostVolumes) != 1 || mc.Meta["env"] != "lab" || !mc.Docker.AllowPrivileged {
 		t.Fatalf("unexpected persisted member config: %+v", mc)
+	}
+}
+
+func TestNomadUILoginOTT(t *testing.T) {
+	e := newSvcEnv(t)
+	ctx := context.Background()
+	if err := e.s.bootstrap(ctx, e.load(), t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	cl := e.load()
+	permRoot, err := e.s.managementToken(cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.CreateUILogin(ctx, testActor, cl.ID, "https://evil.example.com"); err == nil {
+		t.Fatal("untrusted target_url must be rejected")
+	}
+	link, err := e.s.CreateUILogin(ctx, testActor, cl.ID, "")
+	if err != nil {
+		t.Fatalf("CreateUILogin: %v", err)
+	}
+	u, err := url.Parse(link.LoginURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Path != "/ui/" || !strings.HasPrefix(link.LoginURL, e.ls.addr()+"/ui/?ott=") {
+		t.Fatalf("unexpected login url: %s", link.LoginURL)
+	}
+	ott := u.Query().Get("ott")
+	if ott == "" {
+		t.Fatal("missing ott query param")
+	}
+	tok, err := e.ls.client("").ExchangeOneTimeToken(ctx, ott)
+	if err != nil {
+		t.Fatalf("ExchangeOneTimeToken: %v", err)
+	}
+	if tok.Type != "management" || tok.ExpirationTime == nil || tok.SecretID == permRoot {
+		t.Fatalf("unexpected exchanged token: %+v", tok)
+	}
+	if _, err := e.ls.client("").ExchangeOneTimeToken(ctx, ott); err == nil {
+		t.Fatal("second OTT exchange must fail")
 	}
 }

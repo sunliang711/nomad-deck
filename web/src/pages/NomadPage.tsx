@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Boxes, FileCode2, Plus, RefreshCw } from 'lucide-react';
+import { Boxes, ExternalLink, FileCode2, Plus, RefreshCw } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
@@ -74,6 +74,7 @@ export function NomadPage() {
   const [policyEdit, setPolicyEdit] = useState({ name: '', rules: '' });
   const [newToken, setNewToken] = useState('');
   const [mgmtToken, setMgmtToken] = useState('');
+  const [uiLoginModal, setUiLoginModal] = useState<{ url: string; targetLabel: string; ottTTL: number; tokenTTL: string } | null>(null);
   const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(null);
   const [err, setErr] = useState('');
 
@@ -190,6 +191,7 @@ export function NomadPage() {
     setMemberRecords([]);
     setShowClusterSettings(false);
     setConfigMember(null);
+    setUiLoginModal(null);
   }, [selectedId]);
 
   const cluster = clusters.find((c) => c.id === selectedId);
@@ -234,6 +236,24 @@ export function NomadPage() {
       run: async (pw) => {
         const res = await apiPost(`/api/v1/nomad/${selectedId}/management-token/reveal`, { current_password: pw });
         setMgmtToken(res.management_token || '');
+      },
+    });
+  };
+
+  const handleOpenWebUI = (targetUrl: string, label?: string) => {
+    setPwAction({
+      title: `免密登录 Nomad Web UI${label ? ` · ${label}` : ''}`,
+      run: async (pw) => {
+        const r = await apiPost(`/api/v1/nomad/${selectedId}/ui-login`, {
+          current_password: pw,
+          target_url: targetUrl,
+        });
+        setUiLoginModal({
+          url: r.login_url,
+          targetLabel: label || targetUrl,
+          ottTTL: Number(r.ott_ttl_seconds || 600),
+          tokenTTL: r.token_ttl || '1h',
+        });
       },
     });
   };
@@ -390,6 +410,7 @@ export function NomadPage() {
                     .catch((ex) => setErr(ex.message))
                 }
                 onRevealRootToken={handleRevealMgmtToken}
+                onOpenWebUI={handleOpenWebUI}
                 onUninstall={handleUninstall}
                 onOpenJoin={() => { setJoinNodeId(''); setShowJoin(true); }}
                 onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Nomad 日志: ${n.name}`)}
@@ -750,6 +771,41 @@ export function NomadPage() {
           if (pwAction) await pwAction.run(pw);
         }}
       />
+
+      <Modal
+        open={Boolean(uiLoginModal)}
+        title={`免密登录 Nomad Web UI${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`}
+        onClose={() => setUiLoginModal(null)}
+        footer={
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button type="button" onClick={() => setUiLoginModal(null)}>关闭</Button>
+            {uiLoginModal && (
+              <a
+                href={uiLoginModal.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setUiLoginModal(null)}
+                className="primary-button"
+              >
+                <span>立即免密打开 Nomad UI</span>
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            )}
+          </div>
+        }
+      >
+        {uiLoginModal && (
+          <div className="space-y-3 text-xs leading-5 text-slate-600 dark:text-slate-300">
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 px-3.5 py-2.5 text-indigo-950 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-100">
+              <p>已生成<strong>单次一次性票据链接（OTT）</strong>（约 {Math.max(1, Math.round(uiLoginModal.ottTTL / 60))} 分钟内有效，兑换一次即作废）。</p>
+              <p className="mt-1">打开后 Nomad UI 会自动兑换临时会话并清掉地址栏里的票据，会话有效期为 <strong>{uiLoginModal.tokenTTL}</strong>，到期自动失效。</p>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              提示：如果节点使用自签名 TLS 证书，浏览器首次打开提示“证书风险”时点击“继续访问”后，页面仍会自动完成登录。
+            </p>
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={Boolean(mgmtToken)}

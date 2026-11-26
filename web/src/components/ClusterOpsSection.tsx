@@ -385,11 +385,11 @@ export function ClusterOpsSection({
                   {cluster.public_api_url ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <ExternalUrlLink url={cluster.public_api_url} />
-                      {isVault && isAdmin && initialized && onOpenWebUI && /^https?:\/\//i.test(cluster.public_api_url) && (
+                      {(isVault || !cluster?.settings?.ui?.disabled) && isAdmin && initialized && onOpenWebUI && /^https?:\/\//i.test(cluster.public_api_url) && (
                         <button
                           type="button"
                           onClick={() => onOpenWebUI(cluster.public_api_url, '统一入口')}
-                          title="验证管理员密码后生成 1 小时有效的 Vault 免密登录链接"
+                          title={`验证管理员密码后生成 1 小时有效的 ${productName} 免密登录链接`}
                           className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
                         >
                           <KeyRound className="h-3 w-3" />
@@ -521,11 +521,16 @@ export function ClusterOpsSection({
                           <div className="font-medium text-slate-900 dark:text-slate-100">{n.name}</div>
                           <div className="flex flex-wrap items-center gap-2">
                             <ExternalUrlLink url={n.api_addr || n.advertise_addr} />
-                            {isVault && isAdmin && initialized && nodeInstalled && onOpenWebUI && /^https?:\/\//i.test(String(n.api_addr || n.advertise_addr || '')) && (
+                            {(isVault || (n.role !== 'client' && !cluster?.settings?.ui?.disabled)) &&
+                              isAdmin &&
+                              initialized &&
+                              nodeInstalled &&
+                              onOpenWebUI &&
+                              /^https?:\/\//i.test(String(n.api_addr || n.advertise_addr || '')) && (
                               <button
                                 type="button"
                                 onClick={() => onOpenWebUI(String(n.api_addr || n.advertise_addr), n.name)}
-                                title="验证管理员密码后生成 1 小时有效的 Vault 免密登录链接"
+                                title={`验证管理员密码后生成 1 小时有效的 ${productName} 免密登录链接`}
                                 className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
                               >
                                 <KeyRound className="h-3 w-3" />

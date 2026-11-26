@@ -292,3 +292,24 @@ func (a *API) nomadRevealManagementToken(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{"management_token": tok})
 }
+
+func (a *API) nomadUILogin(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		CurrentPassword string `json:"current_password"`
+		TargetURL       string `json:"target_url"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	c, ok := a.nomadCluster(w, r)
+	if !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
+		return
+	}
+	link, err := a.Nomad.CreateUILogin(r.Context(), a.actor(r), c.ID, in.TargetURL)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, link)
+}

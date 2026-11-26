@@ -615,3 +615,91 @@ func (s *Service) RevokeToken(ctx context.Context, actor audit.Actor, clusterID,
 	s.govAudit(ctx, actor, cl, "nomad.acl_token_revoke", map[string]any{"accessor_id": accessor})
 	return nil
 }
+
+// UILoginLink is a short-lived single-use Nomad UI login URL backed by an OTT.
+type UILoginLink struct {
+	LoginURL      string `json:"login_url"`
+	OTTTTLSeconds int    `json:"ott_ttl_seconds"`
+	TokenTTL      string `json:"token_ttl"`
+}
+
+// CreateUILogin mints a short-lived (1h) temporary management token, wraps it
+// in a Nomad single-use one-time token (OTT), and returns the Nomad UI URL
+// carrying ?ott=... so the UI automatically exchanges and clears the query param.
+func (s *Service) CreateUILogin(ctx context.Context, actor audit.Actor, clusterID, targetURL string) (*UILoginLink, error) {
+	api, cl, err := s.govClient(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if cl.MaintenanceMode {
+		return nil, conflict("maintenance", "集群处于维护模式（%s）", cl.MaintenanceReason)
+	}
+	if cl.Settings.UI.Disabled {
+		return nil, conflict("ui_disabled", "Nomad 原生 UI 已在集群配置中停用")
+	}
+	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	baseURL, err := s.resolveUIBaseURL(ctx, cl, members, targetURL)
+	if err != nil {
+		return nil, err
+	}
+	const tokenTTL = "1h"
+	var temp ACLToken
+	reqBody := map[string]any{
+		"Name":          "nomad-deck-ui-" + actor.Name,
+		"Type":          "management",
+		"Global":        false,
+		"ExpirationTTL": tokenTTL,
+	}
+	if err := api.Request(ctx, http.MethodPost, "acl/token", reqBody, &temp); err != nil {
+		_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "nomad.ui_login_link", ResourceType: "cluster",
+			ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"target_url": baseURL}, Err: err})
+		return nil, nomadErr(err)
+	}
+	ott, ottErr := api.WithToken(temp.SecretID).CreateOneTimeToken(ctx)
+	if ottErr != nil {
+		_ = api.Request(ctx, http.MethodDelete, "acl/token/"+url.PathEscape(temp.AccessorID), nil, nil)
+		_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "nomad.ui_login_link", ResourceType: "cluster",
+			ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"target_url": baseURL}, Err: ottErr})
+		return nil, nomadErr(ottErr)
+	}
+	ttlSec := int(time.Until(ott.ExpiresAt).Seconds())
+	if ttlSec <= 0 {
+		ttlSec = 600
+	}
+	loginURL := strings.TrimRight(baseURL, "/") + "/ui/?ott=" + url.QueryEscape(ott.OneTimeSecretID)
+	s.govAudit(ctx, actor, cl, "nomad.ui_login_link", map[string]any{"target_url": baseURL, "token_ttl": tokenTTL, "accessor_id": temp.AccessorID})
+	return &UILoginLink{LoginURL: loginURL, OTTTTLSeconds: ttlSec, TokenTTL: tokenTTL}, nil
+}
+
+func (s *Service) resolveUIBaseURL(ctx context.Context, cl *nomadCluster, members []*db.ClusterNode, targetURL string) (string, error) {
+	req := strings.TrimRight(strings.TrimSpace(targetURL), "/")
+	if req == "" {
+		if pub := strings.TrimRight(strings.TrimSpace(cl.PublicAPIURL), "/"); pub != "" {
+			return pub, nil
+		}
+		if leader := s.leaderMember(ctx, cl, members); leader != nil && leader.APIAddr != "" {
+			return strings.TrimRight(strings.TrimSpace(leader.APIAddr), "/"), nil
+		}
+		for _, m := range servers(members) {
+			if api := strings.TrimRight(strings.TrimSpace(m.APIAddr), "/"); api != "" {
+				return api, nil
+			}
+		}
+		return "", conflict("no_server", "没有可用的 Nomad Server 入口")
+	}
+	if pub := strings.TrimRight(strings.TrimSpace(cl.PublicAPIURL), "/"); pub != "" && req == pub {
+		return pub, nil
+	}
+	for _, m := range members {
+		if api := strings.TrimRight(strings.TrimSpace(m.APIAddr), "/"); api != "" && req == api {
+			return api, nil
+		}
+		if adv := strings.TrimRight(strings.TrimSpace(m.AdvertiseAddr), "/"); adv != "" && req == adv {
+			return adv, nil
+		}
+	}
+	return "", badRequest("目标地址不属于当前 Nomad 集群")
+}

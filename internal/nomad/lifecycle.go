@@ -1103,7 +1103,7 @@ func (s *Service) PlanUninstall(ctx context.Context, clusterID string) (*cluster
 	}}
 	for _, m := range members {
 		p.Nodes = append(p.Nodes, m.NodeName)
-		unreachable := m.ServiceStatus == "unreachable"
+		unreachable := m.ServiceStatus == "unreachable" || (m.InstallState != "pending" && m.ServiceStatus == "unknown")
 		if !unreachable {
 			if n, err := db.GetNode(ctx, s.DB.Reader, m.NodeID); err == nil && n.Status == "offline" {
 				unreachable = true

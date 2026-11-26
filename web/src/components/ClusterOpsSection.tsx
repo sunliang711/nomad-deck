@@ -622,29 +622,51 @@ export function ClusterOpsSection({
                                 >
                                   重启
                                 </Button>
-                                <Button
-                                  size="sm"
-                                  variant="danger"
-                                  loading={busyKey === `remove:${n.node_id}`}
-                                  disabled={
-                                    blocked ||
-                                    clusterNodes.length <= 1 ||
-                                    (!isVault && (n.role === 'server' || n.role === 'server_client') && serverCount <= 1)
+                                {(() => {
+                                  const isLastNode = clusterNodes.length <= 1;
+                                  const isOnlyNomadServer =
+                                    !isVault && (n.role === 'server' || n.role === 'server_client') && serverCount <= 1;
+                                  const mustUninstallInstead = isLastNode || isOnlyNomadServer;
+                                  if (mustUninstallInstead && onUninstall) {
+                                    return (
+                                      <Button
+                                        size="sm"
+                                        variant="danger"
+                                        loading={busyKey === 'uninstall'}
+                                        disabled={blocked}
+                                        title={
+                                          isLastNode
+                                            ? '这是集群的最后一个节点，点击将卸载并清理整个集群（失联节点可勾选强制卸载）'
+                                            : '该节点是集群唯一 Server，点击将卸载并清理整个集群（失联节点可勾选强制卸载）'
+                                        }
+                                        onClick={() => void runBusy('uninstall', onUninstall)}
+                                      >
+                                        卸载清理
+                                      </Button>
+                                    );
                                   }
-                                  title={
-                                    clusterNodes.length <= 1
-                                      ? '集群仅剩 1 个节点，如需清理请使用下方卸载集群'
-                                      : !isVault && (n.role === 'server' || n.role === 'server_client') && serverCount <= 1
-                                        ? '不能移除集群的最后一台 Server'
-                                        : undefined
-                                  }
-                                  onClick={() => {
-                                    setRemoveTarget(n);
-                                    setForceRemove(false);
-                                  }}
-                                >
-                                  缩容
-                                </Button>
+                                  return (
+                                    <Button
+                                      size="sm"
+                                      variant="danger"
+                                      loading={busyKey === `remove:${n.node_id}`}
+                                      disabled={blocked || mustUninstallInstead}
+                                      title={
+                                        isLastNode
+                                          ? '集群仅剩 1 个节点，如需清理请使用下方卸载集群'
+                                          : isOnlyNomadServer
+                                            ? '不能移除集群的最后一台 Server'
+                                            : undefined
+                                      }
+                                      onClick={() => {
+                                        setRemoveTarget(n);
+                                        setForceRemove(false);
+                                      }}
+                                    >
+                                      缩容
+                                    </Button>
+                                  );
+                                })()}
                               </>
                             )}
                           </div>

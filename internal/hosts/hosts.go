@@ -432,12 +432,26 @@ func (s *Service) DeleteNode(ctx context.Context, actor audit.Actor, id string) 
 		if err != nil {
 			return err
 		}
-		cnt, err := db.CountMembershipsOfNode(ctx, tx, id)
+		rows, err := tx.QueryContext(ctx, `SELECT c.name, c.type FROM cluster_nodes cn JOIN clusters c ON c.id = cn.cluster_id WHERE cn.node_id = ? ORDER BY c.type, c.name`, id)
 		if err != nil {
 			return err
 		}
-		if cnt > 0 {
-			return conflict("node_in_cluster", "主机仍属于集群，请先从集群移出（失联节点可使用强制移出）或卸载集群后再删除")
+		var refs []string
+		for rows.Next() {
+			var cname, ctype string
+			if err := rows.Scan(&cname, &ctype); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			refs = append(refs, fmt.Sprintf("%s(%s)", cname, ctype))
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+		if len(refs) > 0 {
+			return conflict("node_in_cluster", "主机仍属于集群 %s，请先在对应集群中移出该节点（失联节点可使用强制移出，单节点集群请使用卸载清理）后再删除", strings.Join(refs, "、"))
 		}
 		if err := db.DeleteNode(ctx, tx, id); err != nil {
 			return err

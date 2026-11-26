@@ -169,23 +169,38 @@ export function NomadWorkbench({
       ]);
       if (request !== jobRequestRef.current) return;
       const meta = detail?.job?.summary || detail?.job;
+      const rawGroups = Array.isArray(meta?.groups) ? meta.groups : Array.isArray(job.groups) ? job.groups : [];
+      const groupNames: string[] = rawGroups
+        .map((g: any) => (typeof g === 'string' ? g : g?.name || g?.Name || ''))
+        .filter(Boolean);
       const enriched = meta
         ? {
             ...job,
             ...meta,
             id: meta.id || job.id,
             namespace: meta.namespace || ns,
+            groups: groupNames,
+            periodic: Boolean(
+              typeof meta.periodic === 'boolean'
+                ? meta.periodic
+                : (meta.periodic?.Enabled ?? meta.periodic?.enabled ?? job.periodic),
+            ),
+            parameterized: Boolean(
+              typeof meta.parameterized === 'boolean'
+                ? meta.parameterized
+                : (meta.parameterized && Object.keys(meta.parameterized).length > 0) || job.parameterized,
+            ),
             status: detail?.job?.status || meta.status || job.status,
             stop: detail?.job?.stop ?? meta.stop ?? job.stop,
           }
-        : { ...job, namespace: ns };
+        : { ...job, namespace: ns, groups: groupNames };
       setSelectedJob(enriched);
       const s = sum.data || sum.summary || sum;
       setJobSummary(s);
       setJobAllocs(allocs.data || allocs.allocations || []);
       setJobDeps(deps.data || deps.deployments || []);
       setJobEvals(evals.data || evals.evaluations || []);
-      const firstGrp = (enriched.groups && enriched.groups[0]) || Object.keys(s?.Summary || {})[0] || '';
+      const firstGrp = groupNames[0] || Object.keys(s?.Summary || {})[0] || '';
       if (firstGrp) {
         setScaleGroup(firstGrp);
         setScaleCount(1);

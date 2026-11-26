@@ -36,6 +36,7 @@ import {
   StatusBadge,
 } from '../components/UI';
 import { CodeEditor } from '../components/CodeEditor';
+import { ItemSwitcher } from '../components/ItemSwitcher';
 import { VisualJobBuilder, type VisualJobBuilderHandle } from '../components/VisualJobBuilder';
 
 const STARTER_SAMPLES: Array<{ id: string; label: string; desc: string; hcl: string }> = [
@@ -636,28 +637,6 @@ export function JobCenterPage() {
         subtitle="编写任务 → 校验配置 → 预览计划 → 确认运行，支持 HCL、可视化与 JSON"
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-              <span className="shrink-0">集群</span>
-              <div className="w-40">
-                <Select aria-label="目标 Nomad 集群" size="sm" value={clusterId} disabled={modeBusy || (editMode === 'visual' && !visualReady)} onChange={(e) => { setClusterId(e.target.value); clearPlan(); }}>
-                  {clusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </Select>
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-              <span className="shrink-0">命名空间</span>
-              <div className="w-32">
-                <Select
-                  aria-label="任务命名空间"
-                  size="sm"
-                  value={namespace}
-                  disabled={modeBusy || (editMode === 'visual' && !visualReady)}
-                  onChange={(e) => { setNamespace(e.target.value); clearPlan(); }}
-                >
-                  {namespaceOptions.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
-                </Select>
-              </div>
-            </div>
             <Button size="sm" onClick={() => { void loadClusters(); void loadJobs(); }}>
               <RefreshCw className="h-3.5 w-3.5" />
               <span>刷新</span>
@@ -677,6 +656,37 @@ export function JobCenterPage() {
           </div>
         }
       />
+
+      <div className="flex flex-wrap items-center gap-3">
+        <ItemSwitcher
+          label="Nomad 集群"
+          selectedId={clusterId}
+          disabled={modeBusy || (editMode === 'visual' && !visualReady)}
+          onSelect={(id) => {
+            setClusterId(id);
+            clearPlan();
+          }}
+          items={clusters.map((c) => ({
+            id: c.id,
+            name: c.name,
+            status: c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status,
+          }))}
+        />
+        <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+          <span className="shrink-0">命名空间</span>
+          <div className="w-36">
+            <Select
+              aria-label="任务命名空间"
+              size="sm"
+              value={namespace}
+              disabled={modeBusy || (editMode === 'visual' && !visualReady)}
+              onChange={(e) => { setNamespace(e.target.value); clearPlan(); }}
+            >
+              {namespaceOptions.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+            </Select>
+          </div>
+        </div>
+      </div>
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 

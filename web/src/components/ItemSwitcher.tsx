@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Search } from 'lucide-react';
-import { Button, StatusBadge } from './UI';
+import { StatusBadge } from './UI';
 
 export interface SwitcherItem {
   id: string;
@@ -14,18 +14,19 @@ export function ItemSwitcher({
   selectedId,
   onSelect,
   label = '对象',
-  threshold = 5,
+  disabled = false,
 }: {
   items: SwitcherItem[];
   selectedId: string;
   onSelect: (id: string) => void;
   label?: string;
-  threshold?: number;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const showSearch = items.length >= 5;
 
   const selected = useMemo(
     () => items.find((item) => item.id === selectedId) || items[0] || null,
@@ -34,18 +35,22 @@ export function ItemSwitcher({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return items;
+    if (!showSearch || !q) return items;
     return items.filter(
       (item) =>
         item.name.toLowerCase().includes(q) ||
         (item.subtitle && item.subtitle.toLowerCase().includes(q)),
     );
-  }, [items, query]);
+  }, [items, query, showSearch]);
+
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   useEffect(() => {
     if (!open) return;
     setQuery('');
-    const t = window.setTimeout(() => searchRef.current?.focus(), 0);
+    const t = showSearch ? window.setTimeout(() => searchRef.current?.focus(), 0) : undefined;
     const onDocClick = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
         setOpen(false);
@@ -57,41 +62,24 @@ export function ItemSwitcher({
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onKey);
     return () => {
-      window.clearTimeout(t);
+      if (t !== undefined) window.clearTimeout(t);
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [open, showSearch]);
 
   if (items.length === 0) return null;
-
-  if (items.length < threshold) {
-    return (
-      <div className="flex flex-wrap gap-2">
-        {items.map((item) => (
-          <Button
-            key={item.id}
-            size="sm"
-            variant={selectedId === item.id ? 'primary' : 'secondary'}
-            onClick={() => onSelect(item.id)}
-          >
-            <span>{item.name}</span>
-            <StatusBadge value={item.status} />
-          </Button>
-        ))}
-      </div>
-    );
-  }
 
   return (
     <div ref={rootRef} className="relative inline-block max-w-full">
       <button
         type="button"
+        disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`切换${label}`}
-        onClick={() => setOpen((v) => !v)}
-        className="inline-flex max-w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 shadow-xs transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+        onClick={() => { if (!disabled) setOpen((v) => !v); }}
+        className="inline-flex max-w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 shadow-xs transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
       >
         <span className="text-slate-400 dark:text-slate-500 shrink-0">{label}：</span>
         <span className="truncate font-semibold">{selected?.name || '-'}</span>
@@ -108,17 +96,19 @@ export function ItemSwitcher({
           aria-label={`${label}列表`}
           className="absolute left-0 z-40 mt-1.5 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900"
         >
-          <div className="relative mb-2">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-            <input
-              ref={searchRef}
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={`搜索${label}名称…`}
-              className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-            />
-          </div>
+          {showSearch && (
+            <div className="relative mb-2">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <input
+                ref={searchRef}
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={`搜索${label}名称…`}
+                className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+          )}
           <div className="max-h-64 space-y-0.5 overflow-y-auto">
             {filtered.length === 0 ? (
               <div className="px-2.5 py-4 text-center text-xs text-slate-400">未找到匹配的{label}</div>

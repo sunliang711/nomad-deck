@@ -151,6 +151,9 @@ var ErrPassphrase = errors.New("迁移包口令错误或文件已损坏")
 func read(src io.ReadCloser, passphrase string, v Visitor) (*Manifest, error) {
 	hdrJSON, body, err := snapstore.OpenStream(src, Magic, passphrase)
 	if err != nil {
+		if errors.Is(err, snapstore.ErrPassphraseRequired) {
+			return nil, errors.New("该迁移包已加密，请提供迁移口令")
+		}
 		return nil, fmt.Errorf("不是有效的 NomadDeck 迁移包：%w", err)
 	}
 	defer body.Close()

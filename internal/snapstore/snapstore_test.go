@@ -3,6 +3,7 @@ package snapstore
 import (
 	"bytes"
 	"crypto/rand"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -77,6 +78,32 @@ func TestPortableArchive(t *testing.T) {
 				t.Fatal("wrong passphrase must fail")
 			}
 		}
+		if _, _, err := ReadArchive(io.NopCloser(bytes.NewReader(buf.Bytes())), ""); !errors.Is(err, ErrPassphraseRequired) {
+			t.Fatalf("empty passphrase on encrypted archive: %v", err)
+		}
+
+		// Empty passphrase writes unencrypted v2 archive.
+		var plainBuf bytes.Buffer
+		if err := WriteArchive(&plainBuf, bytes.NewReader(data), ArchiveMeta{ClusterName: "c", ClusterType: "vault", SealGeneration: &gen}, ""); err != nil {
+			t.Fatalf("unencrypted WriteArchive size %d: %v", size, err)
+		}
+		pMeta, pr, err := ReadArchive(io.NopCloser(bytes.NewReader(plainBuf.Bytes())), "")
+		if err != nil {
+			t.Fatalf("unencrypted ReadArchive size %d: %v", size, err)
+		}
+		pGot, err := io.ReadAll(pr)
+		pr.Close()
+		if err != nil || !bytes.Equal(pGot, data) || *pMeta.SealGeneration != 2 {
+			t.Fatalf("unencrypted size %d: %v", size, err)
+		}
+	}
+	// Short passphrase (<6) is rejected; 6-char passphrase succeeds.
+	var tmp bytes.Buffer
+	if err := WriteArchive(&tmp, bytes.NewReader([]byte("x")), ArchiveMeta{ClusterName: "c", ClusterType: "nomad"}, "12345"); err == nil {
+		t.Fatal("5-char passphrase must fail")
+	}
+	if err := WriteArchive(&tmp, bytes.NewReader([]byte("x")), ArchiveMeta{ClusterName: "c", ClusterType: "nomad"}, "123456"); err != nil {
+		t.Fatalf("6-char passphrase must succeed: %v", err)
 	}
 }
 

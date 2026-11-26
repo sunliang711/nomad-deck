@@ -38,7 +38,7 @@ const navItems = [
   { to: '/jobs', label: 'Nomad Job 中心', icon: FileCode2, group: 'workspace' },
   { to: '/cron', label: '定时任务', icon: Clock, group: 'admin' },
   { to: '/audit', label: '审计日志', icon: ScrollText, group: 'admin' },
-  { to: '/migration-backup', label: '迁移与灾备', icon: ArchiveRestore, group: 'admin' },
+  { to: '/migration-backup', label: '环境迁移', icon: ArchiveRestore, group: 'admin' },
   { to: '/settings', label: '系统设置', icon: Settings, group: 'admin' },
   { to: '/accounts', label: '账号与会话', icon: Users, group: 'admin' },
   { to: '/version', label: '版本与升级', icon: ArrowUpCircle, group: 'admin' },

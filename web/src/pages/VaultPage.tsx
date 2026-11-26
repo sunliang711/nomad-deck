@@ -785,7 +785,7 @@ export function VaultPage() {
                   }}
                   className="mb-4 flex flex-wrap items-end gap-2 border-b border-slate-200 pb-3 text-xs dark:border-slate-800"
                 >
-                  <SecretInput label="归档口令" value={snapPass} onChangeValue={setSnapPass} />
+                  <SecretInput label="归档口令（未加密可留空）" value={snapPass} onChangeValue={setSnapPass} />
                   <input type="file" onChange={(e) => setSnapFile(e.target.files?.[0] || null)} />
                   <Button type="submit">上传登记归档</Button>
                 </form>
@@ -1703,6 +1703,10 @@ export function VaultPage() {
           onSubmit={async (e) => {
             e.preventDefault();
             if (!dlModal) return;
+            if (dlPass && dlPass.length < 6) {
+              setDlErr('归档加密口令至少 6 位（或留空不加密）');
+              return;
+            }
             setDlBusy(true);
             setDlErr('');
             try {
@@ -1718,7 +1722,7 @@ export function VaultPage() {
         >
           <ErrorAlert message={dlErr} />
           <SecretInput label="当前管理员登录密码" required value={dlPw} onChangeValue={setDlPw} />
-          <SecretInput label="归档加密口令（至少 12 位）" required minLength={12} value={dlPass} onChangeValue={setDlPass} />
+          <SecretInput label="归档加密口令（可选，填写则至少 6 位）" value={dlPass} onChangeValue={setDlPass} />
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setDlModal(null)}>取消</Button>
             <Button type="submit" variant="primary" disabled={dlBusy}>{dlBusy ? '导出中...' : '确认导出'}</Button>

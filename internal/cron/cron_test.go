@@ -2,12 +2,17 @@ package cron
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,8 +21,10 @@ import (
 	"nomad-deck/internal/audit"
 	"nomad-deck/internal/auth"
 	"nomad-deck/internal/cluster"
+	"nomad-deck/internal/crypto"
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/hosts"
+	"nomad-deck/internal/netx"
 	"nomad-deck/internal/nomaddev"
 	"nomad-deck/internal/ops"
 	"nomad-deck/internal/sshx"
@@ -99,8 +106,8 @@ func TestSchedulingPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Stop()
-	if len(Builtins) != 9 {
-		t.Fatal("nine built-in jobs")
+	if len(Builtins) != 10 {
+		t.Fatal("ten built-in jobs")
 	}
 	disableAll(t, s)
 	j := jobByKey(t, s, "cert_expiry_check")
@@ -474,5 +481,92 @@ func TestSchedulePresetsTimeoutAndPagination(t *testing.T) {
 	items, total, err := s.RunsPage(ctx, j.ID, true, 1, 20)
 	if err != nil || total != 1 || len(items) != 1 || items[0].Status != db.RunTimeout {
 		t.Fatalf("RunsPage failedOnly: total=%d len=%d err=%v", total, len(items), err)
+	}
+}
+
+func TestSystemProxyCheckJob(t *testing.T) {
+	ctx := context.Background()
+	d, engine := testDB(t)
+	keys, err := crypto.NewKeyringForTest(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyMgr := &netx.Manager{DB: d, Keys: keys}
+	s := newScheduler(t, d, engine)
+	s.Install(&Platform{Proxy: proxyMgr, DataDir: t.TempDir()})
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	disableAll(t, s)
+
+	j := jobByKey(t, s, "system_proxy_check")
+	if j.CronExpr != "*/30 * * * *" {
+		t.Fatalf("expected */30 * * * *, got %q", j.CronExpr)
+	}
+
+	// Unconfigured proxy -> skipped.
+	run, err := s.Trigger(ctx, admin, j.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := waitRun(t, s, run.ID); r.Status != db.RunSkipped || !strings.Contains(r.Summary, "尚未配置系统代理") {
+		t.Fatalf("expected skip when proxy unconfigured, got %+v", r)
+	}
+
+	// Local mock proxy server + local target.
+	var failTarget atomic.Bool
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.String(), "/ip") {
+			_, _ = w.Write([]byte("1.2.3.4\n"))
+			return
+		}
+		if failTarget.Load() && strings.Contains(r.URL.String(), "bad") {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer proxySrv.Close()
+
+	pu, _ := url.Parse(proxySrv.URL)
+	port, _ := strconv.Atoi(pu.Port())
+	if err := d.WithTx(ctx, func(tx *sql.Tx) error {
+		return proxyMgr.Save(ctx, tx, &netx.ProxyConfig{Type: "http", Host: pu.Hostname(), Port: port}, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	origTargets := proxyTestTargets
+	origExit := netx.ExitIPURL
+	defer func() {
+		proxyTestTargets = origTargets
+		netx.ExitIPURL = origExit
+	}()
+	netx.ExitIPURL = "http://mock.local/ip"
+	proxyTestTargets = func(string) []netx.TestTarget {
+		return []netx.TestTarget{
+			{Name: "TargetOK", URL: "http://mock.local/ok"},
+			{Name: "TargetBad", URL: "http://mock.local/bad"},
+		}
+	}
+
+	// All reachable -> success.
+	run, err = s.Trigger(ctx, admin, j.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := waitRun(t, s, run.ID); r.Status != db.RunSuccess || !strings.Contains(r.Summary, "2/2") || !strings.Contains(r.Summary, "1.2.3.4") {
+		t.Fatalf("expected success with 2/2 and exit ip, got %+v", r)
+	}
+
+	// One target failing -> failed.
+	failTarget.Store(true)
+	run, err = s.Trigger(ctx, admin, j.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := waitRun(t, s, run.ID); r.Status != db.RunFailed || !strings.Contains(r.Summary, "TargetBad") {
+		t.Fatalf("expected failed mentioning TargetBad, got %+v", r)
 	}
 }

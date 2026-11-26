@@ -23,6 +23,7 @@ import (
 	"nomad-deck/internal/nomad"
 	"nomad-deck/internal/sshx"
 	"nomad-deck/internal/vault"
+	"nomad-deck/internal/vaultbackup"
 )
 
 // ---- Views ----
@@ -694,8 +695,8 @@ func (a *API) downloadSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
 		return
 	}
-	if len(in.Passphrase) < 12 {
-		writeError(w, http.StatusBadRequest, "invalid_argument", "归档口令至少 12 个字符")
+	if in.Passphrase != "" && len(in.Passphrase) < vaultbackup.MinPassphrase {
+		writeError(w, http.StatusBadRequest, "invalid_argument", fmt.Sprintf("归档口令至少 %d 个字符", vaultbackup.MinPassphrase))
 		return
 	}
 	sid := chi.URLParam(r, "snapshot_id")
@@ -738,10 +739,6 @@ func (a *API) uploadSnapshot(w http.ResponseWriter, r *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(part, 1024))
 			pass = string(b)
 		case "file":
-			if pass == "" {
-				writeError(w, http.StatusBadRequest, "invalid_argument", "passphrase 字段必须位于 file 之前")
-				return
-			}
 			snap, err := d.ImportArchive(r.Context(), a.actor(r), c.ID, readCloser{part}, pass)
 			if err != nil {
 				a.writeErr(w, r, err)

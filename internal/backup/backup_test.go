@@ -295,4 +295,20 @@ func TestSaveConfigEmptyPassphrasePassesKeyCheck(t *testing.T) {
 	if len(probs) > 0 {
 		t.Fatalf("unexpected key check problems: %+v", probs)
 	}
+
+	// Enabling scheduled DR without a passphrase is allowed.
+	apiKey := "sk-key"
+	view, err = svc.SaveConfig(ctx, actor, ConfigInput{
+		Enabled: true,
+		Targets: []TargetInput{{
+			ID: "t1", Name: "sk", Type: TargetSafeKeep, Enabled: true,
+			SafeKeepURL: "https://safekeep.example.com", SafeKeepAPIKey: &apiKey,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("SaveConfig enabled without passphrase: %v", err)
+	}
+	if !view.Enabled || view.PassphraseSet {
+		t.Fatalf("unexpected view: %+v", view)
+	}
 }

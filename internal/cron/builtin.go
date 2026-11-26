@@ -18,6 +18,7 @@ import (
 	"nomad-deck/internal/hosts"
 	"nomad-deck/internal/integration"
 	"nomad-deck/internal/jobs"
+	"nomad-deck/internal/netx"
 	"nomad-deck/internal/ops"
 	"nomad-deck/internal/vault"
 )
@@ -56,6 +57,7 @@ var Builtins = []BuiltinDef{
 	{"raft_snapshot_backup", "集群 Raft 快照备份", "定期采集 Nomad 与 Vault 集群 Raft 状态快照并按策略清理旧快照。", "cron", "0 3 * * *", 1800},
 	{"control_plane_backup", "控制面灾备备份", "将控制面数据库与集群快照打包加密，同步至 SafeKeep 灾备目标。", "cron", "30 1 * * *", 1800},
 	{"self_update_check", "NomadDeck 新版本检查", "检查 GitHub Release 新版本并更新仪表盘新版本提示状态。", "cron", "0 */6 * * *", 300},
+	{"system_proxy_check", "系统代理连通性检测", "定时通过已配置的系统代理探测 HashiCorp、Docker 与 GitHub 目标连通性及出口 IP。", "cron", "*/30 * * * *", 300},
 	{"cleanup_audit_logs", "审计日志清理", "按保留时长清理过期的审计日志记录。", "cron", "0 2 * * *", 600},
 	{"cleanup_operation_logs", "运维任务日志清理", "按保留时长清理过期的异步运维任务日志与定时执行历史。", "cron", "30 2 * * *", 600},
 }
@@ -94,6 +96,7 @@ type Platform struct {
 	Vault        *vault.Service
 	Integrations *integration.Service
 	Jobs         *jobs.Service
+	Proxy        *netx.Manager
 	DataDir      string
 
 	// Backup produces the control-plane disaster-recovery bundle
@@ -149,6 +152,7 @@ func (s *Scheduler) Install(p *Platform) {
 		}
 		return p.SelfUpdateCheck(ctx)
 	})
+	s.Register("system_proxy_check", p.proxyCheck(s))
 	s.Register("cleanup_audit_logs", func(ctx context.Context, r *Run) (string, error) {
 		cutoff, label := retentionCutoff(ctx, s, r.Job, "audit.retention_days", 90)
 		n, err := db.DeleteOldAuditLogs(ctx, s.DB.Writer, cutoff)
@@ -176,6 +180,52 @@ func (s *Scheduler) Install(p *Platform) {
 		return fmt.Sprintf("清理 %d 个运维任务及其步骤日志、%d 条定时任务执行记录（保留 %s）", len(ids), runs, label), nil
 	})
 	p.installCustom(s)
+}
+
+var proxyTestTargets = netx.DefaultTestTargets
+
+func (p *Platform) proxyCheck(s *Scheduler) Handler {
+	return func(ctx context.Context, r *Run) (string, error) {
+		if p.Proxy == nil {
+			return "", Skip("系统代理模块未启用")
+		}
+		cfg, pw, err := p.Proxy.Load(ctx)
+		if err != nil {
+			return "", err
+		}
+		if cfg == nil {
+			return "", Skip("尚未配置系统代理")
+		}
+		var mirror string
+		if raw, _, err := db.GetSetting(ctx, s.DB.Reader, "release.mirror_url"); err == nil {
+			_ = json.Unmarshal([]byte(raw), &mirror)
+		}
+		rep := netx.TestProxy(ctx, cfg, pw, proxyTestTargets(mirror))
+		okCount := 0
+		var failed []string
+		for _, res := range rep.Results {
+			if res.OK {
+				okCount++
+				r.Logf("✓ %s (%s): HTTP %d (%d ms)", res.Name, res.URL, res.StatusCode, res.LatencyMS)
+			} else {
+				failed = append(failed, res.Name)
+				r.Logf("✕ %s (%s): %s (%d ms)", res.Name, res.URL, res.Error, res.LatencyMS)
+			}
+		}
+		if rep.ExitIP != "" {
+			r.Logf("代理出口 IP：%s", rep.ExitIP)
+		}
+		total := len(rep.Results)
+		exitPart := ""
+		if rep.ExitIP != "" {
+			exitPart = "，出口 IP " + rep.ExitIP
+		}
+		if len(failed) > 0 {
+			return fmt.Sprintf("代理 %s 检测异常（%d/%d 连通%s）", cfg.Address(), okCount, total, exitPart),
+				fmt.Errorf("以下目标不可达：%s", strings.Join(failed, "、"))
+		}
+		return fmt.Sprintf("代理 %s 连通正常（%d/%d%s）", cfg.Address(), okCount, total, exitPart), nil
+	}
 }
 
 func retentionCutoff(ctx context.Context, s *Scheduler, j *db.CronJob, settingKey string, defaultDays int) (time.Time, string) {

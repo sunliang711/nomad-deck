@@ -86,8 +86,8 @@ func (a *API) migrationPreview(w http.ResponseWriter, r *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(part, 1024))
 			fields[part.FormName()] = strings.TrimRight(string(b), "\r\n")
 		case "file":
-			if fields["passphrase"] == "" {
-				writeError(w, http.StatusBadRequest, "invalid_argument", "passphrase 字段必须位于 file 之前")
+			if fields["strategy"] == "" {
+				writeError(w, http.StatusBadRequest, "invalid_argument", "strategy 字段必须位于 file 之前")
 				return
 			}
 			p := principalFrom(r.Context())

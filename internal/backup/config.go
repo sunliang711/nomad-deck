@@ -259,9 +259,6 @@ func (s *Service) SaveConfig(ctx context.Context, actor audit.Actor, in ConfigIn
 	}
 
 	if in.Enabled {
-		if len(passphrase) < vaultbackup.MinPassphrase {
-			return ConfigView{}, badRequest("启用定时灾备前需设置至少 %d 个字符的备份口令", vaultbackup.MinPassphrase)
-		}
 		if enabledCount == 0 {
 			return ConfigView{}, badRequest("启用定时灾备前需至少启用一个 SafeKeep 备份目标")
 		}

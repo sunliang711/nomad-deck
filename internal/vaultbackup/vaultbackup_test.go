@@ -29,6 +29,20 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal("tampered header must fail")
 	}
 	if _, err := Encrypt(p, "short"); err == nil {
-		t.Fatal("short passphrase must be rejected")
+		t.Fatal("short passphrase (<6) must be rejected")
+	}
+	if _, err := Encrypt(p, "123456"); err != nil {
+		t.Fatalf("6-char passphrase must succeed: %v", err)
+	}
+	plainData, err := Encrypt(p, "")
+	if err != nil {
+		t.Fatalf("empty passphrase must succeed: %v", err)
+	}
+	gotPlain, err := Decrypt(plainData, "")
+	if err != nil {
+		t.Fatalf("decrypt unencrypted backup: %v", err)
+	}
+	if gotPlain.ClusterName != "prod-vault" || gotPlain.ActiveGeneration != 2 {
+		t.Fatalf("unencrypted payload: %+v", gotPlain)
 	}
 }

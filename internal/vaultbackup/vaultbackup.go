@@ -37,8 +37,8 @@ const Magic = "NDVKB"
 // FormatName is stored in the payload.
 const FormatName = "nomad-deck-vault-unseal-backup"
 
-// MinPassphrase is the minimum passphrase length enforced on export.
-const MinPassphrase = 12
+// MinPassphrase is the minimum passphrase length enforced when encryption is enabled.
+const MinPassphrase = 6
 
 // Default KDF parameters.
 var (
@@ -73,15 +73,22 @@ func deriveKey(pass string, salt []byte, t, m uint32, p uint8) []byte {
 	return argon2.IDKey([]byte(pass), salt, t, m, p, 32)
 }
 
-// Encrypt produces a backup file.
+// Encrypt produces a backup file. When passphrase is empty, the payload is
+// written unencrypted with format version 2.
 func Encrypt(p *Payload, passphrase string) ([]byte, error) {
-	if len(passphrase) < MinPassphrase {
-		return nil, fmt.Errorf("passphrase must be at least %d characters", MinPassphrase)
-	}
 	p.Format = FormatName
 	plain, err := json.Marshal(p)
 	if err != nil {
 		return nil, err
+	}
+	if passphrase == "" {
+		out := make([]byte, 0, len(Magic)+1+len(plain))
+		out = append(out, Magic...)
+		out = append(out, 2)
+		return append(out, plain...), nil
+	}
+	if len(passphrase) < MinPassphrase {
+		return nil, fmt.Errorf("passphrase must be at least %d characters", MinPassphrase)
 	}
 	salt := make([]byte, 16)
 	nonce := make([]byte, 12)
@@ -110,29 +117,40 @@ func Encrypt(p *Payload, passphrase string) ([]byte, error) {
 
 // Decrypt opens a backup file.
 func Decrypt(data []byte, passphrase string) (*Payload, error) {
-	if len(data) < 16 || string(data[:5]) != Magic {
+	if len(data) < len(Magic)+1 || string(data[:5]) != Magic {
 		return nil, errors.New("not a NomadDeck Vault unseal key backup")
 	}
-	if data[5] != 1 {
+	var plain []byte
+	switch data[5] {
+	case 1:
+		if passphrase == "" {
+			return nil, fmt.Errorf("%w: passphrase required", ErrBadPassphrase)
+		}
+		if len(data) < 16 {
+			return nil, errors.New("backup header is malformed")
+		}
+		t := binary.BigEndian.Uint32(data[6:10])
+		m := binary.BigEndian.Uint32(data[10:14])
+		threads := data[14]
+		sl := int(data[15])
+		if t == 0 || t > 64 || m < 8*1024 || m > 4*1024*1024 || threads == 0 || sl < 8 || len(data) < 16+sl+12+16 {
+			return nil, errors.New("backup header is malformed")
+		}
+		salt := data[16 : 16+sl]
+		nonce := data[16+sl : 28+sl]
+		hdr := data[:28+sl]
+		gcm, err := newGCM(deriveKey(passphrase, salt, t, m, threads))
+		if err != nil {
+			return nil, err
+		}
+		plain, err = gcm.Open(nil, nonce, data[28+sl:], hdr)
+		if err != nil {
+			return nil, ErrBadPassphrase
+		}
+	case 2:
+		plain = data[6:]
+	default:
 		return nil, fmt.Errorf("unsupported backup format version %d", data[5])
-	}
-	t := binary.BigEndian.Uint32(data[6:10])
-	m := binary.BigEndian.Uint32(data[10:14])
-	threads := data[14]
-	sl := int(data[15])
-	if t == 0 || t > 64 || m < 8*1024 || m > 4*1024*1024 || threads == 0 || sl < 8 || len(data) < 16+sl+12+16 {
-		return nil, errors.New("backup header is malformed")
-	}
-	salt := data[16 : 16+sl]
-	nonce := data[16+sl : 28+sl]
-	hdr := data[:28+sl]
-	gcm, err := newGCM(deriveKey(passphrase, salt, t, m, threads))
-	if err != nil {
-		return nil, err
-	}
-	plain, err := gcm.Open(nil, nonce, data[28+sl:], hdr)
-	if err != nil {
-		return nil, ErrBadPassphrase
 	}
 	var p Payload
 	if err := json.Unmarshal(plain, &p); err != nil {

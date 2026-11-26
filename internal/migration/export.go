@@ -88,7 +88,7 @@ func tablesFor(include []string) ([]string, error) {
 
 // Export writes a bundle of a consistent database snapshot to w.
 func (s *Service) Export(ctx context.Context, opt ExportOptions, w io.Writer) (*Manifest, error) {
-	if len(opt.Passphrase) < vaultbackup.MinPassphrase {
+	if opt.Passphrase != "" && len(opt.Passphrase) < vaultbackup.MinPassphrase {
 		return nil, badRequest("迁移口令至少 %d 个字符", vaultbackup.MinPassphrase)
 	}
 	if opt.Kind == "" {

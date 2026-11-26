@@ -187,8 +187,8 @@ func (s *Service) runBackupForTargets(ctx context.Context, cfg *storedConfig, ta
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(cfg.Passphrase) < vaultbackup.MinPassphrase {
-		return nil, badRequest("未配置有效的备份口令（至少 %d 个字符）", vaultbackup.MinPassphrase)
+	if cfg.Passphrase != "" && len(cfg.Passphrase) < vaultbackup.MinPassphrase {
+		return nil, badRequest("备份口令至少 %d 个字符", vaultbackup.MinPassphrase)
 	}
 	if len(targets) == 0 {
 		return nil, badRequest("未配置可用的备份目标")
@@ -266,7 +266,7 @@ func (s *Service) OffsiteSnapshot(ctx context.Context, r *cron.Run, snap *db.Sna
 	if err != nil {
 		return err
 	}
-	if !cfg.Enabled || len(cfg.Passphrase) < vaultbackup.MinPassphrase {
+	if !cfg.Enabled {
 		return nil
 	}
 	var enabledTargets []Target
@@ -475,9 +475,6 @@ func (s *Service) ImportSnapshotFromTarget(ctx context.Context, actor audit.Acto
 		}
 		passphrase = cfg.Passphrase
 	}
-	if len(passphrase) < vaultbackup.MinPassphrase {
-		return nil, badRequest("需提供至少 %d 个字符的归档口令", vaultbackup.MinPassphrase)
-	}
 	cl, err := db.GetCluster(ctx, s.DB.Reader, clusterID)
 	if errors.Is(err, db.ErrNotFound) {
 		return nil, &auth.Error{Status: 404, Code: "not_found", Message: "集群不存在"}
@@ -569,8 +566,8 @@ func (s *Service) CronBackupTarget(ctx context.Context, r *cron.Run, targetID, c
 	if err != nil {
 		return "", err
 	}
-	if len(cfg.Passphrase) < vaultbackup.MinPassphrase {
-		return "", badRequest("未配置有效的备份口令（至少 %d 个字符）", vaultbackup.MinPassphrase)
+	if cfg.Passphrase != "" && len(cfg.Passphrase) < vaultbackup.MinPassphrase {
+		return "", badRequest("备份口令至少 %d 个字符", vaultbackup.MinPassphrase)
 	}
 	var targets []Target
 	if targetID != "" {

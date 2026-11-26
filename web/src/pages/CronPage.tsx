@@ -73,6 +73,7 @@ const BUILTIN_DESCRIPTIONS: Record<string, string> = {
   raft_snapshot_backup: '定期采集 Nomad 与 Vault 集群 Raft 状态快照并按策略清理旧快照。',
   control_plane_backup: '将控制面数据库与集群快照打包加密，同步至 SafeKeep 灾备目标。',
   self_update_check: '检查 GitHub Release 新版本并更新仪表盘新版本提示状态。',
+  system_proxy_check: '定时通过已配置的系统代理探测 HashiCorp、Docker 与 GitHub 目标连通性及出口 IP。',
   cleanup_audit_logs: '按保留时长清理过期的审计日志记录。',
   cleanup_operation_logs: '按保留时长清理过期的异步运维任务日志与定时执行历史。',
 };
@@ -178,6 +179,7 @@ export function CronPage() {
   const [showDrModal, setShowDrModal] = useState(false);
   const [bkEnabled, setBkEnabled] = useState(false);
   const [bkPass, setBkPass] = useState('');
+  const [bkPassTouched, setBkPassTouched] = useState(false);
   const [drTargets, setDrTargets] = useState<any[]>([]);
   const [skForm, setSkForm] = useState<any>({ ...defaultSafeKeepTarget });
   const [skTest, setSkTest] = useState<any>(null);
@@ -529,6 +531,7 @@ export function CronPage() {
   const openDrConfig = () => {
     setBkEnabled(Boolean(backupCfg?.enabled));
     setBkPass('');
+    setBkPassTouched(false);
     setDrTargets(backupCfg?.targets || []);
     const firstSK = (backupCfg?.targets || []).find((t: any) => t.type === 'safekeep');
     setSkForm(firstSK ? { ...defaultSafeKeepTarget, ...firstSK, safekeep_api_key: '' } : { ...defaultSafeKeepTarget });
@@ -584,6 +587,10 @@ export function CronPage() {
   };
 
   const saveDrConfig = () => {
+    if (bkPassTouched && bkPass && bkPass.length < 6) {
+      toast.error('灾备加密口令至少 6 位（或留空不加密）');
+      return;
+    }
     const updatedTargets = applySafeKeepFormToList();
     setDrTargets(updatedTargets);
     setPwAction({
@@ -595,9 +602,10 @@ export function CronPage() {
           include_history: backupCfg?.include_history || [],
           targets: updatedTargets.map(buildBackupTargetPayload),
         };
-        if (bkPass) payload.passphrase = bkPass;
+        if (bkPassTouched) payload.passphrase = bkPass;
         await apiPut('/api/v1/backup/config', payload);
         setBkPass('');
+        setBkPassTouched(false);
         setShowDrModal(false);
         toast.success('SafeKeep 与灾备定时配置已保存');
         await load();
@@ -948,7 +956,7 @@ export function CronPage() {
                     </Button>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    统一使用迁移与灾备中的 SafeKeep 网关与加密口令配置。
+                    统一使用定时任务中的 SafeKeep 网关与加密口令配置。
                   </p>
                   <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-xs">
                     <dt className="text-slate-500">灾备总开关</dt>
@@ -963,7 +971,7 @@ export function CronPage() {
                       {safekeepTargets[0]?.safekeep_mode === 'async' ? '异步上传（async）' : '同步上传（sync）'}
                     </dd>
                     <dt className="text-slate-500">备份加密</dt>
-                    <dd className="text-right">{backupCfg?.passphrase_set ? '已设置' : '未设置'}</dd>
+                    <dd className="text-right">{backupCfg?.passphrase_set ? '已设置' : '未设置（不加密）'}</dd>
                   </dl>
                 </div>
               </div>
@@ -1194,7 +1202,7 @@ export function CronPage() {
           <div className="flex items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
             <span>配置控制面与 Raft 快照异地灾备的 SafeKeep 网关。</span>
             <Link to="/migration-backup" className="text-indigo-600 hover:underline dark:text-indigo-400 shrink-0">
-              前往迁移与全量灾备页
+              前往环境迁移页
             </Link>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1203,11 +1211,14 @@ export function CronPage() {
               <span>启用控制面定时灾备（control_plane_backup）</span>
             </label>
             <SecretInput
-              label="灾备加密口令（至少 12 位）"
+              label="灾备加密口令（可选，填写则至少 6 位）"
               value={bkPass}
               hasStoredValue={Boolean(backupCfg?.passphrase_set)}
               resetKey={showDrModal ? 'open' : 'closed'}
-              onChangeValue={setBkPass}
+              onChangeValue={(v) => {
+                setBkPass(v);
+                setBkPassTouched(true);
+              }}
               onRevealStored={async () => {
                 const r = await apiPost('/api/v1/backup/secrets/reveal', { kind: 'passphrase' });
                 return r.secret || '';

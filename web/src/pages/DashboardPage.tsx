@@ -297,9 +297,6 @@ export function DashboardPage() {
               <Link to="/cron" className="inline-flex items-center gap-0.5 text-indigo-600 hover:underline dark:text-indigo-400">
                 定时任务 <ArrowUpRight className="h-3 w-3" />
               </Link>
-              <Link to="/migration-backup" className="inline-flex items-center gap-0.5 text-indigo-600 hover:underline dark:text-indigo-400">
-                灾备 <ArrowUpRight className="h-3 w-3" />
-              </Link>
             </div>
           }
         >

@@ -1163,7 +1163,7 @@ func (s *Service) ExportBackup(ctx context.Context, actor audit.Actor, clusterID
 	if err != nil {
 		return nil, "", err
 	}
-	if len(passphrase) < vaultbackup.MinPassphrase {
+	if passphrase != "" && len(passphrase) < vaultbackup.MinPassphrase {
 		return nil, "", badRequest("备份口令至少 %d 个字符", vaultbackup.MinPassphrase)
 	}
 	cu, err := db.GetCustody(ctx, s.DB.Reader, clusterID)

@@ -114,6 +114,14 @@ func TestMigrationReplace(t *testing.T) {
 	if code, _ := sroot.raw("POST", "/api/v1/migration/export", map[string]any{"current_password": adminPass, "passphrase": "short"}); code != 400 {
 		t.Fatalf("short passphrase: %d", code)
 	}
+	// Unencrypted export (empty passphrase) + preview round-trip.
+	code, plainBundle := sroot.raw("POST", "/api/v1/migration/export", map[string]any{"current_password": adminPass, "passphrase": ""})
+	if code != 200 || len(plainBundle) < 100 {
+		t.Fatalf("unencrypted export: %d", code)
+	}
+	if code, pb := sroot.upload("/api/v1/migration/import/preview", map[string]string{"passphrase": "", "strategy": "replace"}, plainBundle); code != 200 {
+		t.Fatalf("unencrypted preview: %d %v", code, pb)
+	}
 	code, bundle := sroot.raw("POST", "/api/v1/migration/export", map[string]any{"current_password": adminPass, "passphrase": bundlePass,
 		"include": []string{"admins", "operation_tasks", "audit_logs"}})
 	if code != 200 || len(bundle) < 100 {

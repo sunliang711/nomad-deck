@@ -340,22 +340,24 @@ func WriteArchive(dst io.Writer, src io.Reader, meta ArchiveMeta, passphrase str
 	return SealStream(dst, src, archiveMagic, meta, passphrase)
 }
 
+// ErrPassphraseRequired is returned when opening an encrypted stream without a passphrase.
+var ErrPassphraseRequired = errors.New("归档已加密，请提供解密口令")
+
 // SealStream encrypts src with a passphrase (Argon2id + AES-256-GCM chunks)
-// behind a 4-byte magic. header must marshal to a JSON object; it is stored
-// authenticated but unencrypted, with "archive_id" and "nonce_prefix"
-// added.
+// behind a 4-byte magic, or writes an unencrypted version-2 stream when
+// passphrase is empty. header must marshal to a JSON object; it is stored
+// authenticated (when encrypted) or plain, with "archive_id" (and
+// "nonce_prefix" when encrypted) added.
 func SealStream(dst io.Writer, src io.Reader, magic string, header any, passphrase string) error {
 	if len(magic) != 4 {
 		return errors.New("magic must be 4 bytes")
 	}
-	if len(passphrase) < vaultbackup.MinPassphrase {
+	if passphrase != "" && len(passphrase) < vaultbackup.MinPassphrase {
 		return fmt.Errorf("passphrase must be at least %d characters", vaultbackup.MinPassphrase)
 	}
-	salt, prefix, aid := make([]byte, 16), make([]byte, 8), make([]byte, 16)
-	for _, b := range [][]byte{salt, prefix, aid} {
-		if _, err := rand.Read(b); err != nil {
-			return err
-		}
+	aid := make([]byte, 16)
+	if _, err := rand.Read(aid); err != nil {
+		return err
 	}
 	raw, err := json.Marshal(header)
 	if err != nil {
@@ -365,10 +367,29 @@ func SealStream(dst io.Writer, src io.Reader, magic string, header any, passphra
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return errors.New("header must be a JSON object")
 	}
-	fields["archive_id"], fields["nonce_prefix"] = hex.EncodeToString(aid), hex.EncodeToString(prefix)
+	fields["archive_id"] = hex.EncodeToString(aid)
+	w := bufio.NewWriterSize(dst, 256<<10)
+	if passphrase == "" {
+		fields["encrypted"] = false
+		hdr, _ := json.Marshal(fields)
+		w.WriteString(magic)
+		w.WriteByte(2)
+		_ = binary.Write(w, binary.BigEndian, uint32(len(hdr)))
+		w.Write(hdr)
+		if _, err := io.Copy(w, src); err != nil {
+			return err
+		}
+		return w.Flush()
+	}
+	salt, prefix := make([]byte, 16), make([]byte, 8)
+	for _, b := range [][]byte{salt, prefix} {
+		if _, err := rand.Read(b); err != nil {
+			return err
+		}
+	}
+	fields["nonce_prefix"] = hex.EncodeToString(prefix)
 	hdr, _ := json.Marshal(fields)
 	t, m, p := vaultbackup.DefaultTime, vaultbackup.DefaultMemory, vaultbackup.DefaultThreads
-	w := bufio.NewWriterSize(dst, 256<<10)
 	w.WriteString(magic)
 	w.WriteByte(1)
 	_ = binary.Write(w, binary.BigEndian, t)
@@ -401,53 +422,89 @@ func ReadArchive(src io.ReadCloser, passphrase string) (*ArchiveMeta, io.ReadClo
 }
 
 // OpenStream opens a stream written by SealStream and returns its header
-// JSON and the decrypting reader.
+// JSON and the decrypting (or plaintext for version 2) reader.
 func OpenStream(src io.ReadCloser, magic, passphrase string) ([]byte, io.ReadCloser, error) {
 	r := bufio.NewReaderSize(src, 256<<10)
-	fixed := make([]byte, 16)
-	if _, err := io.ReadFull(r, fixed); err != nil || string(fixed[:4]) != magic || fixed[4] != 1 {
+	head := make([]byte, 5)
+	if _, err := io.ReadFull(r, head); err != nil || string(head[:4]) != magic {
 		src.Close()
 		return nil, nil, errors.New("not a NomadDeck archive of the expected kind")
 	}
-	t, m, p, sl := binary.BigEndian.Uint32(fixed[5:9]), binary.BigEndian.Uint32(fixed[9:13]), fixed[13], int(fixed[14])
-	if t == 0 || t > 64 || m < 8*1024 || m > 4*1024*1024 || p == 0 || sl < 8 {
+	switch head[4] {
+	case 2:
+		var hl uint32
+		if err := binary.Read(r, binary.BigEndian, &hl); err != nil || hl > 1<<20 {
+			src.Close()
+			return nil, nil, errors.New("archive header is malformed")
+		}
+		hdr := make([]byte, hl)
+		if _, err := io.ReadFull(r, hdr); err != nil {
+			src.Close()
+			return nil, nil, err
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(hdr, &fields); err != nil {
+			src.Close()
+			return nil, nil, errors.New("archive header is malformed")
+		}
+		body := struct {
+			io.Reader
+			io.Closer
+		}{r, src}
+		return hdr, body, nil
+	case 1:
+		if passphrase == "" {
+			src.Close()
+			return nil, nil, ErrPassphraseRequired
+		}
+		rest := make([]byte, 11)
+		if _, err := io.ReadFull(r, rest); err != nil {
+			src.Close()
+			return nil, nil, errors.New("not a NomadDeck archive of the expected kind")
+		}
+		t, m, p, sl := binary.BigEndian.Uint32(rest[0:4]), binary.BigEndian.Uint32(rest[4:8]), rest[8], int(rest[9])
+		if t == 0 || t > 64 || m < 8*1024 || m > 4*1024*1024 || p == 0 || sl < 8 {
+			src.Close()
+			return nil, nil, errors.New("archive header is malformed")
+		}
+		salt := make([]byte, sl)
+		salt[0] = rest[10]
+		if _, err := io.ReadFull(r, salt[1:]); err != nil {
+			src.Close()
+			return nil, nil, err
+		}
+		var hl uint32
+		if err := binary.Read(r, binary.BigEndian, &hl); err != nil || hl > 1<<20 {
+			src.Close()
+			return nil, nil, errors.New("archive header is malformed")
+		}
+		hdr := make([]byte, hl)
+		if _, err := io.ReadFull(r, hdr); err != nil {
+			src.Close()
+			return nil, nil, err
+		}
+		var fields struct {
+			NoncePrefix string `json:"nonce_prefix"`
+		}
+		if err := json.Unmarshal(hdr, &fields); err != nil {
+			src.Close()
+			return nil, nil, errors.New("archive header is malformed")
+		}
+		prefix, err := hex.DecodeString(fields.NoncePrefix)
+		if err != nil || len(prefix) != 8 {
+			src.Close()
+			return nil, nil, errors.New("archive header is malformed")
+		}
+		hsum := sha256.Sum256(hdr)
+		body := struct {
+			io.Reader
+			io.Closer
+		}{r, src}
+		return hdr, chunkReader(body, passKey(passphrase, salt, t, m, p), prefix, hex.EncodeToString(hsum[:])), nil
+	default:
 		src.Close()
-		return nil, nil, errors.New("archive header is malformed")
+		return nil, nil, errors.New("not a NomadDeck archive of the expected kind")
 	}
-	salt := make([]byte, sl)
-	salt[0] = fixed[15]
-	if _, err := io.ReadFull(r, salt[1:]); err != nil {
-		src.Close()
-		return nil, nil, err
-	}
-	var hl uint32
-	if err := binary.Read(r, binary.BigEndian, &hl); err != nil || hl > 1<<20 {
-		src.Close()
-		return nil, nil, errors.New("archive header is malformed")
-	}
-	hdr := make([]byte, hl)
-	if _, err := io.ReadFull(r, hdr); err != nil {
-		src.Close()
-		return nil, nil, err
-	}
-	var fields struct {
-		NoncePrefix string `json:"nonce_prefix"`
-	}
-	if err := json.Unmarshal(hdr, &fields); err != nil {
-		src.Close()
-		return nil, nil, errors.New("archive header is malformed")
-	}
-	prefix, err := hex.DecodeString(fields.NoncePrefix)
-	if err != nil || len(prefix) != 8 {
-		src.Close()
-		return nil, nil, errors.New("archive header is malformed")
-	}
-	hsum := sha256.Sum256(hdr)
-	body := struct {
-		io.Reader
-		io.Closer
-	}{r, src}
-	return hdr, chunkReader(body, passKey(passphrase, salt, t, m, p), prefix, hex.EncodeToString(hsum[:])), nil
 }
 
 // Size returns the number of plaintext bytes written.

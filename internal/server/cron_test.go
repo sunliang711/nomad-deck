@@ -19,8 +19,8 @@ func TestCronRoutes(t *testing.T) {
 		t.Fatalf("list: %d %v", code, b)
 	}
 	jobs := b["cron_jobs"].([]any)
-	if len(jobs) != 9 {
-		t.Fatalf("nine built-in jobs, got %d", len(jobs))
+	if len(jobs) != 10 {
+		t.Fatalf("ten built-in jobs, got %d", len(jobs))
 	}
 	var cleanupID string
 	for _, j := range jobs {

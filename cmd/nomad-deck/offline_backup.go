@@ -35,20 +35,23 @@ func offlineBackup(args []string, stdin io.Reader, stdout, stderr io.Writer) err
 		return err
 	}
 	var pass string
-	if f, ok := stdin.(*os.File); ok && !*fromStdin && term.IsTerminal(int(f.Fd())) {
-		fmt.Fprint(stderr, "备份口令：")
-		b, err := term.ReadPassword(int(f.Fd()))
-		fmt.Fprintln(stderr)
-		if err != nil {
-			return err
+	unencrypted := len(data) >= len(vaultbackup.Magic)+1 && string(data[:5]) == vaultbackup.Magic && data[5] == 2
+	if !unencrypted {
+		if f, ok := stdin.(*os.File); ok && !*fromStdin && term.IsTerminal(int(f.Fd())) {
+			fmt.Fprint(stderr, "备份口令：")
+			b, err := term.ReadPassword(int(f.Fd()))
+			fmt.Fprintln(stderr)
+			if err != nil {
+				return err
+			}
+			pass = string(b)
+		} else {
+			line, err := bufio.NewReader(stdin).ReadString('\n')
+			if err != nil && line == "" {
+				return errors.New("未读取到备份口令")
+			}
+			pass = strings.TrimRight(line, "\r\n")
 		}
-		pass = string(b)
-	} else {
-		line, err := bufio.NewReader(stdin).ReadString('\n')
-		if err != nil && line == "" {
-			return errors.New("未读取到备份口令")
-		}
-		pass = strings.TrimRight(line, "\r\n")
 	}
 	p, err := vaultbackup.Decrypt(data, pass)
 	if err != nil {

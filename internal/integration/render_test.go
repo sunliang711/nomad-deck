@@ -107,3 +107,37 @@ func TestNomadVaultBlockValidates(t *testing.T) {
 		t.Fatal("digest must change with the Vault address and the CA bundle")
 	}
 }
+
+func TestJobExampleWithOptions(t *testing.T) {
+	role := RoleSpec{
+		Name:        "postgres",
+		Mode:        "explicit",
+		SecretPaths: []string{"secret/apps/postgres"},
+		BoundClaims: map[string]string{"nomad_namespace": "default"},
+	}
+
+	probe := JobExampleWithOptions(role, JobExampleOptions{SecretPath: "secret/apps/postgres", TemplateKind: "probe"})
+	if !strings.Contains(probe, `secret "secret/data/apps/postgres"`) || !strings.Contains(probe, `role = "postgres"`) {
+		t.Fatalf("probe HCL unexpected:\n%s", probe)
+	}
+
+	envJob := JobExampleWithOptions(role, JobExampleOptions{
+		SecretPath:   "secret/apps/postgres",
+		TemplateKind: "docker_env",
+		SecretKeys:   []string{"username", "password"},
+	})
+	if !strings.Contains(envJob, `env         = true`) || !strings.Contains(envJob, `USERNAME={{ .Data.data.username | toJSON }}`) {
+		t.Fatalf("docker_env HCL unexpected:\n%s", envJob)
+	}
+
+	fileJob := JobExampleWithOptions(role, JobExampleOptions{
+		SecretPath:   "secret/apps/postgres",
+		TemplateKind: "docker_file",
+		SecretKeys:   []string{"username", "password"},
+	})
+	if !strings.Contains(fileJob, `APP_SECRET_FILE = "/secrets/app.secret"`) ||
+		!strings.Contains(fileJob, `perms       = "0600"`) ||
+		!strings.Contains(fileJob, `index .Data.data "password"`) {
+		t.Fatalf("docker_file HCL unexpected:\n%s", fileJob)
+	}
+}

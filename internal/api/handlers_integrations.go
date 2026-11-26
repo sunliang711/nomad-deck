@@ -150,13 +150,19 @@ func (a *API) doctorIntegration(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) integrationJobExample(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Role       string `json:"role"`
-		SecretPath string `json:"secret_path"`
+		Role         string   `json:"role"`
+		SecretPath   string   `json:"secret_path"`
+		TemplateKind string   `json:"template_kind"`
+		SecretKeys   []string `json:"secret_keys"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	hcl, err := a.Integrations.JobExample(r.Context(), chi.URLParam(r, "id"), in.Role, in.SecretPath)
+	hcl, err := a.Integrations.JobExampleWithOptions(r.Context(), chi.URLParam(r, "id"), in.Role, integration.JobExampleOptions{
+		SecretPath:   in.SecretPath,
+		TemplateKind: in.TemplateKind,
+		SecretKeys:   in.SecretKeys,
+	})
 	if err != nil {
 		a.writeErr(w, r, err)
 		return

@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Lock, Plus, RefreshCw, Shield, Unlock } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { ArrowRight, Copy, Lock, Plus, RefreshCw, Shield, Unlock } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
+import { copyText } from '../lib/clipboard';
+import { buildTemplateData, parseKVPath } from '../lib/vaultHelpers';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { useToast } from '../components/Toast';
@@ -39,13 +41,21 @@ export function VaultPage() {
   const askConfirm = useConfirm();
   const [searchParams] = useSearchParams();
   const queryId = searchParams.get('id') || '';
+  const queryTab = searchParams.get('tab') || '';
+  const validTabs = ['status', 'custody', 'snapshots', 'manage'];
   const [clusters, setClusters] = useState<any[]>([]);
   const [nodes, setNodes] = useState<any[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [loadingList, setLoadingList] = useState(true);
   const selectionRef = useRef(selectedId);
   selectionRef.current = selectedId;
-  const [tab, setTab] = useState('status');
+  const [tab, setTab] = useState(validTabs.includes(queryTab) ? queryTab : 'status');
+
+  useEffect(() => {
+    if (queryTab && validTabs.includes(queryTab)) {
+      setTab(queryTab);
+    }
+  }, [queryTab]);
   const [status, setStatus] = useState<any>(null);
   const [custodyData, setCustodyData] = useState<any>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
@@ -848,6 +858,46 @@ export function VaultPage() {
                       </Button>
                     ))}
                   </div>
+                  {kvMount && kvPath.trim() && !kvPath.trim().endsWith('/') && (() => {
+                    const cleanMount = kvMount.replace(/^\/+|\/+$/g, '');
+                    const cleanPath = kvPath.trim().replace(/^\/+|\/+$/g, '');
+                    const parsed = parseKVPath(`${cleanMount}/${cleanPath}`, cleanMount);
+                    const envSnippet = buildTemplateData(parsed.templatePath, [], 'env');
+                    return (
+                      <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/60 p-3 space-y-2 dark:border-indigo-500/30 dark:bg-indigo-950/30">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold text-indigo-950 dark:text-indigo-100">用于 Nomad 联动（路径对照）</span>
+                          <Link to="/integrations" className="inline-flex items-center gap-1 text-indigo-600 hover:underline dark:text-indigo-300">
+                            <span>去集群联动配置 Role</span>
+                            <ArrowRight className="h-3 w-3" />
+                          </Link>
+                        </div>
+                        <p className="text-[11px] leading-4 text-slate-600 dark:text-slate-300">
+                          在联动 Role 里授权填<strong>不带 data/</strong> 的路径；在 Nomad Job 的 <code className="font-mono">template</code> 里读 KV v2 必须多加一层 <code className="font-mono">/data/</code>。
+                        </p>
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">
+                          <span className="text-[11px] text-slate-500">Role 权限路径：<code className="font-mono text-slate-900 dark:text-slate-100">{parsed.rolePath}</code></span>
+                          <Button
+                            size="sm"
+                            onClick={() => void copyText(parsed.rolePath).then(() => toast.success('已复制 Role 权限路径')).catch((ex) => toast.error(ex.message))}
+                          >
+                            <Copy className="h-3 w-3" />
+                            <span>复制</span>
+                          </Button>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">
+                          <span className="text-[11px] text-slate-500">Job 模板读取路径：<code className="font-mono text-slate-900 dark:text-slate-100">{parsed.templatePath}</code></span>
+                          <Button
+                            size="sm"
+                            onClick={() => void copyText(envSnippet).then(() => toast.success('已复制 template 读取片段')).catch((ex) => toast.error(ex.message))}
+                          >
+                            <Copy className="h-3 w-3" />
+                            <span>复制模板片段</span>
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </Card>
             </div>
@@ -878,6 +928,50 @@ export function VaultPage() {
               <span className="font-mono">版本 v{kvItem.cas}</span>
             </div>
             <CodeEditor label="Secret 数据（JSON）" value={kvItem.data} onChange={(v) => setKvItem({ ...kvItem, data: v })} height="240px" />
+            {(() => {
+              const cleanMount = kvMount.replace(/^\/+|\/+$/g, '') || 'secret';
+              const parsed = parseKVPath(`${cleanMount}/${kvItem.path}`, cleanMount);
+              let keys: string[] = [];
+              try {
+                const obj = JSON.parse(kvItem.data);
+                if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+                  keys = Object.keys(obj);
+                }
+              } catch {
+                // Ignore incomplete JSON while user is typing.
+              }
+              const envSnippet = buildTemplateData(parsed.templatePath, keys, 'env');
+              const fileSnippet = buildTemplateData(parsed.templatePath, keys, 'file');
+              return (
+                <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/60 p-3 space-y-2 dark:border-indigo-500/30 dark:bg-indigo-950/30">
+                  <div className="font-semibold text-indigo-950 dark:text-indigo-100">在 Nomad Job 中引用此 Secret</div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">
+                      <span className="truncate text-[11px]">Role 授权路径：<code className="font-mono">{parsed.rolePath}</code></span>
+                      <Button size="sm" onClick={() => void copyText(parsed.rolePath).then(() => toast.success('已复制 Role 路径')).catch((ex) => toast.error(ex.message))}>
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">
+                      <span className="truncate text-[11px]">模板路径：<code className="font-mono">{parsed.templatePath}</code></span>
+                      <Button size="sm" onClick={() => void copyText(parsed.templatePath).then(() => toast.success('已复制模板路径')).catch((ex) => toast.error(ex.message))}>
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" onClick={() => void copyText(envSnippet).then(() => toast.success('已复制环境变量模板代码')).catch((ex) => toast.error(ex.message))}>
+                      <Copy className="h-3 w-3" />
+                      <span>复制环境变量模板 (env)</span>
+                    </Button>
+                    <Button size="sm" onClick={() => void copyText(fileSnippet).then(() => toast.success('已复制密码文件模板代码')).catch((ex) => toast.error(ex.message))}>
+                      <Copy className="h-3 w-3" />
+                      <span>复制密码文件模板 (file)</span>
+                    </Button>
+                  </div>
+                </div>
+              );
+            })()}
             <div className="flex justify-end gap-2">
               <Button type="button" onClick={() => setKvItem(null)}>关闭</Button>
               <Button

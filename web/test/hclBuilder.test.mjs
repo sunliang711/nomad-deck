@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { canInsert, contextAt, createBlock, duplicateBlock, moveNode, nodeAt } from '../src/lib/hclBuilder.ts';
+import { applyVaultToTask, canInsert, contextAt, createBlock, duplicateBlock, moveNode, nodeAt } from '../src/lib/hclBuilder.ts';
 
 const schema = JSON.parse(readFileSync(new URL('../../internal/jobspec/builder_schema.json', import.meta.url)));
 const attribute = (name, expression) => ({ kind: 'attribute', name, expression, leading: '\n' });
@@ -92,4 +92,25 @@ test('Docker mount blocks repeat while bind options and logging are singletons',
   const mount = schema.types[docker.blocks.find((entry) => entry.name === 'mount').type];
   assert.equal(mount.blocks.find((entry) => entry.name === 'bind_options').max, 1);
   assert.equal(docker.blocks.find((entry) => entry.name === 'auth').max, 1);
+});
+
+test('applyVaultToTask inserts vault block, optional secret file env, and template block cleanly', () => {
+  const doc = fixture();
+  const next = applyVaultToTask(doc, [0, 0, 0], {
+    role: 'postgres',
+    templateData: '{{ with secret "secret/data/apps/postgres" }}{{ .Data.data.password }}{{ end }}',
+    mode: 'file',
+    fileName: 'db.pass',
+    envVarName: 'DB_PASSWORD_FILE',
+  });
+  const taskBody = nodeAt(next, [0, 0, 0]).body;
+  const vault = taskBody.nodes.find((entry) => entry.kind === 'block' && entry.name === 'vault');
+  assert.equal(vault.body.nodes.find((entry) => entry.name === 'role').expression, '"postgres"');
+  assert.equal(vault.body.nodes.find((entry) => entry.name === 'env').expression, 'false');
+  const env = taskBody.nodes.find((entry) => entry.kind === 'block' && entry.name === 'env');
+  assert.equal(env.body.nodes.find((entry) => entry.name === 'DB_PASSWORD_FILE').expression, '"/secrets/db.pass"');
+  const templates = taskBody.nodes.filter((entry) => entry.kind === 'block' && entry.name === 'template');
+  assert.equal(templates.length, 3);
+  assert.equal(templates[2].body.nodes.find((entry) => entry.name === 'destination').expression, '"secrets/db.pass"');
+  assert.equal(templates[2].body.nodes.find((entry) => entry.name === 'perms').expression, '"0600"');
 });

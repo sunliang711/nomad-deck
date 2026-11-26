@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Boxes, Download, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { ArrowUpRight, Boxes, Copy, Download, KeyRound, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiDelete, apiDownload, apiGet, apiPost, fmtTime, openSSE } from '../lib/api';
+import { copyText } from '../lib/clipboard';
+import { applyVaultToTask, type HCLDocument, type NodePath } from '../lib/hclBuilder';
+import {
+  buildTaskVaultSnippet,
+  buildTemplateData,
+  INTEGRATION_DRAFT_JOB_STORAGE_KEY,
+  parseKVPath,
+  type VaultIntegrationOption,
+  type VaultRoleOption,
+} from '../lib/vaultHelpers';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -176,11 +186,15 @@ const sampleHCL = STARTER_SAMPLES[0].hcl;
 export function JobCenterPage() {
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const queryClusterId = searchParams.get('cluster_id') || '';
+  const queryNamespace = searchParams.get('namespace') || '';
+  const queryFrom = searchParams.get('from') || '';
   const toast = useToast();
   const askConfirm = useConfirm();
   const [clusters, setClusters] = useState<any[]>([]);
-  const [clusterId, setClusterId] = useState('');
-  const [namespace, setNamespace] = useState('default');
+  const [clusterId, setClusterId] = useState(queryClusterId);
+  const [namespace, setNamespace] = useState(queryNamespace || 'default');
   const [jobs, setJobs] = useState<any[]>([]);
   const [templates, setTemplates] = useState<any[]>([]);
   const [editMode, setEditMode] = useState<'hcl' | 'visual' | 'json'>('hcl');
@@ -195,14 +209,55 @@ export function JobCenterPage() {
   const [showCompose, setShowCompose] = useState(false);
   const [plan, setPlan] = useState<any>(null);
   const planRequestRef = useRef(0);
+  const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
   const [revisions, setRevisions] = useState<any[]>([]);
   const [selectedJobId, setSelectedJobId] = useState('');
   const [tplName, setTplName] = useState('');
   const [err, setErr] = useState('');
   const [loadingClusters, setLoadingClusters] = useState(true);
   const editRequestRef = useRef(0);
+  const [clusterNamespaces, setClusterNamespaces] = useState<string[]>(['default']);
+  const [vaultRoles, setVaultRoles] = useState<VaultRoleOption[]>([]);
+  const [vaultIntegrations, setVaultIntegrations] = useState<VaultIntegrationOption[]>([]);
+  const [showVaultWizard, setShowVaultWizard] = useState(false);
+  const [vaultWizardBusy, setVaultWizardBusy] = useState(false);
+  const [vaultWizard, setVaultWizard] = useState({
+    role: '',
+    secretPath: 'secret/apps/demo',
+    mode: 'env' as 'env' | 'file',
+    keys: '',
+    fileName: 'app.secret',
+    envVarName: 'APP_SECRET_FILE',
+  });
   const selectedCluster = clusters.find((c) => c.id === clusterId);
   const needsDeployment = selectedCluster?.init_state === 'uninitialized';
+
+  // Consume one-time draft HCL handed over from the Integrations page
+  useEffect(() => {
+    if (queryFrom !== 'integration') return;
+    try {
+      const raw = window.sessionStorage.getItem(INTEGRATION_DRAFT_JOB_STORAGE_KEY);
+      if (raw) {
+        const draft = JSON.parse(raw);
+        if (draft?.clusterId) setClusterId(draft.clusterId);
+        if (draft?.namespace) setNamespace(draft.namespace);
+        if (draft?.hcl) {
+          setHcl(draft.hcl);
+          setEditMode('hcl');
+          setJobVariables({});
+          setPlan(null);
+          setValidationWarnings([]);
+        }
+        window.sessionStorage.removeItem(INTEGRATION_DRAFT_JOB_STORAGE_KEY);
+        toast.info(`已载入联动示例（Role: ${draft?.roleName || 'default'}），请依次点击「1. 校验配置 → 2. 预览计划 → 3. 确认运行」`);
+      }
+    } catch {
+      // Ignore malformed sessionStorage drafts.
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('from');
+    setSearchParams(next, { replace: true });
+  }, [queryFrom]);
 
   const loadClusters = useCallback(async () => {
     setErr('');
@@ -214,13 +269,45 @@ export function JobCenterPage() {
       const list = cRes.clusters || [];
       setClusters(list);
       setTemplates(tRes.templates || []);
-      if (list.length > 0) setClusterId((prev) => prev || list[0].id);
+      if (list.length > 0) {
+        setClusterId((prev) => {
+          if (prev && list.some((c: any) => c.id === prev)) return prev;
+          if (queryClusterId && list.some((c: any) => c.id === queryClusterId)) return queryClusterId;
+          return list[0].id;
+        });
+      }
     } catch (ex: any) {
       setErr(ex?.message || '加载集群或模板列表失败');
     } finally {
       setLoadingClusters(false);
     }
-  }, [isAdmin]);
+  }, [isAdmin, queryClusterId]);
+
+  const loadBuilderContext = useCallback(async () => {
+    if (!clusterId || needsDeployment) {
+      setClusterNamespaces(['default']);
+      setVaultRoles([]);
+      setVaultIntegrations([]);
+      return;
+    }
+    try {
+      const res = await apiGet(`/api/v1/nomad/${clusterId}/builder-options`);
+      const nss = res.options?.namespaces || [];
+      setClusterNamespaces(nss.length > 0 ? nss : ['default']);
+      const roles: VaultRoleOption[] = res.vault_roles || [];
+      setVaultRoles(roles);
+      setVaultIntegrations(res.vault_integrations || []);
+      if (roles.length > 0) {
+        setVaultWizard((prev) => (prev.role ? prev : {
+          ...prev,
+          role: roles[0].role,
+          secretPath: roles[0].secret_paths?.[0] || 'secret/apps/demo',
+        }));
+      }
+    } catch {
+      // Non-blocking: Job Center remains usable even if builder options fail.
+    }
+  }, [clusterId, needsDeployment]);
 
   const loadJobs = useCallback(async () => {
     if (!clusterId || needsDeployment) { setJobs([]); return; }
@@ -239,7 +326,8 @@ export function JobCenterPage() {
 
   useEffect(() => {
     void loadJobs();
-  }, [loadJobs]);
+    void loadBuilderContext();
+  }, [loadJobs, loadBuilderContext]);
 
   useEffect(() => {
     if (!clusterId || needsDeployment) return;
@@ -249,7 +337,11 @@ export function JobCenterPage() {
   }, [clusterId, loadJobs, needsDeployment]);
 
   // clearPlan also invalidates an in-flight preview when its draft or target changes.
-  const clearPlan = () => { planRequestRef.current++; setPlan(null); };
+  const clearPlan = () => {
+    planRequestRef.current++;
+    setPlan(null);
+    setValidationWarnings([]);
+  };
 
   // changeMode flushes the current tree and refuses conversions that would drop JSON fields.
   const changeMode = async (next: 'hcl' | 'visual' | 'json') => {
@@ -309,11 +401,77 @@ export function JobCenterPage() {
 
   const validateJob = async () => {
     setErr('');
+    setValidationWarnings([]);
     try {
-      await apiPost(`/api/v1/nomad/${clusterId}/job-ops/validate`, await jobInput());
-      toast.success('Job 校验通过');
+      const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/validate`, await jobInput());
+      const warns = String(res.warnings || '')
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      setValidationWarnings(warns);
+      if (warns.length > 0) {
+        toast.info(`Job 语法校验通过，但有 ${warns.length} 条提醒请查看`);
+      } else {
+        toast.success('Job 校验通过');
+      }
     } catch (ex: any) {
       setErr(ex?.message || '校验失败');
+    }
+  };
+
+  const insertVaultIntoJob = async () => {
+    if (!clusterId || vaultWizardBusy) return;
+    setVaultWizardBusy(true);
+    setErr('');
+    try {
+      let current = hcl;
+      if (editMode === 'visual' && visualRef.current) {
+        current = (await visualRef.current.flush()).hcl;
+      }
+      if (editMode === 'json') {
+        throw new Error('JSON 模式下请先切换回原生 HCL 编辑器或可视化编排后再插入');
+      }
+      const treeRes = await apiPost<{ document: HCLDocument }>(`/api/v1/nomad/${clusterId}/job-ops/hcl-tree`, { hcl: current });
+      const doc = treeRes.document;
+      let firstTaskPath: NodePath | null = null;
+      const walk = (nodes: HCLDocument['nodes'], path: NodePath) => {
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
+          const here = [...path, i];
+          if (n.kind === 'block' && n.name === 'task') {
+            firstTaskPath = here;
+            return;
+          }
+          if (n.body) {
+            walk(n.body.nodes, here);
+            if (firstTaskPath) return;
+          }
+        }
+      };
+      walk(doc.nodes, []);
+      if (!firstTaskPath) {
+        throw new Error('当前 HCL 中未找到 task 块，请先添加 task 块或复制下方片段手动粘贴');
+      }
+      const parsed = parseKVPath(vaultWizard.secretPath);
+      const keys = vaultWizard.keys.split(',').map((s) => s.trim()).filter(Boolean);
+      const templateData = buildTemplateData(parsed.templatePath, keys, vaultWizard.mode);
+      const updated = applyVaultToTask(doc, firstTaskPath, {
+        role: vaultWizard.role.trim() || 'default',
+        templateData,
+        mode: vaultWizard.mode,
+        fileName: vaultWizard.fileName,
+        envVarName: vaultWizard.envVarName,
+      });
+      const rendered = await apiPost<{ hcl: string }>(`/api/v1/nomad/${clusterId}/job-ops/hcl-tree-render`, updated);
+      setHcl(rendered.hcl);
+      if (editMode === 'visual') setEditMode('hcl');
+      clearPlan();
+      setShowVaultWizard(false);
+      toast.success('已将 vault 与 template 配置插入第一个 Task，可点击「1. 校验配置」核对');
+    } catch (ex: any) {
+      toast.error(ex?.message || '插入 Vault 密钥配置失败');
+    } finally {
+      setVaultWizardBusy(false);
     }
   };
 
@@ -411,7 +569,10 @@ export function JobCenterPage() {
             <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
               <span className="shrink-0">命名空间</span>
               <div className="w-28">
-                <Input aria-label="任务命名空间" value={namespace} onChange={(e) => { setNamespace(e.target.value); clearPlan(); }} placeholder="default" />
+                <Input aria-label="任务命名空间" list="jc-namespace-list" value={namespace} onChange={(e) => { setNamespace(e.target.value); clearPlan(); }} placeholder="default" />
+                <datalist id="jc-namespace-list">
+                  {clusterNamespaces.map((ns) => <option key={ns} value={ns} />)}
+                </datalist>
               </div>
             </label>
             <Button onClick={() => { void loadClusters(); void loadJobs(); }}>
@@ -563,7 +724,13 @@ export function JobCenterPage() {
                 </Link>
               )}
               {isAdmin && (
-                <Button size="sm" onClick={() => setShowCompose(true)}>Compose 导入</Button>
+                <>
+                  <Button size="sm" disabled={needsDeployment} onClick={() => setShowVaultWizard(true)}>
+                    <KeyRound className="h-3.5 w-3.5" />
+                    <span>插入 Vault 密钥</span>
+                  </Button>
+                  <Button size="sm" onClick={() => setShowCompose(true)}>Compose 导入</Button>
+                </>
               )}
             </div>
           }
@@ -683,6 +850,15 @@ export function JobCenterPage() {
               </div>
             )}
 
+            {validationWarnings.length > 0 && (
+              <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50/90 p-3 text-xs text-amber-950 space-y-1 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+                <div className="font-semibold">校验提醒（含 Nomad-Vault 联动核对）：</div>
+                {validationWarnings.map((w, idx) => (
+                  <p key={idx} className="leading-5">• {w}</p>
+                ))}
+              </div>
+            )}
+
             {plan && (
               <div className="space-y-2 rounded-xl border border-indigo-300 bg-indigo-50/40 p-3.5 dark:border-indigo-500/40 dark:bg-indigo-950/30">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -764,6 +940,123 @@ export function JobCenterPage() {
             </Button>
           </div>
         </div>
+      </Modal>
+
+      <Modal open={showVaultWizard} title="插入 Vault 密钥读取模板" onClose={() => setShowVaultWizard(false)} wide>
+        {(() => {
+          const parsed = parseKVPath(vaultWizard.secretPath);
+          const keys = vaultWizard.keys.split(',').map((s) => s.trim()).filter(Boolean);
+          const snippet = buildTaskVaultSnippet({
+            role: vaultWizard.role,
+            secretPath: vaultWizard.secretPath,
+            keys,
+            mode: vaultWizard.mode,
+            fileName: vaultWizard.fileName,
+            envVarName: vaultWizard.envVarName,
+          });
+          const pickedRole = vaultRoles.find((r) => r.role === vaultWizard.role);
+          return (
+            <div className="space-y-3 text-xs">
+              {vaultIntegrations.length === 0 ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
+                  当前 Nomad 集群尚未创建 Nomad-Vault 联动。可先前往 <Link to="/integrations" className="font-semibold underline">集群联动</Link> 创建并应用。
+                </div>
+              ) : vaultIntegrations.some((ig) => ig.status !== 'applied') ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
+                  检测到联动尚未应用生效，请记得在 <Link to="/integrations" className="font-semibold underline">集群联动</Link> 点击「应用联动」后再运行 Job。
+                </div>
+              ) : null}
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Input
+                    label="Vault Role 名称"
+                    list="jc-vault-role-list"
+                    value={vaultWizard.role}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const matched = vaultRoles.find((r) => r.role === val);
+                      setVaultWizard((prev) => ({
+                        ...prev,
+                        role: val,
+                        secretPath: matched?.secret_paths?.[0] || prev.secretPath,
+                      }));
+                    }}
+                    placeholder="例如 postgres"
+                  />
+                  <datalist id="jc-vault-role-list">
+                    {vaultRoles.map((r) => <option key={r.role} value={r.role} />)}
+                  </datalist>
+                  {pickedRole && (
+                    <p className="text-[11px] text-slate-500">
+                      状态：{pickedRole.status === 'applied' ? '已应用' : '草稿（待应用）'} · 允许 Namespace：<code className="font-mono">{pickedRole.namespace || 'default'}</code>
+                    </p>
+                  )}
+                </div>
+                <Input
+                  label="Secret 路径（自动补全 /data/）"
+                  value={vaultWizard.secretPath}
+                  onChange={(e) => setVaultWizard((prev) => ({ ...prev, secretPath: e.target.value }))}
+                  placeholder="例如 secret/apps/postgres"
+                  hint={`模板读取路径：${parsed.templatePath || 'secret/data/apps/demo'}`}
+                />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Select
+                  label="密钥注入方式"
+                  value={vaultWizard.mode}
+                  onChange={(e) => setVaultWizard((prev) => ({ ...prev, mode: e.target.value as 'env' | 'file' }))}
+                >
+                  <option value="env">注入为容器环境变量（env = true）</option>
+                  <option value="file">挂载为 0600 密码文件（/secrets/xxx）</option>
+                </Select>
+                <Input
+                  label={vaultWizard.mode === 'file' ? '提取字段名（留空则写入完整 JSON）' : '提取字段名（逗号分隔，留空则注入全部字段）'}
+                  value={vaultWizard.keys}
+                  onChange={(e) => setVaultWizard((prev) => ({ ...prev, keys: e.target.value }))}
+                  placeholder={vaultWizard.mode === 'file' ? '例如 password' : '例如 username, password'}
+                />
+              </div>
+
+              {vaultWizard.mode === 'file' && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input
+                    label="容器内密码文件名（/secrets/ 下）"
+                    value={vaultWizard.fileName}
+                    onChange={(e) => setVaultWizard((prev) => ({ ...prev, fileName: e.target.value }))}
+                  />
+                  <Input
+                    label="指向该文件的环境变量名"
+                    value={vaultWizard.envVarName}
+                    onChange={(e) => setVaultWizard((prev) => ({ ...prev, envVarName: e.target.value }))}
+                  />
+                </div>
+              )}
+
+              <div>
+                <div className="mb-1 font-semibold text-slate-700 dark:text-slate-200">生成代码预览（放入 task 块内）</div>
+                <CodeEditor value={snippet} readOnly height="200px" />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => void copyText(snippet).then(() => toast.success('已复制代码片段')).catch((ex) => toast.error(ex.message))}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  <span>仅复制片段</span>
+                </Button>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => setShowVaultWizard(false)}>取消</Button>
+                  <Button size="sm" variant="primary" loading={vaultWizardBusy} onClick={() => void insertVaultIntoJob()}>
+                    插入当前 Job 第一个 Task
+                  </Button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
     </div>
   );

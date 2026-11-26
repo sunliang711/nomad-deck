@@ -1,13 +1,17 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Copy, GripVertical, Plus, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Copy, GripVertical, KeyRound, Plus, Trash2 } from 'lucide-react';
 import { apiGet, apiPost } from '../lib/api';
 import {
-  bodyAt, canInsert, contextAt, createBlock, defaultExpression, duplicateBlock, editDocument,
+  applyVaultToTask, bodyAt, canInsert, contextAt, createBlock, defaultExpression, duplicateBlock, editDocument,
   moveNode, nodeAt, nodeTitle, ruleAt,
   type AttributeRule, type BuilderDiagnostic, type BuilderResult, type BuilderSchema,
   type HCLDocument, type HCLNode, type NodePath,
 } from '../lib/hclBuilder';
-import { Button, ErrorAlert, Input, Select } from './UI';
+import {
+  buildTemplateData, parseKVPath, type VaultIntegrationOption, type VaultRoleOption,
+} from '../lib/vaultHelpers';
+import { Badge, Button, ErrorAlert, Input, Select } from './UI';
 
 interface BuilderOptions {
   namespaces: string[];
@@ -129,6 +133,16 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
   const [undo, setUndo] = useState<HCLDocument[]>([]);
   const [redo, setRedo] = useState<HCLDocument[]>([]);
   const [options, setOptions] = useState<BuilderOptions>({ namespaces: [], node_pools: [], datacenters: [], drivers: [], host_volumes: {} });
+  const [vaultRoles, setVaultRoles] = useState<VaultRoleOption[]>([]);
+  const [vaultIntegrations, setVaultIntegrations] = useState<VaultIntegrationOption[]>([]);
+  const [vaultHelper, setVaultHelper] = useState({
+    role: '',
+    secretPath: 'secret/apps/demo',
+    mode: 'env' as 'env' | 'file',
+    keys: '',
+    fileName: 'app.secret',
+    envVarName: 'APP_SECRET_FILE',
+  });
   const sourceRef = useRef(source);
   sourceRef.current = source;
   const docRef = useRef<HCLDocument | null>(null);
@@ -191,7 +205,24 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         setSelected(job >= 0 ? [job] : []);
       })
       .catch((ex) => { if (active) setError(ex.message || 'HCL 无法载入，请返回原生编辑器修正语法'); });
-    void apiGet<{ options: BuilderOptions }>(`/api/v1/nomad/${clusterId}/builder-options`).then((res) => { if (active) setOptions(res.options); }).catch(() => {});
+    void apiGet<{
+      options: BuilderOptions;
+      vault_roles?: VaultRoleOption[];
+      vault_integrations?: VaultIntegrationOption[];
+    }>(`/api/v1/nomad/${clusterId}/builder-options`)
+      .then((res) => {
+        if (!active) return;
+        setOptions(res.options);
+        const roles = res.vault_roles || [];
+        setVaultRoles(roles);
+        setVaultIntegrations(res.vault_integrations || []);
+        if (roles.length > 0) {
+          const first = roles[0];
+          const firstPath = (first.secret_paths || [])[0] || 'secret/apps/demo';
+          setVaultHelper((prev) => (prev.role ? prev : { ...prev, role: first.role, secretPath: firstPath }));
+        }
+      })
+      .catch(() => {});
     return () => { active = false; mountedRef.current = false; requestRef.current++; };
   }, [clusterId]);
 
@@ -259,6 +290,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
   // fieldChoices combines grammar values with live cluster names and group-local references.
   const fieldChoices = (name: string): string[] => {
+    if (context === 'Vault' && name === 'role') return vaultRoles.map((r) => r.role);
     if (name === 'driver') return Array.from(new Set([...options.drivers, 'docker', 'exec', 'raw_exec', 'java', 'qemu']));
     if (name === 'namespace') return options.namespaces;
     if (name === 'node_pool') return options.node_pools;
@@ -372,6 +404,42 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             </div>}
           </div>
           {node?.kind === 'block' && (node.labels || []).map((label, i) => <Input key={i} label={labels[node.name] || `名称标签 ${i + 1}`} disabled={readOnly} value={label} onChange={(e) => commit(editDocument(document, (draft) => { nodeAt(draft, selected)!.labels![i] = e.target.value; }))} />)}
+          {context === 'Vault' && isBody && (
+            <div className="rounded-lg border border-indigo-200/80 bg-indigo-50/50 p-2.5 text-xs space-y-2 dark:border-indigo-500/30 dark:bg-indigo-950/20">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-indigo-950 dark:text-indigo-100">当前集群可用的 Vault Roles</span>
+                <Link to="/integrations" className="text-[11px] text-indigo-600 hover:underline dark:text-indigo-300">去集群联动管理</Link>
+              </div>
+              {vaultRoles.length === 0 ? (
+                <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                  {vaultIntegrations.length === 0 ? '尚未为该 Nomad 集群创建 Nomad-Vault 联动。' : '当前联动尚未配置工作负载 Role。'}
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {vaultRoles.map((vr) => (
+                    <button
+                      key={`${vr.integration}:${vr.role}`}
+                      type="button"
+                      disabled={readOnly}
+                      onClick={() => {
+                        commit(editDocument(document, (draft) => {
+                          const vb = bodyAt(draft, bodyPath);
+                          const existing = vb.nodes.find((item) => item.kind === 'attribute' && item.name === 'role');
+                          if (existing) existing.expression = JSON.stringify(vr.role);
+                          else vb.nodes.unshift({ kind: 'attribute', name: 'role', expression: JSON.stringify(vr.role), leading: '\n' });
+                        }));
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] hover:border-indigo-400 dark:border-slate-700 dark:bg-slate-900"
+                    >
+                      <span className="font-mono font-semibold">{vr.role}</span>
+                      <Badge tone={vr.status === 'applied' ? 'green' : 'amber'}>{vr.status === 'applied' ? '已应用' : '草稿'}</Badge>
+                      <span className="text-slate-400">ns:{vr.namespace || 'default'}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {visibleAttributes.map(({ item, path }) => {
             const field = rule.attributes.find((entry) => entry.name === item.name) || { name: item.name, kind: rule.map_kind || 'expression' } as AttributeRule;
             return <div key={path.join('.')} className="relative space-y-2 rounded border border-slate-200 p-3 pr-12 dark:border-slate-700">
@@ -381,6 +449,103 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             </div>;
           })}
           {isBody && <>
+            {context === 'Task' && !readOnly && (
+              <details className="rounded-xl border border-indigo-200/80 bg-indigo-50/40 p-3 text-xs dark:border-indigo-500/30 dark:bg-indigo-950/20">
+                <summary className="cursor-pointer font-semibold text-indigo-950 dark:text-indigo-100 inline-flex items-center gap-1.5">
+                  <KeyRound className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-300" />
+                  <span>快捷接入 Vault 密钥（自动生成 vault + template 积木）</span>
+                </summary>
+                <div className="mt-3 space-y-2.5">
+                  {vaultRoles.length === 0 && (
+                    <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                      未检测到可用联动 Role，可先前往 <Link to="/integrations" className="underline">集群联动</Link> 配置并应用，或手动填写 Role 名称。
+                    </p>
+                  )}
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <Input
+                        label="Vault Role 名称"
+                        list="vb-vault-roles"
+                        value={vaultHelper.role}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const matched = vaultRoles.find((r) => r.role === val);
+                          setVaultHelper((prev) => ({
+                            ...prev,
+                            role: val,
+                            secretPath: matched?.secret_paths?.[0] || prev.secretPath,
+                          }));
+                        }}
+                        placeholder="例如 postgres"
+                      />
+                      <datalist id="vb-vault-roles">
+                        {vaultRoles.map((r) => <option key={r.role} value={r.role} />)}
+                      </datalist>
+                    </div>
+                    <Input
+                      label="Secret 路径（支持自动补全 data/）"
+                      value={vaultHelper.secretPath}
+                      onChange={(e) => setVaultHelper((prev) => ({ ...prev, secretPath: e.target.value }))}
+                      placeholder="例如 secret/apps/postgres"
+                    />
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Select
+                      label="注入方式"
+                      value={vaultHelper.mode}
+                      onChange={(e) => setVaultHelper((prev) => ({ ...prev, mode: e.target.value as 'env' | 'file' }))}
+                    >
+                      <option value="env">注入环境变量（env = true）</option>
+                      <option value="file">挂载密码文件（/secrets/...）</option>
+                    </Select>
+                    <Input
+                      label={vaultHelper.mode === 'file' ? '提取的字段名（留空则输出 JSON）' : '提取的字段名（逗号分隔，留空则全部注入）'}
+                      value={vaultHelper.keys}
+                      onChange={(e) => setVaultHelper((prev) => ({ ...prev, keys: e.target.value }))}
+                      placeholder={vaultHelper.mode === 'file' ? '例如 password' : '例如 username, password'}
+                    />
+                  </div>
+                  {vaultHelper.mode === 'file' && (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <Input
+                        label="容器内文件名（位于 /secrets/ 下）"
+                        value={vaultHelper.fileName}
+                        onChange={(e) => setVaultHelper((prev) => ({ ...prev, fileName: e.target.value }))}
+                      />
+                      <Input
+                        label="同时写入的环境变量名"
+                        value={vaultHelper.envVarName}
+                        onChange={(e) => setVaultHelper((prev) => ({ ...prev, envVarName: e.target.value }))}
+                      />
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <span className="text-[11px] text-slate-500">
+                      模板将读取：<code className="font-mono">{parseKVPath(vaultHelper.secretPath).templatePath || 'secret/data/apps/demo'}</code>
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => {
+                        const parsed = parseKVPath(vaultHelper.secretPath);
+                        const keys = vaultHelper.keys.split(',').map((s) => s.trim()).filter(Boolean);
+                        const templateData = buildTemplateData(parsed.templatePath, keys, vaultHelper.mode);
+                        commit(applyVaultToTask(document, bodyPath, {
+                          role: vaultHelper.role.trim() || 'default',
+                          templateData,
+                          mode: vaultHelper.mode,
+                          fileName: vaultHelper.fileName,
+                          envVarName: vaultHelper.envVarName,
+                        }));
+                      }}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>插入 vault + template 积木</span>
+                    </Button>
+                  </div>
+                </div>
+              </details>
+            )}
             {children.length > 0 && <div className="space-y-1.5"><div className="font-semibold">子块</div>{children.map(({ item, path }) => <button key={path.join('.')} onClick={() => setSelected(path)} className="flex w-full items-center justify-between rounded border border-slate-200 p-2 text-left font-mono hover:border-indigo-400 dark:border-slate-700"><span>{nodeTitle(item)}</span><ChevronRight className="h-3.5 w-3.5" /></button>)}</div>}
             {!readOnly && <div className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-700">
               <div className="font-semibold">添加子元素</div>

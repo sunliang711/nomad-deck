@@ -194,3 +194,73 @@ export function moveNode(doc: HCLDocument, source: NodePath, target: NodePath, s
 export function nodeTitle(node: HCLNode): string {
   return node.kind === 'block' ? `${node.name}${(node.labels || []).map((label) => ` "${label}"`).join('')}` : node.name;
 }
+
+export interface TaskVaultInsertOptions {
+  role: string;
+  templateData: string;
+  mode: 'env' | 'file';
+  fileName?: string;
+  envVarName?: string;
+}
+
+function upsertAttribute(body: HCLDocument, name: string, expression: string) {
+  const existing = body.nodes.find((item) => item.kind === 'attribute' && item.name === name);
+  if (existing) {
+    existing.expression = expression;
+    return;
+  }
+  body.nodes.push({ kind: 'attribute', name, expression, leading: '\n' });
+}
+
+/**
+ * Inserts or updates a task's `vault` block, appends a `template` block, and
+ * (in `file` mode) wires an env var pointing to `/secrets/<fileName>`.
+ */
+export function applyVaultToTask(
+  doc: HCLDocument,
+  taskPath: NodePath,
+  opts: TaskVaultInsertOptions,
+): HCLDocument {
+  return editDocument(doc, (draft) => {
+    const taskBody = bodyAt(draft, taskPath);
+    let vaultBlock = taskBody.nodes.find((item) => item.kind === 'block' && item.name === 'vault');
+    if (!vaultBlock) {
+      vaultBlock = { kind: 'block', name: 'vault', labels: [], leading: '\n', body: { nodes: [], trailing: '\n' } };
+      taskBody.nodes.push(vaultBlock);
+    }
+    vaultBlock.body = vaultBlock.body || { nodes: [], trailing: '\n' };
+    upsertAttribute(vaultBlock.body, 'role', JSON.stringify(opts.role || 'default'));
+    upsertAttribute(vaultBlock.body, 'env', 'false');
+
+    const safeFile = (opts.fileName || 'app.secret').replace(/^\/+/, '');
+    if (opts.mode === 'file') {
+      const varName = (opts.envVarName || 'APP_SECRET_FILE').trim() || 'APP_SECRET_FILE';
+      let envBlock = taskBody.nodes.find((item) => item.kind === 'block' && item.name === 'env');
+      if (!envBlock && !taskBody.nodes.some((item) => item.kind === 'attribute' && item.name === 'env')) {
+        envBlock = { kind: 'block', name: 'env', labels: [], leading: '\n', body: { nodes: [], trailing: '\n' } };
+        taskBody.nodes.push(envBlock);
+      }
+      if (envBlock) {
+        envBlock.body = envBlock.body || { nodes: [], trailing: '\n' };
+        upsertAttribute(envBlock.body, varName, JSON.stringify(`/secrets/${safeFile}`));
+      }
+    }
+
+    const heredocBody = opts.templateData.endsWith('\n') ? opts.templateData : `${opts.templateData}\n`;
+    const tplNodes: HCLNode[] = [
+      { kind: 'attribute', name: 'destination', expression: JSON.stringify(opts.mode === 'file' ? `secrets/${safeFile}` : 'secrets/app.env'), leading: '\n' },
+      ...(opts.mode === 'file'
+        ? [{ kind: 'attribute' as const, name: 'perms', expression: '"0600"', leading: '\n' }]
+        : [{ kind: 'attribute' as const, name: 'env', expression: 'true', leading: '\n' }]),
+      { kind: 'attribute', name: 'change_mode', expression: '"restart"', leading: '\n' },
+      { kind: 'attribute', name: 'data', expression: `<<EOT\n${heredocBody}EOT`, leading: '\n' },
+    ];
+    taskBody.nodes.push({
+      kind: 'block',
+      name: 'template',
+      labels: [],
+      leading: '\n',
+      body: { nodes: tplNodes, trailing: '\n' },
+    });
+  });
+}

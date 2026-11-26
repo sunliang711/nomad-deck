@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -248,6 +250,7 @@ func (a *API) jobOp(w http.ResponseWriter, r *http.Request) {
 			a.writeErr(w, r, err)
 			return
 		}
+		warns = appendLintWarnings(warns, jobs.LintVaultIntegration(j, a.vaultIntegrationRefs(ctx, clusterID), in.Namespace))
 		writeJSON(w, http.StatusOK, map[string]any{"job": j, "warnings": warns})
 	case "plan":
 		var in jobs.PlanInput
@@ -259,6 +262,7 @@ func (a *API) jobOp(w http.ResponseWriter, r *http.Request) {
 			a.writeErr(w, r, err)
 			return
 		}
+		p.ValidationWarns = appendLintWarnings(p.ValidationWarns, jobs.LintVaultIntegration(p.Job, a.vaultIntegrationRefs(ctx, clusterID), p.Namespace))
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, map[string]any{"plan": p})
 	case "apply":
@@ -373,6 +377,60 @@ func (a *API) jobOp(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func appendLintWarnings(existing string, extra []string) string {
+	if len(extra) == 0 {
+		return existing
+	}
+	joined := strings.Join(extra, "\n")
+	if strings.TrimSpace(existing) == "" {
+		return joined
+	}
+	return existing + "\n" + joined
+}
+
+func (a *API) vaultIntegrationRefs(ctx context.Context, clusterID string) []jobs.VaultIntegrationRef {
+	if a.Integrations == nil {
+		return nil
+	}
+	is, err := a.Integrations.List(ctx)
+	if err != nil {
+		return nil
+	}
+	var refs []jobs.VaultIntegrationRef
+	for _, i := range is {
+		if i.SourceClusterID != clusterID {
+			continue
+		}
+		ref := jobs.VaultIntegrationRef{
+			Name:             i.Name,
+			Status:           i.Status,
+			NomadSideEnabled: i.NomadSideEnabled,
+		}
+		if a.Vault != nil {
+			if vc, err := a.Vault.AdminClient(ctx, i.TargetClusterID); err == nil {
+				if mounts, err := vc.ListMounts(ctx); err == nil {
+					for p, m := range mounts {
+						if m.Type == "kv" && m.Options["version"] == "2" {
+							ref.KVMounts = append(ref.KVMounts, strings.Trim(p, "/"))
+						}
+					}
+				}
+			}
+		}
+		for _, ro := range i.Roles {
+			ref.Roles = append(ref.Roles, jobs.VaultRoleRef{
+				RoleName:       ro.RoleName,
+				Status:         ro.Status,
+				BoundNamespace: ro.BoundClaims["nomad_namespace"],
+				PolicyMode:     ro.PolicyMode,
+				SecretPaths:    ro.SecretPaths,
+			})
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
 func (a *API) builderOptions(w http.ResponseWriter, r *http.Request) {
 	clusterID := chi.URLParam(r, "id")
 	o, err := a.Jobs.Options(r.Context(), clusterID)
@@ -380,22 +438,66 @@ func (a *API) builderOptions(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, r, err)
 		return
 	}
-	// Vault roles of the integration fed by this cluster.
-	roles := []map[string]string{}
+	// Vault roles and integration summary fed by this cluster.
+	roles := []map[string]any{}
+	integrations := []map[string]any{}
+	kvMountsSet := map[string]bool{}
 	if a.Integrations != nil {
 		if is, err := a.Integrations.List(r.Context()); err == nil {
 			for _, i := range is {
 				if i.SourceClusterID != clusterID {
 					continue
 				}
+				var mounts []string
+				if a.Vault != nil {
+					if vc, err := a.Vault.AdminClient(r.Context(), i.TargetClusterID); err == nil {
+						if ms, err := vc.ListMounts(r.Context()); err == nil {
+							for p, m := range ms {
+								if m.Type == "kv" && m.Options["version"] == "2" {
+									clean := strings.Trim(p, "/")
+									mounts = append(mounts, clean)
+									kvMountsSet[clean] = true
+								}
+							}
+						}
+					}
+				}
+				integrations = append(integrations, map[string]any{
+					"id":                 i.ID,
+					"name":               i.Name,
+					"status":             i.Status,
+					"nomad_side_enabled": i.NomadSideEnabled,
+					"vault_cluster_id":   i.TargetClusterID,
+					"vault_cluster":      i.TargetCluster,
+					"kv_mounts":          mounts,
+				})
 				for _, ro := range i.Roles {
-					roles = append(roles, map[string]string{"role": ro.RoleName, "namespace": ro.BoundClaims["nomad_namespace"],
-						"status": ro.Status, "integration": i.Name})
+					roles = append(roles, map[string]any{
+						"role":               ro.RoleName,
+						"namespace":          ro.BoundClaims["nomad_namespace"],
+						"status":             ro.Status,
+						"integration":        i.Name,
+						"integration_id":     i.ID,
+						"integration_status": i.Status,
+						"policy_mode":        ro.PolicyMode,
+						"secret_paths":       ro.SecretPaths,
+						"vault_cluster_id":   i.TargetClusterID,
+						"vault_cluster":      i.TargetCluster,
+					})
 				}
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"options": o, "vault_roles": roles})
+	kvMounts := make([]string, 0, len(kvMountsSet))
+	for m := range kvMountsSet {
+		kvMounts = append(kvMounts, m)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"options":            o,
+		"vault_roles":        roles,
+		"vault_integrations": integrations,
+		"vault_kv_mounts":    kvMounts,
+	})
 }
 
 func (a *API) listTemplates(w http.ResponseWriter, r *http.Request) {

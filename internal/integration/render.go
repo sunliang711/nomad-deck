@@ -240,28 +240,198 @@ func sortedKeys(m map[string]string) []string {
 	return out
 }
 
+// JobExampleOptions configures how JobExampleWithOptions renders an example HCL job.
+type JobExampleOptions struct {
+	SecretPath   string
+	TemplateKind string // probe | docker_env | docker_file
+	SecretKeys   []string
+}
+
 // JobExample renders a test job that logs in with a role and reads a KV path.
 func JobExample(r RoleSpec, secretPath string) string {
+	return JobExampleWithOptions(r, JobExampleOptions{SecretPath: secretPath, TemplateKind: "probe"})
+}
+
+// JobExampleWithOptions renders a ready-to-run Nomad job example for the given
+// workload role and delivery mode (probe, docker_env, or docker_file).
+func JobExampleWithOptions(r RoleSpec, opt JobExampleOptions) string {
 	ns := r.BoundClaims["nomad_namespace"]
-	job := r.BoundClaims["nomad_job_id"]
-	if job == "" {
-		job = "vault-probe"
+	if ns == "" {
+		ns = "default"
 	}
-	var tpl string
+	job := r.BoundClaims["nomad_job_id"]
+	kind := opt.TemplateKind
+	if kind == "" {
+		kind = "probe"
+	}
+	if job == "" {
+		switch kind {
+		case "docker_env":
+			job = "vault-app-env"
+		case "docker_file":
+			job = "vault-app-file"
+		default:
+			job = "vault-probe"
+		}
+	}
+	secretPath := strings.TrimSpace(opt.SecretPath)
+	kvAPIPath := ""
 	if secretPath != "" {
-		mnt, rest, _ := strings.Cut(strings.Trim(secretPath, "/"), "/")
-		tpl = fmt.Sprintf(`
+		trimmed := strings.Trim(secretPath, "/")
+		mnt, rest, ok := strings.Cut(trimmed, "/")
+		if ok && mnt != "" && rest != "" {
+			if rest == "data" || strings.HasPrefix(rest, "data/") {
+				kvAPIPath = mnt + "/" + rest
+			} else {
+				kvAPIPath = mnt + "/data/" + rest
+			}
+		}
+	}
+	if kvAPIPath == "" && r.Mode == "templated" {
+		mnt := "secret"
+		if len(r.SecretPaths) > 0 && strings.Trim(r.SecretPaths[0], "/") != "" {
+			mnt, _, _ = strings.Cut(strings.Trim(r.SecretPaths[0], "/"), "/")
+		}
+		kvAPIPath = fmt.Sprintf("%s/data/%s/%s", mnt, ns, job)
+	}
+
+	switch kind {
+	case "docker_env":
+		tplPath := kvAPIPath
+		if tplPath == "" {
+			tplPath = "secret/data/apps/demo"
+		}
+		var envLines strings.Builder
+		if len(opt.SecretKeys) > 0 {
+			for _, k := range opt.SecretKeys {
+				envLines.WriteString(fmt.Sprintf("%s={{ .Data.data.%s | toJSON }}\n", strings.ToUpper(strings.ReplaceAll(k, "-", "_")), k))
+			}
+		} else {
+			envLines.WriteString("{{ range $k, $v := .Data.data }}{{ $k }}={{ $v | toJSON }}\n{{ end }}")
+		}
+		return fmt.Sprintf(`job %q {
+  datacenters = ["dc1"]
+  namespace   = %q
+  type        = "service"
+
+  group "app" {
+    count = 1
+
+    task "web" {
+      driver = "docker"
+
+      config {
+        image   = "alpine:3.20"
+        command = "/bin/sh"
+        args    = ["-c", "echo 'Vault env keys loaded'; env | grep -i -E '^(username|password|database|app_|db_)' || true; sleep 3600"]
+      }
+
+      vault {
+        role = %q
+        env  = false
+      }
+
       template {
         destination = "secrets/app.env"
         env         = true
+        change_mode = "restart"
         data        = <<EOT
-{{ with secret "%s/data/%s" }}{{ range $k, $v := .Data.data }}{{ $k }}={{ $v }}
-{{ end }}{{ end }}
+{{ with secret %q }}
+%s{{ end }}
 EOT
       }
-`, mnt, rest)
-	}
-	return fmt.Sprintf(`job %q {
+
+      resources {
+        cpu    = 100
+        memory = 128
+      }
+    }
+  }
+}
+`, job, ns, r.Name, tplPath, envLines.String())
+
+	case "docker_file":
+		tplPath := kvAPIPath
+		if tplPath == "" {
+			tplPath = "secret/data/apps/demo"
+		}
+		fileBody := "{{ with secret " + strconv.Quote(tplPath) + " }}{{ .Data.data | toJSON }}{{ end }}"
+		if len(opt.SecretKeys) > 0 {
+			var picked string
+			for _, k := range opt.SecretKeys {
+				if strings.Contains(strings.ToLower(k), "pass") || strings.Contains(strings.ToLower(k), "secret") || strings.Contains(strings.ToLower(k), "token") {
+					picked = k
+					break
+				}
+			}
+			if picked == "" {
+				picked = opt.SecretKeys[0]
+			}
+			fileBody = fmt.Sprintf(`{{ with secret %s }}{{ index .Data.data %s }}{{ end }}`, strconv.Quote(tplPath), strconv.Quote(picked))
+		}
+		return fmt.Sprintf(`job %q {
+  datacenters = ["dc1"]
+  namespace   = %q
+  type        = "service"
+
+  group "app" {
+    count = 1
+
+    task "web" {
+      driver = "docker"
+
+      config {
+        image   = "alpine:3.20"
+        command = "/bin/sh"
+        args    = ["-c", "test -s \"$APP_SECRET_FILE\" && echo \"Mounted secret file at $APP_SECRET_FILE\"; sleep 3600"]
+      }
+
+      # Vault 身份 Token 仅用于渲染模板，不向业务容器暴露 VAULT_TOKEN
+      vault {
+        role = %q
+        env  = false
+      }
+
+      # 容器内通过固定路径读取（Nomad 自动将 secrets/ 挂载到容器 /secrets/ 内存盘）
+      env {
+        APP_SECRET_FILE = "/secrets/app.secret"
+      }
+
+      template {
+        destination = "secrets/app.secret"
+        perms       = "0600"
+        change_mode = "restart"
+        data        = <<EOT
+%s
+EOT
+      }
+
+      resources {
+        cpu    = 100
+        memory = 128
+      }
+    }
+  }
+}
+`, job, ns, r.Name, fileBody)
+
+	default:
+		var tpl string
+		var checkCmd string
+		if kvAPIPath != "" {
+			checkCmd = `test -s "${NOMAD_SECRETS_DIR}/vault_token" && test -s "${NOMAD_SECRETS_DIR}/probe-keys.txt" && echo "vault login ok; keys: $(cat "${NOMAD_SECRETS_DIR}/probe-keys.txt")"`
+			tpl = fmt.Sprintf(`
+      template {
+        destination = "secrets/probe-keys.txt"
+        data        = <<EOT
+{{ with secret %q }}{{ range $k, $_ := .Data.data }}{{ $k }} {{ end }}{{ end }}
+EOT
+      }
+`, kvAPIPath)
+		} else {
+			checkCmd = `test -s "${NOMAD_SECRETS_DIR}/vault_token" && echo vault login ok`
+		}
+		return fmt.Sprintf(`job %q {
   namespace = %q
   type      = "batch"
 
@@ -271,7 +441,7 @@ EOT
 
       config {
         command = "/bin/sh"
-        args    = ["-c", "test -s \"${NOMAD_SECRETS_DIR}/vault_token\" && echo vault login ok"]
+        args    = ["-c", %q]
       }
 
       vault {
@@ -280,5 +450,6 @@ EOT
 %s    }
   }
 }
-`, job, ns, r.Name, tpl)
+`, job, ns, checkCmd, r.Name, tpl)
+	}
 }

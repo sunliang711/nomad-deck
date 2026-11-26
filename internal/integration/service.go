@@ -1102,6 +1102,16 @@ func (s *Service) Delete(ctx context.Context, actor audit.Actor, id string, in A
 
 // JobExample renders a test job for a role.
 func (s *Service) JobExample(ctx context.Context, id, roleID, secretPath string) (string, error) {
+	return s.JobExampleWithOptions(ctx, id, roleID, JobExampleOptions{SecretPath: secretPath})
+}
+
+// JobExampleWithOptions renders an example job for a role with delivery options.
+func (s *Service) JobExampleWithOptions(ctx context.Context, id, roleID string, opt JobExampleOptions) (string, error) {
+	switch opt.TemplateKind {
+	case "", "probe", "docker_env", "docker_file":
+	default:
+		return "", badRequest("template_kind 需为 probe、docker_env 或 docker_file")
+	}
 	l, err := s.load(ctx, id)
 	if err != nil {
 		return "", err
@@ -1109,10 +1119,10 @@ func (s *Service) JobExample(ctx context.Context, id, roleID, secretPath string)
 	for _, r := range l.roles {
 		if r.ID == roleID || r.RoleName == roleID {
 			sp := specOf(r)
-			if secretPath == "" && sp.Mode == "explicit" && len(sp.SecretPaths) > 0 && !strings.Contains(sp.SecretPaths[0], "*") {
-				secretPath = sp.SecretPaths[0]
+			if opt.SecretPath == "" && sp.Mode == "explicit" && len(sp.SecretPaths) > 0 && !strings.Contains(sp.SecretPaths[0], "*") {
+				opt.SecretPath = sp.SecretPaths[0]
 			}
-			return JobExample(sp, secretPath), nil
+			return JobExampleWithOptions(sp, opt), nil
 		}
 	}
 	return "", &auth.Error{Status: 404, Code: "not_found", Message: "Role 不存在"}

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Link2, Plus, RefreshCw, Trash2 } from 'lucide-react';
-import { apiDelete, apiGet, apiPost } from '../lib/api';
+import { Link2, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { isTaskActiveStatus } from '../lib/actionLabels';
@@ -42,7 +42,20 @@ export function IntegrationsPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', source_cluster_id: '', target_cluster_id: '', auth_path: 'jwt-nomad' });
+  const [showEditIntegration, setShowEditIntegration] = useState(false);
+  const [savingIntegration, setSavingIntegration] = useState(false);
+  const [editIntegrationForm, setEditIntegrationForm] = useState({
+    name: '',
+    aud: 'vault.io',
+    jwks_mode: 'url',
+    jwks_url: '',
+    vault_address: '',
+    default_role: '',
+    identity_ttl: '1h',
+  });
   const [showRole, setShowRole] = useState(false);
+  const [editingRole, setEditingRole] = useState<any>(null);
+  const [savingRole, setSavingRole] = useState(false);
   const [roleForm, setRoleForm] = useState({
     role_name: '',
     policy_mode: 'explicit',
@@ -155,26 +168,111 @@ export function IntegrationsPage() {
     }
   };
 
-  const addRole = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const openEditIntegration = () => {
     if (!selected) return;
+    setEditIntegrationForm({
+      name: selected.name || '',
+      aud: (selected.config?.aud || ['vault.io']).join(', '),
+      jwks_mode: selected.config?.jwks_mode || 'url',
+      jwks_url: selected.config?.jwks_url || '',
+      vault_address: selected.config?.vault_address || '',
+      default_role: selected.config?.default_role || '',
+      identity_ttl: selected.config?.identity_ttl || '1h',
+    });
+    setShowEditIntegration(true);
+  };
+
+  const updateIntegration = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selected || savingIntegration) return;
+    setSavingIntegration(true);
     setErr('');
     try {
-      await apiPost(`/api/v1/integrations/${selected.id}/roles`, {
-        role_name: roleForm.role_name,
+      const aud = editIntegrationForm.aud
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      await apiPut(`/api/v1/integrations/${selected.id}`, {
+        name: editIntegrationForm.name.trim(),
+        aud: aud.length > 0 ? aud : ['vault.io'],
+        jwks_mode: editIntegrationForm.jwks_mode,
+        jwks_url: editIntegrationForm.jwks_url.trim(),
+        vault_address: editIntegrationForm.vault_address.trim(),
+        default_role: editIntegrationForm.default_role.trim(),
+        identity_ttl: editIntegrationForm.identity_ttl.trim(),
+      });
+      setShowEditIntegration(false);
+      setPlan(null);
+      toast.success('联动配置已更新，如需同步到集群请点击「应用联动」');
+      await load(selected.id);
+    } catch (ex: any) {
+      toast.error(ex?.message || '更新联动配置失败');
+    } finally {
+      setSavingIntegration(false);
+    }
+  };
+
+  const openAddRole = () => {
+    setEditingRole(null);
+    setRoleForm({
+      role_name: '',
+      policy_mode: 'explicit',
+      secret_paths: '',
+      bound_namespace: 'default',
+      token_period: '1h',
+    });
+    setShowRole(true);
+  };
+
+  const openEditRole = (r: any) => {
+    setEditingRole(r);
+    setRoleForm({
+      role_name: r.role_name || '',
+      policy_mode: r.policy_mode || 'explicit',
+      secret_paths: (r.secret_paths || []).join(', '),
+      bound_namespace: r.bound_claims?.nomad_namespace || 'default',
+      token_period: r.token_period || '1h',
+    });
+    setShowRole(true);
+  };
+
+  const saveRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selected || savingRole) return;
+    setSavingRole(true);
+    setErr('');
+    try {
+      const payload: Record<string, any> = {
+        role_name: editingRole ? editingRole.role_name : roleForm.role_name.trim(),
         policy_mode: roleForm.policy_mode,
         secret_paths: roleForm.secret_paths
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean),
-        bound_claims: { nomad_namespace: roleForm.bound_namespace.trim() },
-        token_period: roleForm.token_period,
-      });
+        bound_claims: {
+          ...(editingRole?.bound_claims || {}),
+          nomad_namespace: roleForm.bound_namespace.trim(),
+        },
+        token_period: roleForm.token_period.trim(),
+      };
+      if (editingRole?.policy_name) payload.policy_name = editingRole.policy_name;
+      if (editingRole?.custom_policy_hcl) payload.custom_policy_hcl = editingRole.custom_policy_hcl;
+
+      if (editingRole) {
+        await apiPut(`/api/v1/integrations/${selected.id}/roles/${editingRole.id}`, payload);
+        toast.success(`已更新工作负载 Role ${payload.role_name}，点击「应用联动」后生效`);
+      } else {
+        await apiPost(`/api/v1/integrations/${selected.id}/roles`, payload);
+        toast.success(`已保存工作负载 Role ${payload.role_name}`);
+      }
       setShowRole(false);
-      toast.success(`已保存工作负载 Role ${roleForm.role_name}`);
+      setEditingRole(null);
+      setPlan(null);
       await selectItem(selected.id);
     } catch (ex: any) {
       toast.error(ex?.message || '保存 Role 失败');
+    } finally {
+      setSavingRole(false);
     }
   };
 
@@ -301,6 +399,10 @@ export function IntegrationsPage() {
             actions={
               isAdmin && (
                 <div className="flex flex-wrap gap-1.5">
+                  <Button size="sm" onClick={openEditIntegration}>
+                    <Pencil className="h-3.5 w-3.5" />
+                    <span>编辑</span>
+                  </Button>
                   <Button
                     size="sm"
                     onClick={() =>
@@ -337,6 +439,20 @@ export function IntegrationsPage() {
                 <TermLabel term="Auth Mount" tip="Vault 中启用 JWT 认证引擎的挂载路径，用于校验 Nomad 签发给工作负载的身份 JWT（OIDC / JWKS）。" />:{' '}
                 <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.auth_path}</code>
               </span>
+              <span>
+                JWKS 模式: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config?.jwks_mode || 'url'}</code>
+              </span>
+              <span>
+                Audience: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{(selected.config?.aud || ['vault.io']).join(', ')}</code>
+              </span>
+              <span>
+                身份 TTL: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config?.identity_ttl || '1h'}</code>
+              </span>
+              {selected.config?.default_role && (
+                <span>
+                  默认 Role: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config.default_role}</code>
+                </span>
+              )}
               <span className="inline-flex items-center gap-1.5">
                 状态: <StatusBadge value={selected.status} />
               </span>
@@ -345,7 +461,7 @@ export function IntegrationsPage() {
             <div className="mb-2.5 flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">工作负载 Roles</span>
               {isAdmin && (
-                <Button size="sm" onClick={() => setShowRole(true)}>
+                <Button size="sm" onClick={openAddRole}>
                   <Plus className="h-3.5 w-3.5" />
                   <span>添加 Role</span>
                 </Button>
@@ -357,14 +473,19 @@ export function IntegrationsPage() {
               <div className="space-y-2 text-xs">
                 {selected.roles.map((r: any) => (
                   <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                    <div>
+                    <div className="flex flex-wrap items-center gap-2 min-w-0">
                       <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">{r.role_name}</span>
-                      <span className="ml-2 text-slate-500">
-                        {r.policy_mode === 'explicit' ? '指定路径' : '按任务隔离'} · {(r.secret_paths || []).join(', ')}
+                      <StatusBadge value={r.status} />
+                      <span className="text-slate-500 break-all">
+                        {r.policy_mode === 'explicit' ? '指定路径' : '按任务隔离'} · {(r.secret_paths || []).join(', ') || '默认挂载'} · Namespace: {r.bound_claims?.nomad_namespace || 'default'} · 周期: {r.token_period || '1h'}
                       </span>
                     </div>
                     {isAdmin && (
-                      <div className="flex gap-1.5">
+                      <div className="flex gap-1.5 shrink-0">
+                        <Button size="sm" aria-label={`编辑 Role ${r.role_name}`} onClick={() => openEditRole(r)}>
+                          <Pencil className="h-3.5 w-3.5" />
+                          <span>编辑</span>
+                        </Button>
                         <Button
                           size="sm"
                           onClick={() =>
@@ -432,19 +553,108 @@ export function IntegrationsPage() {
         </form>
       </Modal>
 
-      <Modal open={showRole} title="添加工作负载 Role" onClose={() => setShowRole(false)}>
-        <form onSubmit={addRole} className="space-y-3 text-xs">
-          <Input label="Role 名称" placeholder="例如 postgres，在 Job 的 vault.role 中使用" required value={roleForm.role_name} onChange={(e) => setRoleForm({ ...roleForm, role_name: e.target.value })} />
+      <Modal open={showEditIntegration} title={`编辑联动：${selected?.name || ''}`} onClose={() => setShowEditIntegration(false)}>
+        <form onSubmit={updateIntegration} className="space-y-3 text-xs">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-300">
+            源集群（<span className="font-mono">{selected?.source_cluster || selected?.source_cluster_id}</span>）、目标集群（<span className="font-mono">{selected?.target_cluster || selected?.target_cluster_id}</span>）与 Auth Mount（<span className="font-mono">{selected?.auth_path}</span>）创建后不可修改；保存变更后请点击「应用联动」下发。
+          </div>
+          <Input
+            label="联动名称"
+            required
+            value={editIntegrationForm.name}
+            onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, name: e.target.value })}
+          />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Select
+              label="JWKS 模式"
+              value={editIntegrationForm.jwks_mode}
+              onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, jwks_mode: e.target.value })}
+            >
+              <option value="url">url（Vault 实时拉取 Nomad JWKS）</option>
+              <option value="static">static（控制面静态下发公钥）</option>
+            </Select>
+            <Input
+              label="身份令牌 TTL"
+              required
+              placeholder="例如 1h"
+              value={editIntegrationForm.identity_ttl}
+              onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, identity_ttl: e.target.value })}
+            />
+          </div>
+          <Input
+            label="Audience（aud）"
+            placeholder="例如 vault.io，多个用逗号分隔"
+            value={editIntegrationForm.aud}
+            onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, aud: e.target.value })}
+          />
+          <Input
+            label="自定义 JWKS URL（可选）"
+            placeholder="留空则自动使用 Nomad 统一入口或 Server 地址"
+            value={editIntegrationForm.jwks_url}
+            onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, jwks_url: e.target.value })}
+          />
+          <Input
+            label="自定义 Vault 地址（可选）"
+            placeholder="留空则自动使用 Vault 统一入口或节点地址"
+            value={editIntegrationForm.vault_address}
+            onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, vault_address: e.target.value })}
+          />
+          <Input
+            label="默认 Role（可选）"
+            placeholder="例如 default-role，留空则不设默认 Role"
+            value={editIntegrationForm.default_role}
+            onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, default_role: e.target.value })}
+          />
+          <div className="flex justify-end gap-2">
+            <Button type="button" onClick={() => setShowEditIntegration(false)}>取消</Button>
+            <Button type="submit" variant="primary" loading={savingIntegration}>保存</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={showRole}
+        title={editingRole ? `编辑工作负载 Role：${editingRole.role_name}` : '添加工作负载 Role'}
+        onClose={() => {
+          setShowRole(false);
+          setEditingRole(null);
+        }}
+      >
+        <form onSubmit={saveRole} className="space-y-3 text-xs">
+          <Input
+            label="Role 名称"
+            placeholder="例如 postgres，在 Job 的 vault.role 中使用"
+            hint={editingRole ? 'Role 名称创建后不可修改。' : undefined}
+            disabled={Boolean(editingRole)}
+            required
+            value={roleForm.role_name}
+            onChange={(e) => setRoleForm({ ...roleForm, role_name: e.target.value })}
+          />
           <Select label="Policy 模式" value={roleForm.policy_mode} onChange={(e) => setRoleForm({ ...roleForm, policy_mode: e.target.value })}>
             <option value="explicit">explicit（固定路径列表）</option>
             <option value="templated">templated（ACL 模板变量）</option>
           </Select>
-          <Input label={roleForm.policy_mode === 'templated' ? 'KV 挂载名称' : '允许读取的 Secret 路径'} placeholder={roleForm.policy_mode === 'templated' ? '例如 secret' : '例如 secret/apps/postgres'} hint={roleForm.policy_mode === 'templated' ? '填写 KV 挂载名称，多个用逗号分隔；权限按 Namespace 和 Job 自动隔离。' : '填写「挂载/密钥路径」，无需加 data/。多个路径用逗号分隔，建议精确授权。'} required value={roleForm.secret_paths} onChange={(e) => setRoleForm({ ...roleForm, secret_paths: e.target.value })} />
+          <Input
+            label={roleForm.policy_mode === 'templated' ? 'KV 挂载名称' : '允许读取的 Secret 路径'}
+            placeholder={roleForm.policy_mode === 'templated' ? '例如 secret' : '例如 secret/apps/postgres'}
+            hint={roleForm.policy_mode === 'templated' ? '填写 KV 挂载名称，多个用逗号分隔；权限按 Namespace 和 Job 自动隔离。' : '填写「挂载/密钥路径」，无需加 data/。多个路径用逗号分隔，建议精确授权。'}
+            required={roleForm.policy_mode === 'explicit' && !editingRole?.custom_policy_hcl}
+            value={roleForm.secret_paths}
+            onChange={(e) => setRoleForm({ ...roleForm, secret_paths: e.target.value })}
+          />
           <Input label="允许的 Nomad Namespace" required value={roleForm.bound_namespace} onChange={(e) => setRoleForm({ ...roleForm, bound_namespace: e.target.value })} />
           <Input label="Token 续期周期" value={roleForm.token_period} onChange={(e) => setRoleForm({ ...roleForm, token_period: e.target.value })} />
           <div className="flex justify-end gap-2">
-            <Button onClick={() => setShowRole(false)}>取消</Button>
-            <Button type="submit" variant="primary">保存</Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setShowRole(false);
+                setEditingRole(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button type="submit" variant="primary" loading={savingRole}>保存</Button>
           </div>
         </form>
       </Modal>

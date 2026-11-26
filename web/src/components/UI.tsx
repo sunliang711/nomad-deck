@@ -62,7 +62,7 @@ const statusLabels: Record<string, string> = {
   init_in_doubt: '初始化待核对', needs_reconcile: '需核对', partial_success: '部分成功',
   timeout: '已超时', failed: '失败', failure: '失败', offline: '离线', unreachable: '无法连接',
   fail: '异常', rolled_back: '已回退', anomaly: '异常', timed_out: '已超时', disabled: '已停用',
-  inactive: '未运行', interrupted: '已中断', sync: '同步', async: '异步', applied: '已应用',
+  inactive: '未运行', interrupted: '已中断', sync: '同步', async: '异步', applied: '已应用', draft: '草稿', drifted: '已漂移',
 };
 
 const toneMap: Record<Tone, string> = {
@@ -127,6 +127,7 @@ export function statusTone(status?: string): Tone {
     case 'needs_reconcile':
     case 'partial_success':
     case 'timeout':
+    case 'drifted':
       return 'amber';
     case 'failed':
     case 'failure':
@@ -436,19 +437,27 @@ export function MaskedSecret({ value, label }: { value: string; label?: React.Re
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-indigo-200/70 bg-indigo-50/50 px-3.5 py-2.5 dark:border-indigo-500/30 dark:bg-indigo-950/30">
-      {label && <span className="text-xs font-medium text-slate-700 dark:text-slate-200">{label}</span>}
-      <code className="rounded-lg bg-slate-900 px-2.5 py-1 font-mono text-xs text-indigo-300 dark:bg-slate-950 break-all">
+    <div className="space-y-2 rounded-xl border border-indigo-200/70 bg-indigo-50/50 px-3.5 py-2.5 dark:border-indigo-500/30 dark:bg-indigo-950/30">
+      <div className="flex items-center justify-between gap-2">
+        {label ? (
+          <span className="min-w-0 text-xs font-medium text-slate-700 dark:text-slate-200">{label}</span>
+        ) : (
+          <span />
+        )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button type="button" size="sm" onClick={() => setShow((v) => !v)}>
+            {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            <span>{show ? '隐藏明文' : '显示明文'}</span>
+          </Button>
+          <Button type="button" size="sm" onClick={() => void copy()}>
+            {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+            <span>{copied ? '已复制' : '复制'}</span>
+          </Button>
+        </div>
+      </div>
+      <code className="block w-full rounded-lg bg-slate-900 px-3 py-2 font-mono text-xs text-indigo-300 dark:bg-slate-950 break-all">
         {show ? value : '****************'}
       </code>
-      <Button type="button" size="sm" onClick={() => setShow((v) => !v)}>
-        {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-        <span>{show ? '隐藏明文' : '显示明文'}</span>
-      </Button>
-      <Button type="button" size="sm" onClick={() => void copy()}>
-        {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
-        <span>{copied ? '已复制' : '复制'}</span>
-      </Button>
     </div>
   );
 }

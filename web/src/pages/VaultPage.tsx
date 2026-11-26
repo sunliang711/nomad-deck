@@ -230,6 +230,16 @@ export function VaultPage() {
   const clusterNodes = status?.nodes || [];
   const custody = custodyData || {};
 
+  const handleIssueRootToken = () => {
+    setPwAction({
+      title: '签发临时 Root Token（使用托管解封密钥重建）',
+      run: async (pw) => {
+        const r = await apiPost(`/api/v1/vault/${selectedId}/root-token`, { current_password: pw });
+        setRootToken(r.root_token || '');
+      },
+    });
+  };
+
   const handleUninstall = async () => {
     if (!cluster) return;
     const canDeleteUndeployed =
@@ -385,6 +395,7 @@ export function VaultPage() {
                     .then((r) => { toast.success(r.report?.message || '已核对'); return loadDetail(); })
                     .catch((ex) => setErr(ex.message))
                 }
+                onRevealRootToken={handleIssueRootToken}
                 onUninstall={handleUninstall}
                 onOpenJoin={() => { setJoinNodeId(''); setConfirmSwap(false); setShowJoin(true); }}
                 onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Vault 日志: ${n.name}`)}
@@ -555,15 +566,7 @@ export function VaultPage() {
                             </Button>
                             <Button
                               disabled={!isInitialized}
-                              onClick={() =>
-                                setPwAction({
-                                  title: '签发临时 Root Token（使用托管解封密钥重建）',
-                                  run: async (pw) => {
-                                    const r = await apiPost(`/api/v1/vault/${selectedId}/root-token`, { current_password: pw });
-                                    setRootToken(r.root_token || '');
-                                  },
-                                })
-                              }
+                              onClick={handleIssueRootToken}
                             >
                               签发临时 Root Token
                             </Button>
@@ -751,34 +754,44 @@ export function VaultPage() {
                   </div>
                   <Input label="Policy 名称" value={policyEdit.name} onChange={(e) => setPolicyEdit({ ...policyEdit, name: e.target.value })} />
                   <CodeEditor value={policyEdit.rules} onChange={(v) => setPolicyEdit({ ...policyEdit, rules: v })} readOnly={!isAdmin} height="180px" />
-                  {isAdmin && policyEdit.name && (
-                    <Button
-                      variant="primary"
-                      onClick={() =>
-                        void apiPut(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(policyEdit.name)}`, { policy: policyEdit.rules })
-                          .then(() => { toast.success('Policy 已保存'); return loadManage(); })
-                          .catch((ex) => setErr(ex.message))
-                      }
-                    >
-                      保存 Policy
-                    </Button>
-                  )}
-                  {isAdmin && policyEdit.name && !['root', 'default', 'nomad-deck-admin'].includes(policyEdit.name) && (
-                    <Button
-                      variant="danger"
-                      onClick={async () => {
-                        if (!(await askConfirm(`确认删除 Policy「${policyEdit.name}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
-                        void apiDelete(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(policyEdit.name)}`)
-                          .then(() => {
-                            setPolicyEdit({ name: '', rules: '' });
-                            toast.success('Policy 已删除');
-                            return loadManage();
-                          })
-                          .catch((ex) => setErr(ex.message));
-                      }}
-                    >
-                      删除 Policy
-                    </Button>
+                  {isAdmin && (
+                    <div className="flex flex-wrap gap-2">
+                      {policyEdit.name && (
+                        <Button
+                          variant="primary"
+                          onClick={() =>
+                            void apiPut(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(policyEdit.name)}`, { policy: policyEdit.rules })
+                              .then(() => { toast.success('Policy 已保存'); return loadManage(); })
+                              .catch((ex) => setErr(ex.message))
+                          }
+                        >
+                          保存 Policy
+                        </Button>
+                      )}
+                      {policyEdit.name && !['root', 'default', 'nomad-deck-admin'].includes(policyEdit.name) && (
+                        <Button
+                          variant="danger"
+                          onClick={async () => {
+                            if (!(await askConfirm(`确认删除 Policy「${policyEdit.name}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
+                            void apiDelete(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(policyEdit.name)}`)
+                              .then(() => {
+                                setPolicyEdit({ name: '', rules: '' });
+                                toast.success('Policy 已删除');
+                                return loadManage();
+                              })
+                              .catch((ex) => setErr(ex.message));
+                          }}
+                        >
+                          删除 Policy
+                        </Button>
+                      )}
+                      <Button
+                        disabled={(status?.init_state || cluster.init_state) !== 'initialized'}
+                        onClick={handleIssueRootToken}
+                      >
+                        签发临时 Root Token
+                      </Button>
+                    </div>
                   )}
                 </div>
               </Card>

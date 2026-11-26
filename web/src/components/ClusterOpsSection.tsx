@@ -630,9 +630,9 @@ export function ClusterOpsSection({
                           轮换 Gossip
                         </Button>
                       )}
-                      {!isVault && onRevealRootToken && initialized && (
+                      {onRevealRootToken && initialized && (
                         <Button size="sm" disabled={blocked} onClick={() => void runBusy('root-token', onRevealRootToken)}>
-                          查看 Root Token
+                          {isVault ? '签发临时 Root Token' : '查看 Root Token'}
                         </Button>
                       )}
                     </div>

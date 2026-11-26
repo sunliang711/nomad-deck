@@ -577,16 +577,6 @@ export function JobCenterPage() {
     setSearchParams(next, { replace: true });
   }, [queryJobId, queryFrom, selectedCluster, needsDeployment]);
 
-  if (loadingClusters) return <LoadingState label="正在加载 Job 工作区…" />;
-
-  if (!clusters.length) return (
-    <div className="space-y-5">
-      <PageHeader title="Nomad Job 中心" subtitle="编写任务、预览调度计划并运行工作负载" />
-      <ErrorAlert message={err} onClose={() => setErr('')} />
-      <Card><EmptyState icon={<Boxes className="h-6 w-6" />} title="先搭建一个 Nomad 集群" description="Job 需要在 Nomad Client 上运行。集群部署完成后，即可在这里编写第一个任务。" action={<Link to="/nomad" className="primary-button">前往 Nomad 集群</Link>} /></Card>
-    </div>
-  );
-
   const namespaceOptions = useMemo(() => {
     const set = new Set<string>(clusterNamespaces.length > 0 ? clusterNamespaces : ['default']);
     if (namespace) set.add(namespace);
@@ -614,6 +604,16 @@ export function JobCenterPage() {
     if (!q) return templates;
     return templates.filter((t) => String(t.name || '').toLowerCase().includes(q));
   }, [templates, sidebarQuery]);
+
+  if (loadingClusters) return <LoadingState label="正在加载 Job 工作区…" />;
+
+  if (!clusters.length) return (
+    <div className="space-y-5">
+      <PageHeader title="Nomad Job 中心" subtitle="编写任务、预览调度计划并运行工作负载" />
+      <ErrorAlert message={err} onClose={() => setErr('')} />
+      <Card><EmptyState icon={<Boxes className="h-6 w-6" />} title="先搭建一个 Nomad 集群" description="Job 需要在 Nomad Client 上运行。集群部署完成后，即可在这里编写第一个任务。" action={<Link to="/nomad" className="primary-button">前往 Nomad 集群</Link>} /></Card>
+    </div>
+  );
 
   const startFreshDraft = () => {
     setSelectedJobId('');

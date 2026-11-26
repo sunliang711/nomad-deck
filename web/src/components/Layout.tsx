@@ -4,6 +4,7 @@ import {
   Activity,
   ArchiveRestore,
   ArrowUpCircle,
+  Bell,
   Boxes,
   ChevronRight,
   Clock,
@@ -25,6 +26,8 @@ import { useAuth } from '../lib/auth';
 import { useTheme } from '../lib/theme';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { allowNavigation } from './ConfirmDialog';
+import { useToast } from './Toast';
+import { NotificationDrawer } from './NotificationDrawer';
 
 const navItems = [
   { to: '/', label: '总览仪表盘', icon: LayoutDashboard, group: 'workspace' },
@@ -41,11 +44,18 @@ const navItems = [
   { to: '/version', label: '版本与升级', icon: ArrowUpCircle, group: 'admin' },
 ];
 
+export function navLabelForPath(path: string): string {
+  const item = navItems.find((n) => (n.to === '/' ? path === '/' : path.startsWith(n.to)));
+  return item?.label || '控制面';
+}
+
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, isAdmin, version, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const { runningCount, unreadCount, openTaskList } = useOpsDrawer();
+  const { unreadCount: notifUnreadCount, unreadErrorCount: notifUnreadErrorCount, markHistoryRead } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
   const navigation = useRef<HTMLElement>(null);
   const loc = useLocation();
   const navigate = useNavigate();
@@ -243,6 +253,25 @@ export function Layout({ children }: { children: React.ReactNode }) {
             )}
             <button
               type="button"
+              onClick={() => setNotifOpen(true)}
+              title={notifUnreadCount > 0 ? `消息历史：${notifUnreadCount} 条未读` : '消息历史（仅本地缓存）'}
+              aria-label="消息历史"
+              className="relative inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition"
+            >
+              <Bell className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
+              <span className="hidden sm:inline">消息</span>
+              {notifUnreadCount > 0 && (
+                <span
+                  className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-white text-[10px] font-semibold ${
+                    notifUnreadErrorCount > 0 ? 'bg-rose-600' : 'bg-indigo-600'
+                  }`}
+                >
+                  {notifUnreadCount > 99 ? '99+' : notifUnreadCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
               onClick={openTaskList}
               title={`后台运维任务：${runningCount} 个运行中，${unreadCount} 个未读异常`}
               aria-label="后台运维任务"
@@ -280,6 +309,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </footer>
         </main>
       </div>
+      {notifOpen && (
+        <NotificationDrawer
+          labelForPath={navLabelForPath}
+          onClose={() => {
+            setNotifOpen(false);
+            markHistoryRead();
+          }}
+        />
+      )}
     </div>
   );
 }

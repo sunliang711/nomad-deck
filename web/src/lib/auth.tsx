@@ -6,6 +6,7 @@ import {
   setCSRFToken,
   setUnauthorizedHandler,
 } from './api';
+import { useToast } from '../components/Toast';
 
 export interface AuthUser {
   id: string;
@@ -42,6 +43,7 @@ const AuthContext = createContext<AuthState>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const { clearHistory } = useToast();
   const [loading, setLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -144,7 +146,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setCSRFToken('');
     setAuthenticated(false);
     setUser(null);
-  }, [settleReauth]);
+    clearHistory();
+  }, [settleReauth, clearHistory]);
 
   const logout = useCallback(async () => {
     try {
@@ -156,8 +159,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setCSRFToken('');
       setAuthenticated(false);
       setUser(null);
+      clearHistory();
     }
-  }, [settleReauth]);
+  }, [settleReauth, clearHistory]);
 
   return (
     <AuthContext.Provider

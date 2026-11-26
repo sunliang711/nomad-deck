@@ -429,7 +429,7 @@ export function MaskedSecret({ value, label }: { value: string; label?: React.Re
     try {
       await copyText(value);
       setCopied(true);
-      toast.success('已复制到剪贴板');
+      toast.success('已复制到剪贴板', { recordHistory: false });
       window.setTimeout(() => setCopied(false), 1500);
     } catch (ex: any) {
       toast.error(ex?.message || '复制失败，请手动复制');

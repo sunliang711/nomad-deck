@@ -14,6 +14,17 @@ export interface ToastOptions {
   details?: string[];
   durationMs?: number;
   position?: ToastPosition;
+  recordHistory?: boolean;
+}
+
+export interface ToastHistoryItem {
+  id: string;
+  kind: ToastKind;
+  text: string;
+  details?: string[];
+  path: string;
+  createdAt: number;
+  read: boolean;
 }
 
 interface ToastItem {
@@ -31,6 +42,43 @@ interface ToastContextValue {
   success: (text: string, arg?: ToastArg) => void;
   error: (text: string, arg?: ToastArg) => void;
   info: (text: string, arg?: ToastArg) => void;
+  history: ToastHistoryItem[];
+  unreadCount: number;
+  unreadErrorCount: number;
+  markHistoryRead: () => void;
+  clearHistory: () => void;
+  removeHistoryItem: (id: string) => void;
+}
+
+const HISTORY_KEY = 'nomad_deck_toast_history_v1';
+const MAX_HISTORY = 80;
+
+function loadStoredHistory(): ToastHistoryItem[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((x) => x && typeof x.id === 'string' && typeof x.text === 'string')
+      .slice(0, MAX_HISTORY);
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredHistory(items: ToastHistoryItem[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (items.length === 0) {
+      window.localStorage.removeItem(HISTORY_KEY);
+    } else {
+      window.localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, MAX_HISTORY)));
+    }
+  } catch {
+    // Ignore storage quota or privacy-mode errors.
+  }
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -47,6 +95,30 @@ function normalizeToastArg(arg?: ToastArg): ToastOptions {
 
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [items, setItems] = useState<ToastItem[]>([]);
+  const [history, setHistory] = useState<ToastHistoryItem[]>(() => loadStoredHistory());
+
+  const updateHistory = useCallback((updater: (prev: ToastHistoryItem[]) => ToastHistoryItem[]) => {
+    setHistory((prev) => {
+      const next = updater(prev).slice(0, MAX_HISTORY);
+      saveStoredHistory(next);
+      return next;
+    });
+  }, []);
+
+  const markHistoryRead = useCallback(() => {
+    updateHistory((prev) => prev.map((item) => (item.read ? item : { ...item, read: true })));
+  }, [updateHistory]);
+
+  const clearHistory = useCallback(() => {
+    updateHistory(() => []);
+  }, [updateHistory]);
+
+  const removeHistoryItem = useCallback(
+    (id: string) => {
+      updateHistory((prev) => prev.filter((item) => item.id !== id));
+    },
+    [updateHistory],
+  );
 
   const dismiss = useCallback((id: number) => {
     setItems((prev) => prev.filter((item) => item.id !== id));
@@ -62,18 +134,42 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         ...prev.slice(-4),
         { id, kind, text, action: opts.action, details: opts.details, position },
       ]);
+      if (opts.recordHistory !== false) {
+        const entry: ToastHistoryItem = {
+          id: `${Date.now()}-${id}`,
+          kind,
+          text,
+          details: opts.details && opts.details.length > 0 ? [...opts.details] : undefined,
+          path: typeof window !== 'undefined' ? window.location.pathname : '/',
+          createdAt: Date.now(),
+          read: false,
+        };
+        updateHistory((prev) => [entry, ...prev]);
+      }
       const duration = opts.durationMs ?? (kind === 'error' ? 6000 : 4000);
       window.setTimeout(() => {
         dismiss(id);
       }, duration);
     },
-    [dismiss],
+    [dismiss, updateHistory],
+  );
+
+  const unreadCount = history.reduce((acc, item) => acc + (item.read ? 0 : 1), 0);
+  const unreadErrorCount = history.reduce(
+    (acc, item) => acc + (!item.read && item.kind === 'error' ? 1 : 0),
+    0,
   );
 
   const value: ToastContextValue = {
     success: useCallback((text: string, arg?: ToastArg) => push('success', text, arg), [push]),
     error: useCallback((text: string, arg?: ToastArg) => push('error', text, arg), [push]),
     info: useCallback((text: string, arg?: ToastArg) => push('info', text, arg), [push]),
+    history,
+    unreadCount,
+    unreadErrorCount,
+    markHistoryRead,
+    clearHistory,
+    removeHistoryItem,
   };
 
   const renderSlot = (position: ToastPosition, positionClass: string) => {

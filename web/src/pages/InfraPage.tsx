@@ -607,7 +607,7 @@ export function InfraPage() {
 
   const copyText = (text: string, msg: string) => {
     void copyToClipboard(text)
-      .then(() => toast.success(msg))
+      .then(() => toast.success(msg, { recordHistory: false }))
       .catch((ex) => toast.error(ex?.message || '复制失败'));
   };
 

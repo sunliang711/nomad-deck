@@ -27,6 +27,7 @@ import {
 import { NomadWorkbench } from '../components/NomadWorkbench';
 import { CodeEditor } from '../components/CodeEditor';
 import { ClusterOpsSection } from '../components/ClusterOpsSection';
+import { ItemSwitcher } from '../components/ItemSwitcher';
 import { UninstallClusterModal, type UninstallPlan } from '../components/UninstallClusterModal';
 import { ClusterCreateModal } from '../components/ClusterCreateModal';
 
@@ -268,16 +269,16 @@ export function NomadPage() {
         }
       />
 
-      {clusters.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {clusters.map((c) => (
-            <Button key={c.id} size="sm" variant={selectedId === c.id ? 'primary' : 'secondary'} onClick={() => setSelectedId(c.id)}>
-              <span>{c.name}</span>
-              <StatusBadge value={c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status} />
-            </Button>
-          ))}
-        </div>
-      )}
+      <ItemSwitcher
+        label="Nomad 集群"
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        items={clusters.map((c) => ({
+          id: c.id,
+          name: c.name,
+          status: c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status,
+        }))}
+      />
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
       {newToken && <MaskedSecret value={newToken} label="新签发 ACL Token Secret（仅展示一次）：" />}
@@ -390,15 +391,6 @@ export function NomadPage() {
                 }
                 onError={setErr}
               />
-
-              {gateView && (
-                <Card title="仲裁门禁预览" actions={<Button size="sm" onClick={() => setGateView(null)}>关闭</Button>}>
-                  <div className="text-xs">
-                    结果：<Badge tone={gateView.allowed ? 'green' : 'red'}>{gateView.allowed ? '允许' : '拦截'}</Badge>{' '}
-                    <span className="ml-2">{gateView.reason}</span>
-                  </div>
-                </Card>
-              )}
             </div>
           )}
 
@@ -659,6 +651,21 @@ export function NomadPage() {
             <Button type="submit" variant="primary" loading={joinBusy}>确认扩容</Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal open={Boolean(gateView)} title="仲裁门禁预览" onClose={() => setGateView(null)}>
+        {gateView && (
+          <div className="space-y-4 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="text-slate-500">结果：</span>
+              <Badge tone={gateView.allowed ? 'green' : 'red'}>{gateView.allowed ? '允许' : '拦截'}</Badge>
+            </div>
+            <p className="leading-5 text-slate-700 dark:text-slate-200">{gateView.reason}</p>
+            <div className="flex justify-end">
+              <Button size="sm" variant="primary" onClick={() => setGateView(null)}>关闭</Button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       <ClusterCreateModal

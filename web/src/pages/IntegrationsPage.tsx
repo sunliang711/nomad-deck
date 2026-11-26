@@ -19,6 +19,7 @@ import {
   TermLabel,
 } from '../components/UI';
 import { CodeEditor } from '../components/CodeEditor';
+import { ItemSwitcher } from '../components/ItemSwitcher';
 
 export function IntegrationsPage() {
   const { isAdmin } = useAuth();
@@ -366,21 +367,17 @@ export function IntegrationsPage() {
         </ol>
       </div>
 
-      {items.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {items.map((it) => (
-            <Button
-              key={it.id}
-              size="sm"
-              variant={selected?.id === it.id ? 'primary' : 'secondary'}
-              onClick={() => void selectItem(it.id)}
-            >
-              <span>{it.name}</span>
-              <StatusBadge value={it.status} />
-            </Button>
-          ))}
-        </div>
-      )}
+      <ItemSwitcher
+        label="联动配置"
+        selectedId={selected?.id || ''}
+        onSelect={(id) => void selectItem(id)}
+        items={items.map((it) => ({
+          id: it.id,
+          name: it.name,
+          status: it.status,
+          subtitle: `${it.source_cluster || it.source_cluster_id} ↔ ${it.target_cluster || it.target_cluster_id}`,
+        }))}
+      />
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
@@ -506,35 +503,50 @@ export function IntegrationsPage() {
               </div>
             )}
           </Card>
-
-          {plan && (
-            <Card title="联动 Plan 预览" actions={<Button size="sm" onClick={() => setPlan(null)}>关闭</Button>}>
-              <pre className="max-h-72 overflow-auto rounded-xl bg-slate-950 p-4 font-mono text-xs text-slate-100">
-                {JSON.stringify(plan, null, 2)}
-              </pre>
-            </Card>
-          )}
-
-          {doctor && (
-            <Card title="四段式链路体检" actions={<Button size="sm" onClick={() => setDoctor(null)}>关闭</Button>}>
-              <div className="space-y-2 text-xs">
-                {(doctor.checks || []).map((c: any, i: number) => (
-                  <div key={i} className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                    <span><b>{c.name}</b>：{c.message}</span>
-                    <StatusBadge value={c.status} />
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
-
-          {exampleHCL && (
-            <Card title="示例 Nomad Job HCL" actions={<Button size="sm" onClick={() => setExampleHCL('')}>关闭</Button>}>
-              <CodeEditor value={exampleHCL} readOnly height="260px" />
-            </Card>
-          )}
         </div>
       )}
+
+      <Modal open={Boolean(plan)} title="联动 Plan 预览" onClose={() => setPlan(null)} wide>
+        {plan && (
+          <div className="space-y-3">
+            <pre className="max-h-96 overflow-auto rounded-xl bg-slate-950 p-4 font-mono text-xs text-slate-100">
+              {JSON.stringify(plan, null, 2)}
+            </pre>
+            <div className="flex justify-end">
+              <Button size="sm" variant="primary" onClick={() => setPlan(null)}>关闭</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={Boolean(doctor)} title="四段式链路体检" onClose={() => setDoctor(null)} wide>
+        {doctor && (
+          <div className="space-y-3 text-xs">
+            <div className="space-y-2">
+              {(doctor.checks || []).map((c: any, i: number) => (
+                <div key={i} className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+                  <span><b>{c.name}</b>：{c.message}</span>
+                  <StatusBadge value={c.status} />
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end">
+              <Button size="sm" variant="primary" onClick={() => setDoctor(null)}>关闭</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={Boolean(exampleHCL)} title="示例 Nomad Job HCL" onClose={() => setExampleHCL('')} wide>
+        {exampleHCL && (
+          <div className="space-y-3">
+            <CodeEditor value={exampleHCL} readOnly height="320px" />
+            <div className="flex justify-end">
+              <Button size="sm" variant="primary" onClick={() => setExampleHCL('')}>关闭</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <Modal open={showCreate} title="新建 Nomad-Vault 联动" onClose={() => setShowCreate(false)}>
         <form onSubmit={createIntegration} className="space-y-3 text-xs">

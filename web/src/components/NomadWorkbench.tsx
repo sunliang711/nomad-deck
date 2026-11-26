@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshCw, Search, Terminal } from 'lucide-react';
+import { ArrowLeft, ChevronRight, RefreshCw, Search, Terminal } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, fmtBytes, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Sparkline, StatusBadge, TermLabel } from './UI';
+import { Badge, Button, Card, EmptyState, ErrorAlert, Input, LoadingState, Modal, SectionTabs, Sparkline, StatusBadge, TermLabel } from './UI';
 import { useToast } from './Toast';
 import { useConfirm } from './ConfirmDialog';
+import { Drawer } from './Drawer';
 import { TerminalModal } from './TerminalModal';
 import { CodeEditor } from './CodeEditor';
 
@@ -34,6 +35,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
   const [logTask, setLogTask] = useState('');
   const [logType, setLogType] = useState('stdout');
   const [logRevision, setLogRevision] = useState(0);
+  const [allocTab, setAllocTab] = useState<'logs' | 'events' | 'files'>('logs');
   const [terminal, setTerminal] = useState<{ allocId: string; task: string; action?: string } | null>(null);
 
   const [clients, setClients] = useState<any[]>([]);
@@ -161,9 +163,33 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
     }
   };
 
+  const closeAllocDrawer = () => {
+    ++allocRequestRef.current;
+    setSelectedAlloc(null);
+    setAllocStats(null);
+    setAllocLogs('');
+    setFsFiles([]);
+    setFsPath('');
+    setFilePreview(null);
+  };
+
+  const backToJobs = () => {
+    ++jobRequestRef.current;
+    closeAllocDrawer();
+    setSelectedJob(null);
+    setJobSummary(null);
+    setJobAllocs([]);
+    setJobDeps([]);
+    setJobEvals([]);
+  };
+
   // inspectAlloc refreshes details and restarts logs, including allocations listed before tasks appear.
   const inspectAlloc = async (alloc: any) => {
     const request = ++allocRequestRef.current;
+    const sameAlloc = selectedAlloc?.ID === alloc.ID;
+    if (!sameAlloc) {
+      setAllocTab('logs');
+    }
     setSelectedAlloc(alloc);
     setAllocStats(null);
     setFsFiles([]);
@@ -174,7 +200,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
     setFsPath('');
     setFilePreview(null);
     const firstTask = Object.keys(alloc.TaskStates || {})[0] || '';
-    setLogTask((current) => selectedAlloc?.ID === alloc.ID && alloc.TaskStates?.[current] ? current : firstTask);
+    setLogTask((current) => sameAlloc && alloc.TaskStates?.[current] ? current : firstTask);
     try {
       const [det, st, ls] = await Promise.all([
         apiGet(`/api/v1/nomad/${clusterId}/allocs/${alloc.ID}`),
@@ -247,12 +273,20 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
             { id: 'evaluations', label: 'Evaluations', tip: '每次 Job 变更、节点故障或周期触发产生的调度计算请求，用于决定 Allocation 迁移。' },
           ]}
           active={subTab}
-          onChange={setSubTab}
+          onChange={(next) => {
+            setSubTab(next);
+            if (next !== 'jobs') {
+              closeAllocDrawer();
+            }
+          }}
         />
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={namespace}
-            onChange={(e) => setNamespace(e.target.value)}
+            onChange={(e) => {
+              setNamespace(e.target.value);
+              backToJobs();
+            }}
             className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs dark:border-slate-700 dark:bg-slate-950"
           >
             <option value="*">全部 Namespace (*)</option>
@@ -283,320 +317,198 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
-      {searchRes && (
-        <Card title="全局搜索结果" actions={<Button size="sm" onClick={() => setSearchRes(null)}>关闭</Button>}>
-          {(() => {
-            const matches = searchRes?.Matches || searchRes?.matches || {};
-            const entries = Object.entries<any>(matches).filter(([, list]) => Array.isArray(list) && list.length > 0);
-            if (entries.length === 0) {
-              return (
-                <div className="space-y-2 text-xs text-slate-500">
-                  <div>未找到匹配项。</div>
-                  <details>
-                    <summary className="cursor-pointer hover:text-indigo-600">查看原始响应</summary>
-                    <pre className="mt-2 max-h-48 overflow-auto rounded bg-slate-950 p-2 font-mono text-xs text-slate-100">
-                      {JSON.stringify(searchRes, null, 2)}
-                    </pre>
-                  </details>
-                </div>
-              );
-            }
-            return (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 text-xs">
-                {entries.map(([kind, list]) => (
-                  <div key={kind} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3 space-y-1.5">
-                    <div className="font-semibold text-slate-800 dark:text-slate-100">
-                      {kind} ({list.length})
-                    </div>
-                    <ul className="space-y-1 font-mono text-[11px] text-slate-600 dark:text-slate-300">
-                      {list.slice(0, 8).map((item: any, idx: number) => (
-                        <li key={idx} className="truncate">
-                          {typeof item === 'string' ? item : item.ID || item.Name || JSON.stringify(item)}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
-        </Card>
-      )}
-
       {subTab === 'jobs' && (
         <div className="space-y-4">
-          <Card title="运行态 Jobs" actions={<Button size="sm" onClick={() => void loadJobs()}><RefreshCw className="h-3.5 w-3.5" /></Button>}>
-            {jobs.length === 0 ? (
-              <EmptyState text="当前 Namespace 无 Job" />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
-                      <th className="py-2 pr-3">Job ID</th>
-                      <th className="py-2 pr-3">Namespace / Type</th>
-                      <th className="py-2 pr-3">状态</th>
-                      <th className="py-2 text-right">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {jobs.map((j) => (
-                      <tr key={`${j.namespace}:${j.id}`}>
-                        <td className="py-2 pr-3 font-mono font-medium">{j.id}</td>
-                        <td className="py-2 pr-3">{j.namespace} · {j.type}</td>
-                        <td className="py-2 pr-3"><StatusBadge value={j.stop ? 'stopped' : j.status} /></td>
-                        <td className="py-2 text-right">
-                          <Button size="sm" onClick={() => void inspectJob(j)}>运行态详情</Button>
-                        </td>
+          {!selectedJob ? (
+            <Card title="运行态 Jobs" actions={<Button size="sm" onClick={() => void loadJobs()}><RefreshCw className="h-3.5 w-3.5" /></Button>}>
+              {jobs.length === 0 ? (
+                <EmptyState text="当前 Namespace 无 Job" />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
+                        <th className="py-2 pr-3">Job ID</th>
+                        <th className="py-2 pr-3">Namespace / Type</th>
+                        <th className="py-2 pr-3">状态</th>
+                        <th className="py-2 text-right">操作</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Card>
-
-          {selectedJob && jobSummary && (
-            <Card title={`Job 运行态：${selectedJob.id} (${selectedJob.namespace})`}>
-              <div className="space-y-4 text-xs">
-                {isAdmin && (
-                  <div className="flex flex-wrap items-center gap-2 rounded bg-slate-50 p-2.5 dark:bg-slate-950">
-                    <span>Task Group：</span>
-                    {selectedJob.groups?.length > 1 ? (
-                      <select
-                        value={scaleGroup}
-                        onChange={(e) => setScaleGroup(e.target.value)}
-                        className="rounded border border-slate-300 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-900"
-                      >
-                        {selectedJob.groups.map((g: string) => <option key={g} value={g}>{g}</option>)}
-                      </select>
-                    ) : (
-                      <b>{scaleGroup || '-'}</b>
-                    )}
-                    <input
-                      type="number"
-                      min={0}
-                      value={scaleCount}
-                      onChange={(e) => setScaleCount(Number(e.target.value))}
-                      className="w-20 rounded border border-slate-300 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-900"
-                    />
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={() =>
-                        void apiPost(
-                          `/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/scale`,
-                          { group: scaleGroup, count: scaleCount },
-                        ).then(() => { toast.success('扩缩副本请求已提交'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))
-                      }
-                    >
-                      扩缩副本
-                    </Button>
-                    {selectedJob.periodic && (
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/periodic/force`, {})
-                            .then(() => toast.success('已触发 Periodic 运行'))
-                            .catch((ex) => setErr(ex.message))
-                        }
-                      >
-                        立即触发 Periodic
-                      </Button>
-                    )}
-                    {selectedJob.parameterized && (
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/dispatch`, { meta: {} })
-                            .then(() => toast.success('已派发 Parameterized 子任务'))
-                            .catch((ex) => setErr(ex.message))
-                        }
-                      >
-                        Dispatch 派发
-                      </Button>
-                    )}
-                  </div>
-                )}
-
-                {jobDeps.length > 0 && (
-                  <div>
-                    <div className="mb-1 font-semibold"><TermLabel term="Deployments" tip="滚动发布与金丝雀升级控制器，支持 Promote（放行全量）、Pause、Resume 与 Fail 回滚。" /></div>
-                    {jobDeps.map((d) => (
-                      <div key={d.ID} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
-                        <span>{d.ID.slice(0, 8)} · <StatusBadge value={d.Status} /> {d.StatusDescription}</span>
-                        {isAdmin && d.Status === 'running' && (
-                          <div className="flex gap-1">
-                            <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/promote`, {}).then(() => { toast.success('已放行 Deployment (Promote)'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Promote</Button>
-                            <Button size="sm" variant="danger" onClick={() => void askConfirm(`确定要将 Deployment ${d.ID.slice(0, 8)} 标记为失败并触发回滚吗？`, { title: '回滚 Deployment', confirmText: '确认 Fail', danger: true }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/fail`, {}).then(() => { toast.success('已触发 Deployment Fail'); return inspectJob(selectedJob); }) : undefined).catch((ex) => setErr(ex.message))}>Fail</Button>
-                            <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/pause`, {}).then(() => { toast.success('已暂停 Deployment'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Pause</Button>
-                            <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/resume`, {}).then(() => { toast.success('已恢复 Deployment'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Resume</Button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div>
-                  <div className="mb-1 font-semibold"><TermLabel term={`Allocations (${jobAllocs.length})`} tip="Task Group 在具体 Client 节点上的实例化副本，可查看实时 CPU/内存、日志与进入 Web 终端。" /></div>
-                  <div className="space-y-1.5">
-                    {jobAllocs.map((a) => (
-                      <div key={a.ID} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
-                        <div>
-                          <span className="font-mono font-medium">{a.ID.slice(0, 8)}</span>
-                          <span className="ml-2 text-slate-500">{a.TaskGroup} · 节点 {a.NodeName}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <StatusBadge value={a.ClientStatus} />
-                          <Button size="sm" onClick={() => void inspectAlloc(a)}>详情 / 日志 / 终端</Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {jobEvals.length > 0 && (
-                  <div>
-                    <div className="mb-1 font-semibold">最近 Evaluations</div>
-                    {jobEvals.slice(0, 5).map((ev) => (
-                      <div key={ev.ID} className="text-[11px] text-slate-600 dark:text-slate-300">
-                        {ev.ID.slice(0, 8)} · {ev.Status} {ev.BlockedEval ? '(blocked)' : ''}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </Card>
-          )}
-
-          {selectedAlloc && (
-            <Card title={`Allocation 详情：${selectedAlloc.ID}`} actions={<Button size="sm" onClick={() => void inspectAlloc(selectedAlloc)}>刷新 Allocation</Button>}>
-              <div className="space-y-4 text-xs">
-                <div className="space-y-2">
-                  <div className="font-semibold">Task 事件</div>
-                  {Object.entries<any>(selectedAlloc.TaskStates || {}).map(([task, state]) => (
-                    <div key={task} className="rounded border border-slate-200 p-2 dark:border-slate-800">
-                      <div className="font-mono font-semibold">{task} · {state.State}</div>
-                      {(state.Events || []).slice(-10).reverse().map((event: any, i: number) => (
-                        <div key={i} className="mt-1 whitespace-pre-wrap break-words">
-                          <b>{event.Type}</b>：{event.DisplayMessage || event.Message || '-'}
-                        </div>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {jobs.map((j) => (
+                        <tr key={`${j.namespace}:${j.id}`}>
+                          <td className="py-2 pr-3 font-mono font-medium">
+                            <button
+                              type="button"
+                              onClick={() => void inspectJob(j)}
+                              className="text-left text-slate-900 hover:text-indigo-600 hover:underline underline-offset-2 dark:text-slate-100 dark:hover:text-indigo-400"
+                            >
+                              {j.id}
+                            </button>
+                          </td>
+                          <td className="py-2 pr-3">{j.namespace} · {j.type}</td>
+                          <td className="py-2 pr-3"><StatusBadge value={j.stop ? 'stopped' : j.status} /></td>
+                          <td className="py-2 text-right">
+                            <Button size="sm" onClick={() => void inspectJob(j)}>运行态详情</Button>
+                          </td>
+                        </tr>
                       ))}
-                    </div>
-                  ))}
+                    </tbody>
+                  </table>
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap gap-4">
-                    <Sparkline values={cpuHist} color="#4f46e5" label={`CPU ${(cpuHist[cpuHist.length - 1] || 0).toFixed(1)}%`} />
-                    <Sparkline values={memHist} max={512} color="#0ea5e9" label={`Mem ${(memHist[memHist.length - 1] || 0).toFixed(1)} MiB`} />
-                  </div>
-                  {isAdmin && logTask && (
-                    <div className="flex flex-wrap gap-1.5">
-                      <Button size="sm" variant="primary" disabled={selectedAlloc.TaskStates?.[logTask]?.State !== 'running'} onClick={() => setTerminal({ allocId: selectedAlloc.ID, task: logTask })}>
-                        <Terminal className="h-3 w-3" /> 打开交互式终端
-                      </Button>
-                      <Button size="sm" disabled={selectedAlloc.TaskStates?.[logTask]?.State !== 'running'} onClick={() => void askConfirm(`确定要重启 Allocation ${selectedAlloc.ID.slice(0, 8)} 中的任务 ${logTask} 吗？`, { title: '重启 Task', confirmText: '确认重启' }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/restart`, { task: logTask }).then(() => { toast.success('已请求重启 Task'); }) : undefined).catch((ex) => setErr(ex.message))}>重启 Task</Button>
-                      <Button size="sm" variant="danger" disabled={['complete', 'failed', 'lost'].includes(selectedAlloc.ClientStatus)} onClick={() => void askConfirm(`确定要停止 Allocation ${selectedAlloc.ID.slice(0, 8)} 吗？调度器可能会重新拉起新副本。`, { title: '停止 Allocation', confirmText: '确认停止', danger: true }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stop`, {}).then(() => { toast.success('已请求停止 Alloc'); }) : undefined).catch((ex) => setErr(ex.message))}>停止 Alloc</Button>
-                    </div>
-                  )}
+              )}
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-white px-3.5 py-2.5 text-xs dark:border-slate-800 dark:bg-slate-900">
+                <nav aria-label="Job 运行态路径" className="flex flex-wrap items-center gap-1.5 min-w-0">
+                  <button
+                    type="button"
+                    onClick={backToJobs}
+                    className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                    <span>Jobs 列表</span>
+                  </button>
+                  <ChevronRight className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  <span className="font-mono font-semibold text-slate-900 dark:text-slate-100 truncate">
+                    {selectedJob.id} ({selectedJob.namespace})
+                  </span>
+                  <StatusBadge value={selectedJob.stop ? 'stopped' : selectedJob.status} />
+                </nav>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button size="sm" onClick={() => void inspectJob(selectedJob)}>
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    <span>刷新</span>
+                  </Button>
+                  <Button size="sm" onClick={backToJobs}>返回列表</Button>
                 </div>
+              </div>
 
-                {allocStats && (
-                  <div className="text-slate-500">
-                    Task 选择：
-                    <select value={logTask} onChange={(e) => setLogTask(e.target.value)} className="ml-1 rounded border border-slate-300 px-1.5 py-0.5 dark:border-slate-700 dark:bg-slate-950">
-                      {Object.keys(selectedAlloc.TaskStates || {}).map((t) => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                  <div>
-                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-semibold">实时日志</span>
-                      <select aria-label="日志输出流" value={logType} onChange={(e) => setLogType(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-950">
-                        <option value="stdout">标准输出 · stdout</option>
-                        <option value="stderr">错误与服务日志 · stderr</option>
-                      </select>
-                    </div>
-                    <pre className="h-56 overflow-auto rounded bg-slate-950 p-2.5 font-mono text-[11px] text-slate-100 whitespace-pre-wrap">
-                      {allocLogs || '等待日志… 若没有输出，请尝试切换 stdout / stderr。'}
-                    </pre>
-                  </div>
-
-                  <div>
-                    <div className="mb-1 flex items-center justify-between">
-                      <span className="font-semibold">文件浏览器 ({fsPath || '/'})</span>
-                      {fsPath && (
+              {!jobSummary ? (
+                <Card>
+                  <LoadingState label={`正在加载 Job ${selectedJob.id} 运行态…`} />
+                </Card>
+              ) : (
+                <Card title={`Job 运行态：${selectedJob.id} (${selectedJob.namespace})`}>
+                  <div className="space-y-4 text-xs">
+                    {isAdmin && (
+                      <div className="flex flex-wrap items-center gap-2 rounded bg-slate-50 p-2.5 dark:bg-slate-950">
+                        <span>Task Group：</span>
+                        {selectedJob.groups?.length > 1 ? (
+                          <select
+                            value={scaleGroup}
+                            onChange={(e) => setScaleGroup(e.target.value)}
+                            className="rounded border border-slate-300 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-900"
+                          >
+                            {selectedJob.groups.map((g: string) => <option key={g} value={g}>{g}</option>)}
+                          </select>
+                        ) : (
+                          <b>{scaleGroup || '-'}</b>
+                        )}
+                        <input
+                          type="number"
+                          min={0}
+                          value={scaleCount}
+                          onChange={(e) => setScaleCount(Number(e.target.value))}
+                          className="w-20 rounded border border-slate-300 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-900"
+                        />
                         <Button
                           size="sm"
-                          onClick={() => {
-                            const parent = fsPath.split('/').slice(0, -1).join('/');
-                            setFsPath(parent);
-                            void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/ls?path=${encodeURIComponent(parent)}`)
-                              .then((r) => setFsFiles(r.files || r || []))
-                              .catch((ex) => setErr(ex.message));
-                          }}
+                          variant="primary"
+                          onClick={() =>
+                            void apiPost(
+                              `/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/scale`,
+                              { group: scaleGroup, count: scaleCount },
+                            ).then(() => { toast.success('扩缩副本请求已提交'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))
+                          }
                         >
-                          上级
+                          扩缩副本
                         </Button>
-                      )}
-                    </div>
-                    <div className="h-56 overflow-auto rounded border border-slate-200 p-2 dark:border-slate-800">
-                      {(fsFiles || []).map((f: any) => (
-                        <div key={f.name} className="flex items-center justify-between py-1">
-                          <span className="font-mono">{f.is_dir ? `${f.name}/` : f.name}</span>
-                          <div className="flex gap-1">
-                            <span className="text-slate-500">{fmtBytes(f.size)}</span>
-                            {f.is_dir ? (
-                              <Button
-                                size="sm"
-                                onClick={() => {
-                                  const np = fsPath ? `${fsPath}/${f.name}` : f.name;
-                                  setFsPath(np);
-                                  void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/ls?path=${encodeURIComponent(np)}`)
-                                    .then((r) => setFsFiles(r.files || r || []))
-                                    .catch((ex) => setErr(ex.message));
-                                }}
-                              >
-                                进入
-                              </Button>
-                            ) : (
-                              isAdmin && f.readable !== false && (
-                                <>
-                                  <Button
-                                    size="sm"
-                                    onClick={() => {
-                                      const fp = fsPath ? `${fsPath}/${f.name}` : f.name;
-                                      void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/content/readat?path=${encodeURIComponent(fp)}&offset=0&limit=32768`)
-                                        .then((r) => setFilePreview({ path: fp, text: typeof r === 'string' ? r : r.data || JSON.stringify(r) }))
-                                        .catch((ex) => setErr(ex.message));
-                                    }}
-                                  >
-                                    预览
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    onClick={() => {
-                                      const fp = fsPath ? `${fsPath}/${f.name}` : f.name;
-                                      void apiDownload(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/content/download?path=${encodeURIComponent(fp)}`, undefined, f.name)
-                                        .catch((ex) => setErr(ex.message));
-                                    }}
-                                  >
-                                    下载
-                                  </Button>
-                                </>
-                              )
+                        {selectedJob.periodic && (
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/periodic/force`, {})
+                                .then(() => toast.success('已触发 Periodic 运行'))
+                                .catch((ex) => setErr(ex.message))
+                            }
+                          >
+                            立即触发 Periodic
+                          </Button>
+                        )}
+                        {selectedJob.parameterized && (
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/dispatch`, { meta: {} })
+                                .then(() => toast.success('已派发 Parameterized 子任务'))
+                                .catch((ex) => setErr(ex.message))
+                            }
+                          >
+                            Dispatch 派发
+                          </Button>
+                        )}
+                      </div>
+                    )}
+
+                    {jobDeps.length > 0 && (
+                      <div>
+                        <div className="mb-1 font-semibold"><TermLabel term="Deployments" tip="滚动发布与金丝雀升级控制器，支持 Promote（放行全量）、Pause、Resume 与 Fail 回滚。" /></div>
+                        {jobDeps.map((d) => (
+                          <div key={d.ID} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
+                            <span>{d.ID.slice(0, 8)} · <StatusBadge value={d.Status} /> {d.StatusDescription}</span>
+                            {isAdmin && d.Status === 'running' && (
+                              <div className="flex gap-1">
+                                <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/promote`, {}).then(() => { toast.success('已放行 Deployment (Promote)'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Promote</Button>
+                                <Button size="sm" variant="danger" onClick={() => void askConfirm(`确定要将 Deployment ${d.ID.slice(0, 8)} 标记为失败并触发回滚吗？`, { title: '回滚 Deployment', confirmText: '确认 Fail', danger: true }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/fail`, {}).then(() => { toast.success('已触发 Deployment Fail'); return inspectJob(selectedJob); }) : undefined).catch((ex) => setErr(ex.message))}>Fail</Button>
+                                <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/pause`, {}).then(() => { toast.success('已暂停 Deployment'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Pause</Button>
+                                <Button size="sm" onClick={() => void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/resume`, {}).then(() => { toast.success('已恢复 Deployment'); return inspectJob(selectedJob); }).catch((ex) => setErr(ex.message))}>Resume</Button>
+                              </div>
                             )}
                           </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
+                    )}
+
+                    <div>
+                      <div className="mb-1 font-semibold"><TermLabel term={`Allocations (${jobAllocs.length})`} tip="Task Group 在具体 Client 节点上的实例化副本，可查看实时 CPU/内存、日志与进入 Web 终端。" /></div>
+                      <div className="space-y-1.5">
+                        {jobAllocs.map((a) => (
+                          <div key={a.ID} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2 dark:border-slate-800">
+                            <div>
+                              <span className="font-mono font-medium">{a.ID.slice(0, 8)}</span>
+                              <span className="ml-2 text-slate-500">{a.TaskGroup} · 节点 {a.NodeName}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <StatusBadge value={a.ClientStatus} />
+                              <Button
+                                size="sm"
+                                variant={selectedAlloc?.ID === a.ID ? 'primary' : 'secondary'}
+                                onClick={() => void inspectAlloc(a)}
+                              >
+                                详情 / 日志 / 终端
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
+
+                    {jobEvals.length > 0 && (
+                      <div>
+                        <div className="mb-1 font-semibold">最近 Evaluations</div>
+                        {jobEvals.slice(0, 5).map((ev) => (
+                          <div key={ev.ID} className="text-[11px] text-slate-600 dark:text-slate-300">
+                            {ev.ID.slice(0, 8)} · {ev.Status} {ev.BlockedEval ? '(blocked)' : ''}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </div>
-              </div>
-            </Card>
+                </Card>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -935,6 +847,227 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
             </div>
           )}
         </Card>
+      )}
+
+      <Modal open={Boolean(searchRes)} title={`全局搜索结果${searchQ.trim() ? `：${searchQ.trim()}` : ''}`} onClose={() => setSearchRes(null)} wide>
+        {searchRes && (() => {
+          const matches = searchRes?.Matches || searchRes?.matches || {};
+          const entries = Object.entries<any>(matches).filter(([, list]) => Array.isArray(list) && list.length > 0);
+          if (entries.length === 0) {
+            return (
+              <div className="space-y-2 text-xs text-slate-500">
+                <div>未找到匹配项。</div>
+                <details>
+                  <summary className="cursor-pointer hover:text-indigo-600">查看原始响应</summary>
+                  <pre className="mt-2 max-h-48 overflow-auto rounded bg-slate-950 p-2 font-mono text-xs text-slate-100">
+                    {JSON.stringify(searchRes, null, 2)}
+                  </pre>
+                </details>
+              </div>
+            );
+          }
+          return (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 text-xs">
+              {entries.map(([kind, list]) => (
+                <div key={kind} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3 space-y-1.5">
+                  <div className="font-semibold text-slate-800 dark:text-slate-100">
+                    {kind} ({list.length})
+                  </div>
+                  <ul className="space-y-1 font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                    {list.slice(0, 8).map((item: any, idx: number) => (
+                      <li key={idx} className="truncate">
+                        {typeof item === 'string' ? item : item.ID || item.Name || JSON.stringify(item)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {selectedAlloc && (
+        <Drawer
+          title={
+            <>
+              <span className="font-mono">Allocation {selectedAlloc.ID.slice(0, 8)}</span>
+              <StatusBadge value={selectedAlloc.ClientStatus} />
+            </>
+          }
+          subtitle={`${selectedJob?.id ? `Job ${selectedJob.id} · ` : ''}${selectedAlloc.TaskGroup || ''} · 节点 ${selectedAlloc.NodeName || '-'} · ID: ${selectedAlloc.ID}`}
+          width="2xl"
+          onClose={closeAllocDrawer}
+          headerExtra={
+            <Button size="sm" onClick={() => void inspectAlloc(selectedAlloc)}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>刷新</span>
+            </Button>
+          }
+          footer={
+            <div className="flex flex-wrap items-center justify-between gap-2 w-full">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {isAdmin && logTask && (
+                  <>
+                    <Button size="sm" variant="primary" disabled={selectedAlloc.TaskStates?.[logTask]?.State !== 'running'} onClick={() => setTerminal({ allocId: selectedAlloc.ID, task: logTask })}>
+                      <Terminal className="h-3 w-3" /> 打开交互式终端
+                    </Button>
+                    <Button size="sm" disabled={selectedAlloc.TaskStates?.[logTask]?.State !== 'running'} onClick={() => void askConfirm(`确定要重启 Allocation ${selectedAlloc.ID.slice(0, 8)} 中的任务 ${logTask} 吗？`, { title: '重启 Task', confirmText: '确认重启' }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/restart`, { task: logTask }).then(() => { toast.success('已请求重启 Task'); }) : undefined).catch((ex) => setErr(ex.message))}>
+                      重启 Task
+                    </Button>
+                    <Button size="sm" variant="danger" disabled={['complete', 'failed', 'lost'].includes(selectedAlloc.ClientStatus)} onClick={() => void askConfirm(`确定要停止 Allocation ${selectedAlloc.ID.slice(0, 8)} 吗？调度器可能会重新拉起新副本。`, { title: '停止 Allocation', confirmText: '确认停止', danger: true }).then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stop`, {}).then(() => { toast.success('已请求停止 Alloc'); }) : undefined).catch((ex) => setErr(ex.message))}>
+                      停止 Alloc
+                    </Button>
+                  </>
+                )}
+              </div>
+              <Button size="sm" variant="primary" onClick={closeAllocDrawer}>关闭</Button>
+            </div>
+          }
+        >
+          <div className="space-y-4 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <SectionTabs
+                tabs={[
+                  { id: 'logs', label: '实时日志' },
+                  { id: 'events', label: '事件与资源' },
+                  { id: 'files', label: '文件浏览' },
+                ]}
+                active={allocTab}
+                onChange={(t) => setAllocTab(t as 'logs' | 'events' | 'files')}
+              />
+              {Object.keys(selectedAlloc.TaskStates || {}).length > 0 && (
+                <label className="flex items-center gap-1.5 text-slate-500">
+                  <span>Task：</span>
+                  <select
+                    aria-label="选择 Task"
+                    value={logTask}
+                    onChange={(e) => setLogTask(e.target.value)}
+                    className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  >
+                    {Object.keys(selectedAlloc.TaskStates || {}).map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </label>
+              )}
+            </div>
+
+            {allocTab === 'logs' && (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-800 dark:text-slate-100">实时日志输出（{logTask || '-'}）</span>
+                  <select aria-label="日志输出流" value={logType} onChange={(e) => setLogType(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-950">
+                    <option value="stdout">标准输出 · stdout</option>
+                    <option value="stderr">错误与服务日志 · stderr</option>
+                  </select>
+                </div>
+                <pre className="h-[420px] overflow-auto rounded-xl bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100 whitespace-pre-wrap">
+                  {allocLogs || '等待日志… 若没有输出，请尝试切换 stdout / stderr。'}
+                </pre>
+              </div>
+            )}
+
+            {allocTab === 'events' && (
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-4 rounded-xl border border-slate-200 p-3.5 dark:border-slate-800">
+                  <Sparkline values={cpuHist} color="#4f46e5" label={`CPU ${(cpuHist[cpuHist.length - 1] || 0).toFixed(1)}%`} />
+                  <Sparkline values={memHist} max={512} color="#0ea5e9" label={`Mem ${(memHist[memHist.length - 1] || 0).toFixed(1)} MiB`} />
+                  {allocStats && (
+                    <span className="self-center text-slate-500">每 3 秒自动采集一次资源占用</span>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <div className="font-semibold text-slate-800 dark:text-slate-100">Task 生命周期事件</div>
+                  {Object.entries<any>(selectedAlloc.TaskStates || {}).map(([task, state]) => (
+                    <div key={task} className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+                      <div className="font-mono font-semibold text-slate-900 dark:text-slate-100">{task} · {state.State}</div>
+                      {(state.Events || []).slice(-10).reverse().map((event: any, i: number) => (
+                        <div key={i} className="mt-1.5 whitespace-pre-wrap break-words text-slate-600 dark:text-slate-300">
+                          <b>{event.Type}</b>：{event.DisplayMessage || event.Message || '-'}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {allocTab === 'files' && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-800 dark:text-slate-100">文件浏览器 ({fsPath || '/'})</span>
+                  {fsPath && (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const parent = fsPath.split('/').slice(0, -1).join('/');
+                        setFsPath(parent);
+                        void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/ls?path=${encodeURIComponent(parent)}`)
+                          .then((r) => setFsFiles(r.files || r || []))
+                          .catch((ex) => setErr(ex.message));
+                      }}
+                    >
+                      上级
+                    </Button>
+                  )}
+                </div>
+                <div className="h-[420px] overflow-auto rounded-xl border border-slate-200 p-2.5 dark:border-slate-800">
+                  {(fsFiles || []).length === 0 ? (
+                    <div className="py-10 text-center text-slate-400">当前目录为空</div>
+                  ) : (
+                    (fsFiles || []).map((f: any) => (
+                      <div key={f.name} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800/60">
+                        <span className="font-mono truncate">{f.is_dir ? `${f.name}/` : f.name}</span>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <span className="text-slate-500">{fmtBytes(f.size)}</span>
+                          {f.is_dir ? (
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                const np = fsPath ? `${fsPath}/${f.name}` : f.name;
+                                setFsPath(np);
+                                void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/ls?path=${encodeURIComponent(np)}`)
+                                  .then((r) => setFsFiles(r.files || r || []))
+                                  .catch((ex) => setErr(ex.message));
+                              }}
+                            >
+                              进入
+                            </Button>
+                          ) : (
+                            isAdmin && f.readable !== false && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  onClick={() => {
+                                    const fp = fsPath ? `${fsPath}/${f.name}` : f.name;
+                                    void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/content/readat?path=${encodeURIComponent(fp)}&offset=0&limit=32768`)
+                                      .then((r) => setFilePreview({ path: fp, text: typeof r === 'string' ? r : r.data || JSON.stringify(r) }))
+                                      .catch((ex) => setErr(ex.message));
+                                  }}
+                                >
+                                  预览
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  onClick={() => {
+                                    const fp = fsPath ? `${fsPath}/${f.name}` : f.name;
+                                    void apiDownload(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/content/download?path=${encodeURIComponent(fp)}`, undefined, f.name)
+                                      .catch((ex) => setErr(ex.message));
+                                  }}
+                                >
+                                  下载
+                                </Button>
+                              </>
+                            )
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </Drawer>
       )}
 
       <Modal open={Boolean(filePreview)} title={`文件预览：${filePreview?.path}`} onClose={() => setFilePreview(null)} wide>

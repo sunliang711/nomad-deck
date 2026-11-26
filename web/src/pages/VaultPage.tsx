@@ -28,6 +28,7 @@ import {
 } from '../components/UI';
 import { ClusterOpsSection } from '../components/ClusterOpsSection';
 import { CodeEditor } from '../components/CodeEditor';
+import { ItemSwitcher } from '../components/ItemSwitcher';
 import { UninstallClusterModal, type UninstallPlan } from '../components/UninstallClusterModal';
 import { ClusterCreateModal } from '../components/ClusterCreateModal';
 
@@ -297,16 +298,16 @@ export function VaultPage() {
         }
       />
 
-      {clusters.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {clusters.map((c) => (
-            <Button key={c.id} size="sm" variant={selectedId === c.id ? 'primary' : 'secondary'} onClick={() => setSelectedId(c.id)}>
-              <span>{c.name}</span>
-              <StatusBadge value={c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status} />
-            </Button>
-          ))}
-        </div>
-      )}
+      <ItemSwitcher
+        label="Vault 集群"
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        items={clusters.map((c) => ({
+          id: c.id,
+          name: c.name,
+          status: c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status,
+        }))}
+      />
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
@@ -416,15 +417,6 @@ export function VaultPage() {
                 }
                 onError={setErr}
               />
-
-              {gateView && (
-                <Card title="仲裁门禁预览" actions={<Button size="sm" onClick={() => setGateView(null)}>关闭</Button>}>
-                  <div className="text-xs">
-                    结果：<Badge tone={gateView.allowed ? 'green' : 'red'}>{gateView.allowed ? '允许' : '拦截'}</Badge>{' '}
-                    <span className="ml-2">{gateView.reason}</span>
-                  </div>
-                </Card>
-              )}
             </div>
           )}
 
@@ -856,40 +848,63 @@ export function VaultPage() {
                       </Button>
                     ))}
                   </div>
-                  {isAdmin && kvItem && (
-                    <div className="space-y-2 border-t border-slate-200 pt-2 dark:border-slate-800">
-                      <div className="font-mono font-semibold">{kvItem.path} (v{kvItem.cas})</div>
-                      <CodeEditor label="Secret 数据（JSON）" value={kvItem.data} onChange={(v) => setKvItem({ ...kvItem, data: v })} height="180px" />
-                      <Button
-                        variant="primary"
-                        onClick={() => {
-                          try {
-                            const parsed = JSON.parse(kvItem.data);
-                            void apiPut(`/api/v1/vault/${selectedId}/kv/item?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(kvItem.path)}`, {
-                              data: parsed,
-                              cas: kvItem.cas,
-                            })
-                              .then((r) => {
-                                toast.success(kvItem.cas === 0 ? 'Secret 已创建' : 'KV 已更新');
-                                // Vault returns the authoritative version, including after deleted versions.
-                                setKvItem((cur) => (cur ? { ...cur, cas: Number(r.result?.version ?? cur.cas + 1) } : null));
-                              })
-                              .catch((ex) => setErr(ex.message));
-                          } catch {
-                            setErr('KV 数据必须是合法 JSON');
-                          }
-                        }}
-                      >
-                        保存 Secret
-                      </Button>
-                    </div>
-                  )}
                 </div>
               </Card>
             </div>
           )}
         </div>
       )}
+
+      <Modal open={Boolean(gateView)} title="仲裁门禁预览" onClose={() => setGateView(null)}>
+        {gateView && (
+          <div className="space-y-4 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="text-slate-500">结果：</span>
+              <Badge tone={gateView.allowed ? 'green' : 'red'}>{gateView.allowed ? '允许' : '拦截'}</Badge>
+            </div>
+            <p className="leading-5 text-slate-700 dark:text-slate-200">{gateView.reason}</p>
+            <div className="flex justify-end">
+              <Button size="sm" variant="primary" onClick={() => setGateView(null)}>关闭</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={Boolean(isAdmin && kvItem)} title={`编辑 KV Secret：${kvItem?.path || ''}`} onClose={() => setKvItem(null)} wide>
+        {kvItem && (
+          <div className="space-y-3 text-xs">
+            <div className="flex items-center justify-between text-slate-500">
+              <span className="font-mono">挂载：{kvMount} · 路径：{kvItem.path}</span>
+              <span className="font-mono">版本 v{kvItem.cas}</span>
+            </div>
+            <CodeEditor label="Secret 数据（JSON）" value={kvItem.data} onChange={(v) => setKvItem({ ...kvItem, data: v })} height="240px" />
+            <div className="flex justify-end gap-2">
+              <Button type="button" onClick={() => setKvItem(null)}>关闭</Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  try {
+                    const parsed = JSON.parse(kvItem.data);
+                    void apiPut(`/api/v1/vault/${selectedId}/kv/item?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(kvItem.path)}`, {
+                      data: parsed,
+                      cas: kvItem.cas,
+                    })
+                      .then((r) => {
+                        toast.success(kvItem.cas === 0 ? 'Secret 已创建' : 'KV 已更新');
+                        setKvItem((cur) => (cur ? { ...cur, cas: Number(r.result?.version ?? cur.cas + 1) } : null));
+                      })
+                      .catch((ex) => setErr(ex.message));
+                  } catch {
+                    setErr('KV 数据必须是合法 JSON');
+                  }
+                }}
+              >
+                保存 Secret
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <ClusterCreateModal
         open={showCreate}

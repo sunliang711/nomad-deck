@@ -1,16 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Download, Plus, RefreshCw, ShieldCheck, Trash2, Upload } from 'lucide-react';
-import { apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
+import { Link } from 'react-router-dom';
+import { ArrowUpRight, Download, RefreshCw, ShieldCheck, Upload } from 'lucide-react';
+import { apiDownload, apiGet, apiPost, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../components/Toast';
-import { useConfirm } from '../components/ConfirmDialog';
 import {
   Badge,
   Button,
   Card,
   EmptyState,
   ErrorAlert,
-  Input,
   Modal,
   PageHeader,
   PasswordConfirmModal,
@@ -18,7 +17,6 @@ import {
   SectionTabs,
   Select,
   StatusBadge,
-  TermLabel,
 } from '../components/UI';
 
 const optionalTables = [
@@ -32,7 +30,6 @@ const optionalTables = [
 export function MigrationBackupPage() {
   const { isAdmin } = useAuth();
   const toast = useToast();
-  const askConfirm = useConfirm();
 
   const [tab, setTab] = useState('backup');
   const [err, setErr] = useState('');
@@ -46,34 +43,14 @@ export function MigrationBackupPage() {
   const [previewRep, setPreviewRep] = useState<any>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
 
-  // Backup state
+  // Backup recovery & history state (SafeKeep target & schedule config live in CronPage)
   const [backupCfg, setBackupCfg] = useState<any>(null);
-  const [bkEnabled, setBkEnabled] = useState(false);
-  const [bkPass, setBkPass] = useState('');
-  const [bkHistoryTables, setBkHistoryTables] = useState<string[]>([]);
   const [targets, setTargets] = useState<any[]>([]);
   const [runs, setRuns] = useState<any[]>([]);
   const [testResult, setTestResult] = useState<any>(null);
   const [clusters, setClusters] = useState<any[]>([]);
   const [targetSnaps, setTargetSnaps] = useState<{ targetId: string; items: any[] } | null>(null);
   const [importSnapForm, setImportSnapForm] = useState({ targetId: '', object: '', clusterId: '', passphrase: '' });
-  const [showTargetModal, setShowTargetModal] = useState(false);
-  const emptySafeKeepTarget = {
-    id: '',
-    name: '',
-    type: 'safekeep',
-    enabled: true,
-    retention_count: 14,
-    snapshot_retention_count: 7,
-    safekeep_url: '',
-    safekeep_api_key: '',
-    safekeep_api_key_set: false,
-    safekeep_targets: '',
-    safekeep_subpath: 'nomad-deck',
-    safekeep_mode: 'sync',
-    safekeep_insecure_tls: false,
-  };
-  const [tForm, setTForm] = useState<any>({ ...emptySafeKeepTarget });
 
   const [pwAction, setPwAction] = useState<{ title: string; description?: string; run: (pw: string) => Promise<void> } | null>(null);
 
@@ -87,13 +64,11 @@ export function MigrationBackupPage() {
       ]);
       const cfg = cRes.backup;
       setBackupCfg(cfg);
-      setBkEnabled(Boolean(cfg.enabled));
-      setBkHistoryTables(cfg.include_history || []);
       setTargets(cfg.targets || []);
       setRuns(hRes.runs || []);
       setClusters(clRes.clusters || []);
     } catch (ex: any) {
-      setErr(ex?.message || '加载灾备配置失败');
+      setErr(ex?.message || '加载灾备信息失败');
     }
   }, []);
 
@@ -134,47 +109,22 @@ export function MigrationBackupPage() {
     }
   };
 
-  const saveTargetForm = (e: React.FormEvent) => {
-    e.preventDefault();
-    const copy = { ...tForm };
-    if (!copy.id) copy.id = 'tgt_' + Math.random().toString(36).slice(2, 10);
-    setTargets((prev) => {
-      const idx = prev.findIndex((x) => x.id === copy.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = copy;
-        return next;
-      }
-      return [...prev, copy];
-    });
-    setShowTargetModal(false);
-    toast.info('已暂存目标修改，请记得点击“保存配置”使其持久化');
-  };
-
-  const buildTargetPayload = (t: any) => {
-    const out: any = {
-      id: t.id,
-      name: t.name,
-      type: 'safekeep',
-      enabled: Boolean(t.enabled),
-      retention_count: Number(t.retention_count || 14),
-      snapshot_retention_count: Number(t.snapshot_retention_count || 7),
-      safekeep_url: t.safekeep_url || '',
-      safekeep_targets: t.safekeep_targets || '',
-      safekeep_subpath: t.safekeep_subpath || '',
-      safekeep_mode: t.safekeep_mode || 'sync',
-      safekeep_insecure_tls: Boolean(t.safekeep_insecure_tls),
-    };
-    if (t.safekeep_api_key) {
-      out.safekeep_api_key = t.safekeep_api_key;
-    }
-    return out;
-  };
-
   const testTarget = async (t: any) => {
     setErr('');
     try {
-      const res = await apiPost('/api/v1/backup/targets/test', buildTargetPayload(t));
+      const res = await apiPost('/api/v1/backup/targets/test', {
+        id: t.id,
+        name: t.name,
+        type: 'safekeep',
+        enabled: Boolean(t.enabled),
+        retention_count: Number(t.retention_count || 14),
+        snapshot_retention_count: Number(t.snapshot_retention_count || 7),
+        safekeep_url: t.safekeep_url || '',
+        safekeep_targets: t.safekeep_targets || '',
+        safekeep_subpath: t.safekeep_subpath || '',
+        safekeep_mode: t.safekeep_mode || 'sync',
+        safekeep_insecure_tls: Boolean(t.safekeep_insecure_tls),
+      });
       setTestResult(res.result);
       if (res.result?.ok) toast.success(`目标 ${t.name} 连通正常`);
       else toast.error(res.result?.error || `目标 ${t.name} 测试失败`);
@@ -183,43 +133,11 @@ export function MigrationBackupPage() {
     }
   };
 
-  const removeTarget = async (t: any) => {
-    if (
-      !(await askConfirm(`确认从待保存列表中移除备份目标「${t.name}」吗？`, {
-        title: '移除备份目标',
-        confirmText: '确认移除',
-        danger: true,
-      }))
-    ) {
-      return;
-    }
-    setTargets((prev) => prev.filter((x) => x.id !== t.id));
-  };
-
-  const saveBackupConfig = () => {
-    setPwAction({
-      title: '保存控制面灾备配置',
-      run: async (pw) => {
-        const payload: any = {
-          current_password: pw,
-          enabled: bkEnabled,
-          include_history: bkHistoryTables,
-          targets: targets.map(buildTargetPayload),
-        };
-        if (bkPass) payload.passphrase = bkPass;
-        await apiPut('/api/v1/backup/config', payload);
-        setBkPass('');
-        toast.success('灾备配置已保存');
-        await loadBackup();
-      },
-    });
-  };
-
   return (
     <div className="space-y-5">
       <PageHeader
         title="迁移与灾备"
-        subtitle="控制面定时灾备与异地快照同步，以及加密迁移包（.ndbundle）导出与恢复"
+        subtitle="加密迁移包（.ndbundle）导出与恢复、异地 Raft 快照登记及灾备执行记录"
         actions={
           <Button onClick={() => void loadBackup()}>
             <RefreshCw className="h-4 w-4" />
@@ -230,7 +148,7 @@ export function MigrationBackupPage() {
 
       <SectionTabs
         tabs={[
-          { id: 'backup', label: '控制面定时灾备备份', badge: targets.length },
+          { id: 'backup', label: '异地快照与灾备记录', badge: targets.length },
           { id: 'migration', label: '环境迁移（.ndbundle）' },
         ]}
         active={tab}
@@ -242,17 +160,28 @@ export function MigrationBackupPage() {
       {tab === 'backup' && (
         <div className="space-y-5">
           {backupCfg?.missing_offsite_target && (
-            <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
-              生产环境要求至少配置一个已启用的 SafeKeep 灾备目标，否则控制面宿主机磁盘损坏将无法恢复。
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+              <span>尚未配置已启用的 SafeKeep 灾备目标，生产环境建议在定时任务中配置并开启定时灾备。</span>
+              <Link to="/cron" className="inline-flex items-center gap-1 font-medium underline">
+                前往定时任务配置 <ArrowUpRight className="h-3.5 w-3.5" />
+              </Link>
             </div>
           )}
 
           <Card
-            title="灾备策略与存储目标"
+            title="已配置 SafeKeep 灾备目标与异地快照"
             actions={
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  to="/cron"
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  <span>在定时任务中管理 SafeKeep</span>
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                </Link>
                 <Button
                   size="sm"
+                  variant="primary"
                   onClick={() =>
                     void apiPost('/api/v1/backup/run')
                       .then(() => {
@@ -264,116 +193,70 @@ export function MigrationBackupPage() {
                 >
                   立即备份
                 </Button>
-                <Button size="sm" variant="primary" onClick={saveBackupConfig}>
-                  保存配置
-                </Button>
               </div>
             }
           >
             <div className="space-y-4 text-xs">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <label className="flex items-center gap-2 font-medium pt-2">
-                  <input type="checkbox" checked={bkEnabled} onChange={(e) => setBkEnabled(e.target.checked)} />
-                  <span>启用定时灾备（control_plane_backup）与异地 Raft 快照同步</span>
-                </label>
-                <SecretInput
-                  label={
-                    <TermLabel
-                      term="备份口令（至少 12 位）"
-                      tip="用于加密 .ndbundle 灾备归档包（AES-256-GCM + Argon2id），异地恢复时必须提供同一口令。"
-                    />
+              <div className="flex flex-wrap items-center gap-3 text-slate-600 dark:text-slate-300">
+                <span>
+                  定时灾备状态：
+                  <b className="ml-1 text-slate-900 dark:text-slate-100">{backupCfg?.enabled ? '已启用' : '未启用'}</b>
+                </span>
+                <span>·</span>
+                <span>
+                  备份加密口令：
+                  <b className="ml-1 text-slate-900 dark:text-slate-100">{backupCfg?.passphrase_set ? '已设置' : '未设置'}</b>
+                </span>
+                <span className="text-slate-400">（定时策略、口令与网关参数在「定时任务」中统一配置）</span>
+              </div>
+
+              {targets.length === 0 ? (
+                <EmptyState
+                  title="尚未添加 SafeKeep 灾备目标"
+                  description="请前往「定时任务 → 配置 SafeKeep」添加存储目标并启用控制面灾备。"
+                  action={
+                    <Link to="/cron" className="primary-button">
+                      前往定时任务配置
+                    </Link>
                   }
-                  value={bkPass}
-                  hasStoredValue={Boolean(backupCfg?.passphrase_set)}
-                  resetKey={backupCfg?.passphrase_set}
-                  onChangeValue={setBkPass}
-                  onRevealStored={async () => {
-                    const r = await apiPost('/api/v1/backup/secrets/reveal', { kind: 'passphrase' });
-                    return r.secret || '';
-                  }}
                 />
-              </div>
-
-              <div>
-                <div className="mb-2 font-medium text-slate-700 dark:text-slate-200">额外包含历史数据（管理员账号固定包含）</div>
-                <div className="flex flex-wrap gap-4">
-                  {optionalTables
-                    .filter((t) => t.id !== 'admins')
-                    .map((t) => (
-                      <label key={t.id} className="flex items-center gap-1.5">
-                        <input
-                          type="checkbox"
-                          checked={bkHistoryTables.includes(t.id)}
-                          onChange={(e) =>
-                            setBkHistoryTables((prev) =>
-                              e.target.checked ? [...prev, t.id] : prev.filter((x) => x !== t.id),
-                            )
-                          }
-                        />
-                        <span>{t.label}</span>
-                      </label>
-                    ))}
-                </div>
-              </div>
-
-              <div className="border-t border-slate-200 pt-4 dark:border-slate-800">
-                <div className="mb-3 flex items-center justify-between">
-                  <span className="font-semibold text-sm text-slate-800 dark:text-slate-100">SafeKeep 灾备目标列表</span>
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      setTForm({ ...emptySafeKeepTarget });
-                      setShowTargetModal(true);
-                    }}
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    <span>添加 SafeKeep 目标</span>
-                  </Button>
-                </div>
-                {targets.length === 0 ? (
-                  <EmptyState title="尚未添加 SafeKeep 灾备目标" description="添加 SafeKeep API 灾备网关目标以启用控制面异地灾备与快照同步。" />
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {targets.map((t) => (
-                      <div
-                        key={t.id}
-                        className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 bg-slate-50/50 dark:bg-slate-800/40"
-                      >
-                        <div>
-                          <div className="flex items-center gap-2 font-medium text-sm">
-                            <span className="text-slate-900 dark:text-slate-100">{t.name}</span>
-                            <Badge>SafeKeep</Badge>
-                            <StatusBadge value={t.enabled ? 'enabled' : 'disabled'} label={t.enabled ? '启用' : '停用'} />
-                          </div>
-                          <div className="text-slate-500 dark:text-slate-400 mt-1 break-all">
-                            {t.safekeep_url || '-'}
-                            {t.safekeep_subpath ? ` · 路径 ${t.safekeep_subpath}` : ''}
-                            {t.safekeep_targets ? ` · 上游 ${t.safekeep_targets}` : ''}
-                            {` · ${t.safekeep_mode === 'async' ? 'async' : 'sync'}`}
-                          </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {targets.map((t) => (
+                    <div
+                      key={t.id}
+                      className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 bg-slate-50/50 dark:bg-slate-800/40"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2 font-medium text-sm">
+                          <span className="text-slate-900 dark:text-slate-100">{t.name}</span>
+                          <Badge>SafeKeep</Badge>
+                          <StatusBadge value={t.enabled ? 'enabled' : 'disabled'} label={t.enabled ? '启用' : '停用'} />
                         </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          <Button size="sm" onClick={() => void testTarget(t)}>测试</Button>
-                          <Button
-                            size="sm"
-                            onClick={() =>
-                              void apiGet(`/api/v1/backup/targets/${t.id}/snapshots`)
-                                .then((r) => setTargetSnaps({ targetId: t.id, items: r.snapshots || [] }))
-                                .catch((ex) => toast.error(ex.message))
-                            }
-                          >
-                            异地快照
-                          </Button>
-                          <Button size="sm" onClick={() => { setTForm({ ...emptySafeKeepTarget, ...t, safekeep_api_key: '' }); setShowTargetModal(true); }}>编辑</Button>
-                          <Button size="sm" variant="danger" onClick={() => void removeTarget(t)}>
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
+                        <div className="text-slate-500 dark:text-slate-400 mt-1 break-all">
+                          {t.safekeep_url || '-'}
+                          {t.safekeep_subpath ? ` · 路径 ${t.safekeep_subpath}` : ''}
+                          {t.safekeep_targets ? ` · 上游 ${t.safekeep_targets}` : ''}
+                          {` · ${t.safekeep_mode === 'async' ? 'async' : 'sync'}`}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        <Button size="sm" onClick={() => void testTarget(t)}>测试连通性</Button>
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            void apiGet(`/api/v1/backup/targets/${t.id}/snapshots`)
+                              .then((r) => setTargetSnaps({ targetId: t.id, items: r.snapshots || [] }))
+                              .catch((ex) => toast.error(ex.message))
+                          }
+                        >
+                          查看异地快照
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {testResult && (
                 <div className="rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200/70 dark:border-slate-800 p-3.5">
@@ -595,72 +478,6 @@ export function MigrationBackupPage() {
           </div>
         </div>
       )}
-
-      {/* SafeKeep backup target edit modal */}
-      <Modal open={showTargetModal} title="配置 SafeKeep 灾备目标" onClose={() => setShowTargetModal(false)}>
-        <form onSubmit={saveTargetForm} className="space-y-3 text-xs">
-          <Input label="目标名称" required placeholder="SafeKeep-DR" value={tForm.name} onChange={(e) => setTForm({ ...tForm, name: e.target.value })} />
-          <Input
-            label={<TermLabel term="SafeKeep 服务地址" tip="SafeKeep Client API 根地址，例如 https://safekeep.example.com:8080，将调用 /api/v1/backups 与 /api/v1/upstreams。" />}
-            required
-            placeholder="https://safekeep.example.com:8080"
-            value={tForm.safekeep_url || ''}
-            onChange={(e) => setTForm({ ...tForm, safekeep_url: e.target.value })}
-          />
-          <SecretInput
-            label="SafeKeep X-API-Key"
-            value={tForm.safekeep_api_key || ''}
-            hasStoredValue={Boolean(tForm.safekeep_api_key_set)}
-            resetKey={tForm.id}
-            onChangeValue={(v) => setTForm({ ...tForm, safekeep_api_key: v })}
-            onRevealStored={
-              tForm.id && tForm.safekeep_api_key_set
-                ? async () => {
-                    const r = await apiPost('/api/v1/backup/secrets/reveal', { kind: 'target_secret', target_id: tForm.id });
-                    return r.secret || '';
-                  }
-                : undefined
-            }
-          />
-          <div className="grid grid-cols-2 gap-2">
-            <Input
-              label="远端子路径 (X-Backup-Path)"
-              placeholder="nomad-deck"
-              value={tForm.safekeep_subpath || ''}
-              onChange={(e) => setTForm({ ...tForm, safekeep_subpath: e.target.value })}
-            />
-            <Input
-              label="上游存储目标 (X-Backup-Targets，逗号分隔，留空默认)"
-              placeholder="local,s3-dr"
-              value={tForm.safekeep_targets || ''}
-              onChange={(e) => setTForm({ ...tForm, safekeep_targets: e.target.value })}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-2 items-center">
-            <Select
-              label="上传模式 (X-Backup-Mode)"
-              value={tForm.safekeep_mode || 'sync'}
-              onChange={(e) => setTForm({ ...tForm, safekeep_mode: e.target.value })}
-            >
-              <option value="sync">sync（等待 SafeKeep 落盘完成）</option>
-              <option value="async">async（异步入队）</option>
-            </Select>
-            <label className="flex items-center gap-1.5 pt-4">
-              <input
-                type="checkbox"
-                checked={Boolean(tForm.safekeep_insecure_tls)}
-                onChange={(e) => setTForm({ ...tForm, safekeep_insecure_tls: e.target.checked })}
-              />
-              <span>跳过 TLS 证书校验（自签环境）</span>
-            </label>
-          </div>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={tForm.enabled} onChange={(e) => setTForm({ ...tForm, enabled: e.target.checked })} /> 启用该目标</label>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" onClick={() => setShowTargetModal(false)}>取消</Button>
-            <Button type="submit" variant="primary">确定</Button>
-          </div>
-        </form>
-      </Modal>
 
       {/* Import offsite snapshot modal */}
       <Modal

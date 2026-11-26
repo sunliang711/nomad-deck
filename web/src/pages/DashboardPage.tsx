@@ -342,12 +342,12 @@ export function DashboardPage() {
               })}
               {backupAlerts?.missing_offsite_target && (clusters.total ?? 0) > 0 && (
                 <Link
-                  to="/migration-backup"
+                  to="/cron"
                   className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200 dark:hover:border-indigo-500/40"
                 >
                   <span className="flex items-center gap-2">
                     <Info className="h-4 w-4 shrink-0 text-indigo-500" />
-                    <span>尚未配置 SafeKeep 灾备目标，生产环境建议开启定时灾备。</span>
+                    <span>尚未配置 SafeKeep 灾备目标，生产环境建议在定时任务中开启定时灾备。</span>
                   </span>
                   <Badge tone="blue">建议配置</Badge>
                 </Link>

@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -565,6 +567,51 @@ func TestServiceBusinessAndDoctor(t *testing.T) {
 	}
 	if err := s.DisableAuth(ctx, testActor, id, "userpass"); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := s.KVWrite(ctx, testActor, id, "apps/prod/kv", "ui/check", map[string]any{"secret": "ok"}, &zero); err != nil {
+		t.Fatal(err)
+	}
+	link, err := s.CreateWrappedUILogin(ctx, testActor, id, "")
+	if err != nil {
+		t.Fatalf("CreateWrappedUILogin: %v", err)
+	}
+	lu, err := url.Parse(link.LoginURL)
+	if err != nil {
+		t.Fatalf("parse login url %q: %v", link.LoginURL, err)
+	}
+	wrapped := lu.Query().Get("wrapped_token")
+	if wrapped == "" {
+		t.Fatalf("missing wrapped_token in %q", link.LoginURL)
+	}
+	cl, err := s.loadCluster(ctx, s.DB.Reader, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	am, err := s.activeMember(ctx, cl, []*db.ClusterNode{e.members["n1"]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseClient, err := s.client(cl, am, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unwrapResp struct {
+		Auth struct {
+			ClientToken string `json:"client_token"`
+		} `json:"auth"`
+	}
+	if err := baseClient.WithToken(wrapped).Request(ctx, http.MethodPost, "sys/wrapping/unwrap", nil, &unwrapResp); err != nil {
+		t.Fatalf("unwrap wrapped_token: %v", err)
+	}
+	uiClient := baseClient.WithToken(unwrapResp.Auth.ClientToken)
+	if info, err := uiClient.LookupSelf(ctx); err != nil || !info.Orphan {
+		t.Fatalf("unwrapped UI token must survive parent root revocation as orphan: info=%+v err=%v", info, err)
+	}
+	if ms, err := uiClient.ListMounts(ctx); err != nil || ms["apps/prod/kv/"].Type != "kv" {
+		t.Fatalf("unwrapped UI token must list KV mount: mounts=%+v err=%v", ms, err)
+	}
+	if sec, err := uiClient.KVRead(ctx, "apps/prod/kv", "ui/check", true, 0); err != nil || sec.Data["secret"] != "ok" {
+		t.Fatalf("unwrapped UI token must read KV secret: sec=%+v err=%v", sec, err)
 	}
 	st, err := s.StatusDetail(ctx, id)
 	if err != nil || st.Health != "healthy" || st.ActiveNode != "n1" || st.FailureTolerance == nil || *st.FailureTolerance != 0 ||

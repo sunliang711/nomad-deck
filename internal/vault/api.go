@@ -567,7 +567,7 @@ func (c *Client) CreateWrappedUIToken(ctx context.Context, ttl, wrapTTL, display
 	err := c.requestWithHeaders(
 		ctx,
 		http.MethodPost,
-		"auth/token/create",
+		"auth/token/create-orphan",
 		map[string]string{"X-Vault-Wrap-TTL": wrapTTL},
 		map[string]any{
 			"policies":          []string{"root"},

@@ -16,7 +16,7 @@ func TestCreateWrappedUIToken(t *testing.T) {
 	var gotBody map[string]any
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/auth/token/create" || r.Method != http.MethodPost {
+		if r.URL.Path != "/v1/auth/token/create-orphan" || r.Method != http.MethodPost {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		gotWrapTTL = r.Header.Get("X-Vault-Wrap-TTL")

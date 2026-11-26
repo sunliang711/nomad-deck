@@ -161,10 +161,15 @@ func (a *API) jobAction(w http.ResponseWriter, r *http.Request) {
 	ctx, actor := r.Context(), a.actor(r)
 	switch chi.URLParam(r, "action") {
 	case "start":
-		if !decodeJSON(w, r, &struct{}{}) {
-			return
+		var in struct {
+			IgnorePreflight bool `json:"ignore_preflight"`
 		}
-		res, err := a.Jobs.Start(ctx, actor, c, ns, id)
+		if r.ContentLength != 0 {
+			if !decodeJSON(w, r, &in) {
+				return
+			}
+		}
+		res, err := a.Jobs.StartWithOptions(ctx, actor, c, ns, id, in.IgnorePreflight)
 		if err != nil {
 			a.writeErr(w, r, err)
 			return
@@ -251,7 +256,8 @@ func (a *API) jobOp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		warns = appendLintWarnings(warns, jobs.LintVaultIntegration(j, a.vaultIntegrationRefs(ctx, clusterID), in.Namespace))
-		writeJSON(w, http.StatusOK, map[string]any{"job": j, "warnings": warns})
+		preflightErrs := a.Jobs.PreflightJob(ctx, clusterID, j)
+		writeJSON(w, http.StatusOK, map[string]any{"job": j, "warnings": warns, "preflight_errors": preflightErrs})
 	case "plan":
 		var in jobs.PlanInput
 		if !decodeJSON(w, r, &in) {
@@ -267,12 +273,13 @@ func (a *API) jobOp(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"plan": p})
 	case "apply":
 		var in struct {
-			PlanID string `json:"plan_id"`
+			PlanID          string `json:"plan_id"`
+			IgnorePreflight bool   `json:"ignore_preflight"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
-		res, err := a.Jobs.Apply(ctx, a.caller(r), clusterID, in.PlanID)
+		res, err := a.Jobs.ApplyWithOptions(ctx, a.caller(r), clusterID, in.PlanID, in.IgnorePreflight)
 		if err != nil {
 			a.writeErr(w, r, err)
 			return

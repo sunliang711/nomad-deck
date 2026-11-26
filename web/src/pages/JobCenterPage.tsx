@@ -269,6 +269,8 @@ export function JobCenterPage() {
   const [plan, setPlan] = useState<any>(null);
   const planRequestRef = useRef(0);
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
+  const [preflightErrors, setPreflightErrors] = useState<string[]>([]);
+  const [ignorePreflight, setIgnorePreflight] = useState(false);
   const [revisions, setRevisions] = useState<any[]>([]);
   const [selectedJobId, setSelectedJobId] = useState('');
   const [pageTab, setPageTab] = useState<'list' | 'builder'>(() =>
@@ -421,6 +423,8 @@ export function JobCenterPage() {
     planRequestRef.current++;
     setPlan(null);
     setValidationWarnings([]);
+    setPreflightErrors([]);
+    setIgnorePreflight(false);
   };
 
   // changeMode flushes the current tree and refuses conversions that would drop JSON fields.
@@ -482,14 +486,19 @@ export function JobCenterPage() {
   const validateJob = async () => {
     setErr('');
     setValidationWarnings([]);
+    setPreflightErrors([]);
     try {
       const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/validate`, await jobInput());
       const warns = String(res.warnings || '')
         .split('\n')
         .map((s) => s.trim())
         .filter(Boolean);
+      const preErrs = Array.isArray(res.preflight_errors) ? (res.preflight_errors as string[]).filter(Boolean) : [];
       setValidationWarnings(warns);
-      if (warns.length > 0) {
+      setPreflightErrors(preErrs);
+      if (preErrs.length > 0) {
+        toast.error(`环境前置检查未通过：发现 ${preErrs.length} 项阻塞问题`);
+      } else if (warns.length > 0) {
         toast.info(`Job 语法校验通过，但有 ${warns.length} 条提醒请查看`);
       } else {
         toast.success('Job 校验通过');
@@ -558,11 +567,20 @@ export function JobCenterPage() {
   const runPlan = async () => {
     if (!clusterId) return;
     setErr('');
+    setPreflightErrors([]);
+    setIgnorePreflight(false);
     try {
       const input = await jobInput();
       const request = ++planRequestRef.current;
       const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/plan`, input);
-      if (request === planRequestRef.current) setPlan(res.plan);
+      if (request === planRequestRef.current) {
+        setPlan(res.plan);
+        const pre = Array.isArray(res.plan?.preflight_errors) ? res.plan.preflight_errors : [];
+        const sched = Array.isArray(res.plan?.scheduling_errors) ? res.plan.scheduling_errors : [];
+        if (pre.length > 0 || sched.length > 0) {
+          toast.error('当前集群环境或调度条件不满足，请查看预览中的阻塞原因');
+        }
+      }
     } catch (ex: any) {
       setErr(ex?.message || 'Plan 失败');
     }
@@ -574,7 +592,10 @@ export function JobCenterPage() {
     const targetJobId = plan.job_id || selectedJobId;
     const targetNs = plan.namespace || namespace;
     try {
-      await apiPost(`/api/v1/nomad/${clusterId}/job-ops/apply`, { plan_id: plan.plan_id });
+      await apiPost(`/api/v1/nomad/${clusterId}/job-ops/apply`, {
+        plan_id: plan.plan_id,
+        ignore_preflight: ignorePreflight,
+      });
       clearPlan();
       const targetUrl = targetJobId
         ? `/nomad?id=${encodeURIComponent(clusterId)}&tab=workbench&ns=${encodeURIComponent(targetNs)}&job=${encodeURIComponent(targetJobId)}`
@@ -645,6 +666,14 @@ export function JobCenterPage() {
     () => STARTER_SAMPLES.find((sample) => sample.hcl === hcl) || null,
     [hcl],
   );
+  const planBlockingReasons = useMemo(() => {
+    if (!plan) return [] as string[];
+    const list = [
+      ...(Array.isArray(plan.preflight_errors) ? (plan.preflight_errors as string[]) : []),
+      ...(Array.isArray(plan.scheduling_errors) ? (plan.scheduling_errors as string[]) : []),
+    ].filter(Boolean);
+    return Array.from(new Set(list));
+  }, [plan]);
 
   const filteredJobs = useMemo(() => {
     const q = sidebarQuery.trim().toLowerCase();
@@ -1138,15 +1167,30 @@ export function JobCenterPage() {
                   </Button>
                   <Button
                     size="sm"
-                    variant={plan?.plan_id ? 'primary' : 'secondary'}
-                    disabled={!plan?.plan_id || needsDeployment || modeBusy}
-                    title={!plan?.plan_id ? '请先点击「2. 预览计划」生成执行计划' : '确认将任务提交至 Nomad 集群运行'}
+                    variant={plan?.plan_id && (planBlockingReasons.length === 0 || ignorePreflight) ? 'primary' : 'secondary'}
+                    disabled={!plan?.plan_id || needsDeployment || modeBusy || (planBlockingReasons.length > 0 && !ignorePreflight)}
+                    title={
+                      !plan?.plan_id
+                        ? '请先点击「2. 预览计划」生成执行计划'
+                        : planBlockingReasons.length > 0 && !ignorePreflight
+                          ? '当前集群环境或调度条件未满足，请先处理问题或勾选忽略检查'
+                          : '确认将任务提交至 Nomad 集群运行'
+                    }
                     onClick={() => void runApply()}
                   >
                     <Play className="h-3.5 w-3.5" />
                     <span>3. 确认运行</span>
                   </Button>
                 </div>
+              </div>
+            )}
+
+            {preflightErrors.length > 0 && (
+              <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50/90 p-3 text-xs text-rose-950 space-y-1 dark:border-rose-500/40 dark:bg-rose-950/35 dark:text-rose-100">
+                <div className="font-semibold">环境前置检查未通过（当前无法在该集群调度运行）：</div>
+                {preflightErrors.map((msg, idx) => (
+                  <p key={idx} className="leading-5">• {msg}</p>
+                ))}
               </div>
             )}
 
@@ -1176,7 +1220,24 @@ export function JobCenterPage() {
                   任务 <code className="font-mono font-semibold">{plan.job_id}</code> · 命名空间 <code className="font-mono">{plan.namespace}</code>
                 </p>
                 {(plan.warnings || plan.validation_warnings) && <p role="alert" className="whitespace-pre-wrap text-amber-700 dark:text-amber-300">{[plan.validation_warnings, plan.warnings].filter(Boolean).join('\n')}</p>}
-                {plan.failed_tg_allocs && Object.keys(plan.failed_tg_allocs).length > 0 && <p role="alert" className="text-red-700 dark:text-red-300">部分任务无法调度，请展开详情检查资源或约束条件。</p>}
+                {planBlockingReasons.length > 0 && (
+                  <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50/90 p-3 text-xs text-rose-950 space-y-2 dark:border-rose-500/40 dark:bg-rose-950/35 dark:text-rose-100">
+                    <div className="font-semibold">环境或调度检查未通过（已阻止直接提交）：</div>
+                    <div className="space-y-1">
+                      {planBlockingReasons.map((msg, idx) => (
+                        <p key={idx} className="leading-5">• {msg}</p>
+                      ))}
+                    </div>
+                    <label className="flex items-center gap-2 pt-1 border-t border-rose-200/80 dark:border-rose-500/30 cursor-pointer text-rose-900 dark:text-rose-200">
+                      <input
+                        type="checkbox"
+                        checked={ignorePreflight}
+                        onChange={(e) => setIgnorePreflight(e.target.checked)}
+                      />
+                      <span>忽略环境与调度检查，仍强行提交为待调度状态（pending）</span>
+                    </label>
+                  </div>
+                )}
                 <details>
                   <summary className="cursor-pointer py-1 font-medium text-indigo-700 dark:text-indigo-300">查看调度变更详情</summary>
                   <pre className="mt-2 max-h-56 overflow-auto rounded-lg bg-slate-950 p-2.5 font-mono text-[11px] text-slate-100">

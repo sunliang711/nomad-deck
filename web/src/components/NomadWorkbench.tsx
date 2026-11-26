@@ -549,6 +549,38 @@ export function NomadWorkbench({
 
                     <div>
                       <div className="mb-2 font-semibold"><TermLabel term={`Allocations (${jobAllocs.length})`} tip="Task Group 在具体 Client 节点上的实例化副本，可查看实时 CPU/内存、日志与进入 Web 终端。" /></div>
+                      {selectedJob.status === 'pending' && jobAllocs.length === 0 && (() => {
+                        const latestEval = jobEvals.find((ev) => ev.BlockedEval || ev.StatusDescription || (ev.FailedTGAllocs && Object.keys(ev.FailedTGAllocs).length > 0));
+                        if (!latestEval) return null;
+                        const reasons: string[] = [];
+                        if (latestEval.FailedTGAllocs && typeof latestEval.FailedTGAllocs === 'object') {
+                          for (const [grp, m] of Object.entries<any>(latestEval.FailedTGAllocs)) {
+                            if (m?.NodesEvaluated === 0) reasons.push(`任务组 ${grp} 没有匹配且在线的 Client 节点`);
+                            if (m?.ConstraintFiltered && typeof m.ConstraintFiltered === 'object') {
+                              for (const [k, cnt] of Object.entries<any>(m.ConstraintFiltered)) {
+                                reasons.push(`任务组 ${grp}：${k}（${cnt} 个节点不满足）`);
+                              }
+                            }
+                            if (m?.DimensionExhausted && typeof m.DimensionExhausted === 'object') {
+                              for (const [k, cnt] of Object.entries<any>(m.DimensionExhausted)) {
+                                reasons.push(`任务组 ${grp} 资源不足：${k}（${cnt} 个节点）`);
+                              }
+                            }
+                          }
+                        }
+                        if (reasons.length === 0 && latestEval.StatusDescription) {
+                          reasons.push(String(latestEval.StatusDescription));
+                        }
+                        if (reasons.length === 0) return null;
+                        return (
+                          <div role="alert" className="mb-2 rounded-xl border border-amber-300 bg-amber-50/90 p-3 text-xs text-amber-950 space-y-1 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-100">
+                            <div className="font-semibold">调度阻塞原因（Evaluation {String(latestEval.ID || '').slice(0, 8)}）：</div>
+                            {reasons.map((r, i) => (
+                              <p key={i} className="leading-5">• {r}</p>
+                            ))}
+                          </div>
+                        );
+                      })()}
                       {jobAllocs.length === 0 ? (
                         <div className="rounded-xl border border-dashed border-slate-200 py-5 text-center text-slate-400 dark:border-slate-800">暂无 Allocation 实例</div>
                       ) : (

@@ -143,6 +143,17 @@ plugin "raw_exec" {
 	if err != nil {
 		t.Fatal(err)
 	}
+	authed, _ := nomad.NewClient(addr, "", tok.SecretID, nil, 5*time.Second)
+	nodeDeadline := time.Now().Add(30 * time.Second)
+	for {
+		if nodes, nerr := authed.Nodes(ctx); nerr == nil && len(nodes) > 0 && nodes[0].Status == "ready" {
+			break
+		}
+		if time.Now().After(nodeDeadline) {
+			t.Fatal("dev client node did not become ready")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 	d, err := db.Open(ctx, filepath.Join(dir, "t.db"))
 	if err != nil {
 		t.Fatal(err)

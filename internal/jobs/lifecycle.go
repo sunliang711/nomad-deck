@@ -61,6 +61,12 @@ func (s *Service) revisionVars(r *db.JobRevision) map[string]string {
 // Start resubmits a stopped job from its remote definition. When Nomad no
 // longer has the job, a 409 names the local archive to plan from.
 func (s *Service) Start(ctx context.Context, actor audit.Actor, clusterID, ns, jobID string) (*ApplyResult, error) {
+	return s.StartWithOptions(ctx, actor, clusterID, ns, jobID, false)
+}
+
+// StartWithOptions resubmits a stopped job, checking cluster capability
+// preflight unless ignorePreflight is true.
+func (s *Service) StartWithOptions(ctx context.Context, actor audit.Actor, clusterID, ns, jobID string, ignorePreflight bool) (*ApplyResult, error) {
 	if err := validRef(ns, jobID); err != nil {
 		return nil, err
 	}
@@ -82,6 +88,11 @@ func (s *Service) Start(ctx context.Context, actor audit.Actor, clusterID, ns, j
 		return nil, conflict("job_running", "Job 未停止")
 	}
 	j["Stop"] = false
+	if !ignorePreflight {
+		if reasons := s.Preflight(ctx, c, clusterID, j); len(reasons) > 0 {
+			return nil, conflict("preflight_failed", "当前集群环境不满足运行条件，无法启动 Job：\n• %s", strings.Join(reasons, "\n• "))
+		}
+	}
 	rec := &planRecord{ClusterID: clusterID, Namespace: ns, JobID: jobID, JobJSON: canonical(j), JobModifyIndex: u64(j["JobModifyIndex"]),
 		InputType: "json", EditMode: "json", Source: "workbench"}
 	// Stopping creates a new (stopped) version without a local revision:

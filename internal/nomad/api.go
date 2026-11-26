@@ -559,13 +559,16 @@ func (c *Client) Nodes(ctx context.Context) ([]NodeStub, error) {
 
 // NodeDetail is the subset of a node the control plane reads.
 type NodeDetail struct {
-	ID                    string    `json:"ID"`
-	Name                  string    `json:"Name"`
-	Status                string    `json:"Status"`
-	SchedulingEligibility string    `json:"SchedulingEligibility"`
-	DrainStrategy         *struct{} `json:"DrainStrategy"`
-	LastDrain             *Drain    `json:"LastDrain"`
-	Drivers               Drivers   `json:"Drivers"`
+	ID                    string         `json:"ID"`
+	Name                  string         `json:"Name"`
+	Datacenter            string         `json:"Datacenter"`
+	NodePool              string         `json:"NodePool"`
+	Status                string         `json:"Status"`
+	SchedulingEligibility string         `json:"SchedulingEligibility"`
+	DrainStrategy         *struct{}      `json:"DrainStrategy"`
+	LastDrain             *Drain         `json:"LastDrain"`
+	Drivers               Drivers        `json:"Drivers"`
+	HostVolumes           map[string]any `json:"HostVolumes"`
 }
 
 // Node reads one node.

@@ -45,6 +45,7 @@ type planRecord struct {
 	SessionID       string
 	AdminID         string
 	ExpiresAt       time.Time
+	BlockingReasons []string
 }
 
 type planStore struct {
@@ -64,6 +65,13 @@ func (p *planStore) put(r *planRecord) {
 		}
 	}
 	p.plans[r.ID] = r
+}
+
+// peek returns a plan without removing it.
+func (p *planStore) peek(id string) *planRecord {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.plans[id]
 }
 
 // take removes and returns a plan: a plan is usable once, whatever the outcome.
@@ -105,19 +113,22 @@ type PlanInput struct {
 
 // PlanResult is what the reviewer sees.
 type PlanResult struct {
-	PlanID          string         `json:"plan_id"`
-	PlanHash        string         `json:"plan_hash"`
-	ExpiresAt       time.Time      `json:"expires_at"`
-	JobID           string         `json:"job_id"`
-	Namespace       string         `json:"namespace"`
-	JobModifyIndex  uint64         `json:"job_modify_index"`
-	Diff            any            `json:"diff"`
-	Annotations     any            `json:"annotations"`
-	FailedTGAllocs  any            `json:"failed_tg_allocs"`
-	Warnings        string         `json:"warnings"`
-	ValidationWarns string         `json:"validation_warnings,omitempty"`
-	Job             Job            `json:"job"`
-	CountOverridden map[string]int `json:"count_overridden,omitempty"`
+	PlanID           string         `json:"plan_id"`
+	PlanHash         string         `json:"plan_hash"`
+	ExpiresAt        time.Time      `json:"expires_at"`
+	JobID            string         `json:"job_id"`
+	Namespace        string         `json:"namespace"`
+	JobModifyIndex   uint64         `json:"job_modify_index"`
+	Diff             any            `json:"diff"`
+	Annotations      any            `json:"annotations"`
+	FailedTGAllocs   any            `json:"failed_tg_allocs"`
+	PreflightErrors  []string       `json:"preflight_errors,omitempty"`
+	SchedulingErrors []string       `json:"scheduling_errors,omitempty"`
+	CanApply         bool           `json:"can_apply"`
+	Warnings         string         `json:"warnings"`
+	ValidationWarns  string         `json:"validation_warnings,omitempty"`
+	Job              Job            `json:"job"`
+	CountOverridden  map[string]int `json:"count_overridden,omitempty"`
 }
 
 var reVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,127}$`)
@@ -272,11 +283,29 @@ func (s *Service) Plan(ctx context.Context, caller Caller, clusterID string, in 
 	if in.EditMode != "visual" && in.EditMode != "hcl" && in.EditMode != "json" {
 		return nil, badRequest("edit_mode 需为 visual、hcl 或 json")
 	}
+	preflightErrs := s.Preflight(ctx, c, clusterID, j)
+	schedErrs := ExplainFailedTGAllocs(pr.FailedTGAllocs)
+	blockingReasons := make([]string, 0, len(preflightErrs)+len(schedErrs))
+	blockingReasons = append(blockingReasons, preflightErrs...)
+	for _, se := range schedErrs {
+		found := false
+		for _, pe := range preflightErrs {
+			if pe == se {
+				found = true
+				break
+			}
+		}
+		if !found {
+			blockingReasons = append(blockingReasons, se)
+		}
+	}
+
 	body := canonical(j)
 	rec := &planRecord{ID: randomID(), ClusterID: clusterID, Namespace: ns, JobID: id, JobJSON: body,
 		Hash: planHash(body, clusterID, ns), JobModifyIndex: pr.JobModifyIndex, PolicyOverride: in.PolicyOverride,
 		InputType: in.InputType, EditMode: in.EditMode, HCL: in.HCL, Variables: in.Variables, RendererVersion: in.RendererVersion,
-		Source: "workbench", SessionID: caller.SessionID, AdminID: caller.Actor.ID, ExpiresAt: time.Now().Add(s.planTTL())}
+		Source: "workbench", SessionID: caller.SessionID, AdminID: caller.Actor.ID, ExpiresAt: time.Now().Add(s.planTTL()),
+		BlockingReasons: blockingReasons}
 	if len(in.FormSpec) > 0 && string(in.FormSpec) != "null" {
 		rec.FormSpec = string(in.FormSpec)
 	}
@@ -285,6 +314,7 @@ func (s *Service) Plan(ctx context.Context, caller Caller, clusterID string, in 
 	}
 	res := &PlanResult{PlanID: rec.ID, PlanHash: rec.Hash, ExpiresAt: rec.ExpiresAt, JobID: id, Namespace: ns,
 		JobModifyIndex: pr.JobModifyIndex, Diff: pr.Diff, Annotations: pr.Annotations, FailedTGAllocs: pr.FailedTGAllocs,
+		PreflightErrors: preflightErrs, SchedulingErrors: schedErrs, CanApply: len(blockingReasons) == 0,
 		Warnings: pr.Warnings, ValidationWarns: warns, Job: j}
 	if over := s.pendingCountOverride(ctx, clusterID, ns, id); len(over) > 0 {
 		res.CountOverridden = over
@@ -323,10 +353,21 @@ type ApplyResult struct {
 }
 
 // Apply submits the reviewed Job JSON of a plan record exactly as reviewed,
-// with EnforceIndex on the planned JobModifyIndex. The plan record is
-// consumed whatever the outcome. The revision is written as in_doubt
-// before the call and confirmed with Nomad's answer.
+// rejecting plans with preflight/scheduling errors unless ApplyWithOptions is
+// called with ignorePreflight=true.
 func (s *Service) Apply(ctx context.Context, caller Caller, clusterID, planID string) (*ApplyResult, error) {
+	return s.ApplyWithOptions(ctx, caller, clusterID, planID, false)
+}
+
+// ApplyWithOptions submits a reviewed plan, enforcing cluster preflight and
+// scheduling checks unless ignorePreflight is true.
+func (s *Service) ApplyWithOptions(ctx context.Context, caller Caller, clusterID, planID string, ignorePreflight bool) (*ApplyResult, error) {
+	if peeked := s.store().peek(planID); peeked != nil && !time.Now().After(peeked.ExpiresAt) &&
+		peeked.ClusterID == clusterID && peeked.SessionID == caller.SessionID && peeked.AdminID == caller.Actor.ID &&
+		planHash(peeked.JobJSON, peeked.ClusterID, peeked.Namespace) == peeked.Hash &&
+		len(peeked.BlockingReasons) > 0 && !ignorePreflight {
+		return nil, conflict("preflight_failed", "当前集群环境不满足运行条件，已阻止提交：\n• %s", strings.Join(peeked.BlockingReasons, "\n• "))
+	}
 	rec := s.store().take(planID)
 	switch {
 	case rec == nil:

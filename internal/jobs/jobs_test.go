@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"nomad-deck/internal/auth"
 	"nomad-deck/internal/db"
+	"nomad-deck/internal/nomad"
 )
 
 const webHCL = `variable "password" {
@@ -267,6 +270,230 @@ func TestRewriteCount(t *testing.T) {
 	withVar := strings.Replace(webHCL, "count = 1", "count = var.n", 1)
 	if _, ok := RewriteCount(withVar, "g", 5); ok {
 		t.Fatal("a variable count cannot be rewritten")
+	}
+}
+
+func TestPreflightAndPlanDiagnostics(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	s := e.s
+
+	// A host volume that does not exist on the dev node deterministically triggers
+	// both preflight_errors and Nomad FailedTGAllocs regardless of host Docker.
+	unschedulableHCL := `job "need-vol" {
+  datacenters = ["dc1"]
+  group "g" {
+    count = 1
+    volume "data" {
+      type   = "host"
+      source = "pgdata"
+    }
+    task "app" {
+      driver = "raw_exec"
+      config {
+        command = "/bin/sleep"
+        args    = ["5"]
+      }
+      volume_mount {
+        volume      = "data"
+        destination = "/data"
+      }
+      resources {
+        cpu    = 50
+        memory = 32
+      }
+    }
+  }
+}`
+	j, _, err := s.ValidateInput(ctx, e.cl.ID, PlanInput{InputType: "hcl", HCL: unschedulableHCL})
+	if err != nil {
+		t.Fatalf("ValidateInput: %v", err)
+	}
+	errs := s.PreflightJob(ctx, e.cl.ID, j)
+	if len(errs) == 0 || !strings.Contains(strings.Join(errs, "\n"), "pgdata") {
+		t.Fatalf("expected missing host volume preflight error, got %v", errs)
+	}
+
+	p, err := s.Plan(ctx, e.caller, e.cl.ID, PlanInput{InputType: "hcl", HCL: unschedulableHCL})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if p.CanApply || len(p.PreflightErrors) == 0 || len(p.SchedulingErrors) == 0 {
+		t.Fatalf("expected blocking plan result with preflight+scheduling errors, got %+v", p)
+	}
+	if _, err := s.Apply(ctx, e.caller, e.cl.ID, p.PlanID); code(err) != "preflight_failed" {
+		t.Fatalf("expected preflight_failed on Apply, got %v", err)
+	}
+	// Plan must still exist after preflight_failed so ignore_preflight can submit it.
+	if _, err := s.ApplyWithOptions(ctx, e.caller, e.cl.ID, p.PlanID, true); err != nil {
+		t.Fatalf("ApplyWithOptions(ignore=true): %v", err)
+	}
+	if _, err := s.Stop(ctx, e.caller.Actor, e.cl.ID, "default", "need-vol"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, err := s.Start(ctx, e.caller.Actor, e.cl.ID, "default", "need-vol"); code(err) != "preflight_failed" {
+		t.Fatalf("expected preflight_failed on Start, got %v", err)
+	}
+	if _, err := s.StartWithOptions(ctx, e.caller.Actor, e.cl.ID, "default", "need-vol", true); err != nil {
+		t.Fatalf("StartWithOptions(ignore=true): %v", err)
+	}
+
+	// Missing datacenter check via ValidateInput/PreflightJob.
+	scopeHCL := `job "bad-scope" {
+  datacenters = ["dc-other"]
+  group "g" {
+    task "t" {
+      driver = "raw_exec"
+      config {
+        command = "/bin/sleep"
+        args    = ["5"]
+      }
+    }
+  }
+}`
+	vj, _, err := s.ValidateInput(ctx, e.cl.ID, PlanInput{InputType: "hcl", HCL: scopeHCL})
+	if err != nil {
+		t.Fatalf("ValidateInput scope: %v", err)
+	}
+	verrs := strings.Join(s.PreflightJob(ctx, e.cl.ID, vj), "\n")
+	if !strings.Contains(verrs, "Datacenter") {
+		t.Fatalf("expected datacenter preflight error, got:\n%s", verrs)
+	}
+
+	// Bridge network without CNI (nomaddev cluster_nodes has h1 with cni=false).
+	bridgeHCL := `job "need-cni" {
+  datacenters = ["dc1"]
+  group "g" {
+    network {
+      mode = "bridge"
+    }
+    task "t" {
+      driver = "raw_exec"
+      config {
+        command = "/bin/sleep"
+        args    = ["5"]
+      }
+    }
+  }
+}`
+	bj, _, err := s.ValidateInput(ctx, e.cl.ID, PlanInput{InputType: "hcl", HCL: bridgeHCL})
+	if err != nil {
+		t.Fatalf("ValidateInput bridge: %v", err)
+	}
+	berrs := strings.Join(s.PreflightJob(ctx, e.cl.ID, bj), "\n")
+	if !strings.Contains(berrs, "CNI") {
+		t.Fatalf("expected CNI preflight error, got:\n%s", berrs)
+	}
+}
+
+func TestPreflightDriversAndCrossNodeMismatch(t *testing.T) {
+	var nodesPayload any
+	var nodeDetails map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v1/namespaces":
+			_, _ = w.Write([]byte(`[{"Name":"default"}]`))
+		case r.URL.Path == "/v1/node/pools":
+			_, _ = w.Write([]byte(`[{"Name":"default"}]`))
+		case r.URL.Path == "/v1/nodes":
+			_ = json.NewEncoder(w).Encode(nodesPayload)
+		case strings.HasPrefix(r.URL.Path, "/v1/node/"):
+			id := strings.TrimPrefix(r.URL.Path, "/v1/node/")
+			_ = json.NewEncoder(w).Encode(nodeDetails[id])
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c, err := nomad.NewClient(srv.URL, "", "", nil, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Service{}
+	ctx := context.Background()
+
+	// Node with only exec healthy: docker and raw_exec must both report clear errors.
+	nodesPayload = []map[string]any{{
+		"ID": "node-1", "Name": "c1", "Datacenter": "dc1", "NodePool": "default",
+		"Status": "ready", "SchedulingEligibility": "eligible",
+		"Drivers": map[string]any{"exec": map[string]any{"Detected": true, "Healthy": true}},
+	}}
+	dockerJob := Job{"Namespace": "default", "Datacenters": []any{"dc1"}, "TaskGroups": []any{
+		map[string]any{"Name": "g", "Tasks": []any{map[string]any{"Name": "web", "Driver": "docker"}}},
+	}}
+	if msg := strings.Join(s.Preflight(ctx, c, "c", dockerJob), "\n"); !strings.Contains(msg, "Docker 管理") {
+		t.Fatalf("expected docker missing guidance, got: %s", msg)
+	}
+	rawJob := Job{"Namespace": "default", "Datacenters": []any{"dc1"}, "TaskGroups": []any{
+		map[string]any{"Name": "g", "Tasks": []any{map[string]any{"Name": "sh", "Driver": "raw_exec"}}},
+	}}
+	if msg := strings.Join(s.Preflight(ctx, c, "c", rawJob), "\n"); !strings.Contains(msg, "节点插件/配置") {
+		t.Fatalf("expected raw_exec missing guidance, got: %s", msg)
+	}
+
+	// Docker detected but unhealthy.
+	nodesPayload = []map[string]any{{
+		"ID": "node-1", "Name": "c1", "Datacenter": "dc1", "NodePool": "default",
+		"Status": "ready", "SchedulingEligibility": "eligible",
+		"Drivers": map[string]any{"docker": map[string]any{"Detected": true, "Healthy": false}},
+	}}
+	if msg := strings.Join(s.Preflight(ctx, c, "c", dockerJob), "\n"); !strings.Contains(msg, "不健康") {
+		t.Fatalf("expected unhealthy docker message, got: %s", msg)
+	}
+
+	// Missing namespace and missing node_pool checks.
+	nsPoolJob := Job{"Namespace": "missing-ns", "NodePool": "gpu", "Datacenters": []any{"dc1"}, "TaskGroups": []any{
+		map[string]any{"Name": "g", "Tasks": []any{map[string]any{"Name": "sh", "Driver": "exec"}}},
+	}}
+	if msg := strings.Join(s.Preflight(ctx, c, "c", nsPoolJob), "\n"); !strings.Contains(msg, "missing-ns") || !strings.Contains(msg, "gpu") {
+		t.Fatalf("expected missing namespace and node_pool errors, got: %s", msg)
+	}
+
+	// Cross-node mismatch: node-1 has docker, node-2 has pgdata volume, neither has both.
+	nodesPayload = []map[string]any{
+		{
+			"ID": "node-1", "Name": "c1", "Datacenter": "dc1", "NodePool": "default",
+			"Status": "ready", "SchedulingEligibility": "eligible",
+			"Drivers": map[string]any{"docker": map[string]any{"Detected": true, "Healthy": true}},
+		},
+		{
+			"ID": "node-2", "Name": "c2", "Datacenter": "dc1", "NodePool": "default",
+			"Status": "ready", "SchedulingEligibility": "eligible",
+			"Drivers": map[string]any{"raw_exec": map[string]any{"Detected": true, "Healthy": true}},
+		},
+	}
+	nodeDetails = map[string]any{
+		"node-1": map[string]any{"ID": "node-1", "HostVolumes": map[string]any{}},
+		"node-2": map[string]any{"ID": "node-2", "HostVolumes": map[string]any{"pgdata": map[string]any{}}},
+	}
+	comboJob := Job{"Namespace": "default", "Datacenters": []any{"dc1"}, "TaskGroups": []any{
+		map[string]any{
+			"Name":    "db",
+			"Volumes": map[string]any{"data": map[string]any{"Type": "host", "Source": "pgdata"}},
+			"Tasks":   []any{map[string]any{"Name": "pg", "Driver": "docker"}},
+		},
+	}}
+	if msg := strings.Join(s.Preflight(ctx, c, "c", comboJob), "\n"); !strings.Contains(msg, "没有单个 Client 节点同时满足全部条件") {
+		t.Fatalf("expected cross-node mismatch error, got: %s", msg)
+	}
+}
+
+func TestExplainFailedTGAllocsAndDriverMessages(t *testing.T) {
+	reasons := ExplainFailedTGAllocs(map[string]any{
+		"web": map[string]any{
+			"NodesEvaluated":     2,
+			"ConstraintFiltered": map[string]any{`Driver "docker" not healthy`: 2},
+			"DimensionExhausted": map[string]any{"cpu": 1},
+		},
+	})
+	joined := strings.Join(reasons, "\n")
+	if !strings.Contains(joined, "驱动未就绪") || !strings.Contains(joined, "资源或端口不足") {
+		t.Fatalf("unexpected reasons: %v", reasons)
+	}
+	if msg := driverMissingMessage("t", "raw_exec", false); !strings.Contains(msg, "raw_exec") || !strings.Contains(msg, "节点插件/配置") {
+		t.Fatalf("unexpected raw_exec message: %s", msg)
 	}
 }
 

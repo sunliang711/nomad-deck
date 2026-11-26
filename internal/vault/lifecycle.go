@@ -206,11 +206,7 @@ func (s *Service) NodeJoin(ctx context.Context, actor audit.Actor, clusterID, no
 	if err := blocking(issues); err != nil {
 		return nil, err
 	}
-	reqProxy := in.UseProxy
-	if reqProxy == nil && cl.Settings.UseProxy != nil {
-		reqProxy = cl.Settings.UseProxy
-	}
-	hc, err := s.httpClient(ctx, reqProxy)
+	hc, err := s.httpClient(ctx, in.UseProxy)
 	if err != nil {
 		return nil, err
 	}
@@ -715,11 +711,7 @@ func (s *Service) Upgrade(ctx context.Context, actor audit.Actor, clusterID stri
 	if err := s.requireOperable(cl); err != nil {
 		return nil, err
 	}
-	reqProxy := in.UseProxy
-	if reqProxy == nil && cl.Settings.UseProxy != nil {
-		reqProxy = cl.Settings.UseProxy
-	}
-	hc, err := s.httpClient(ctx, reqProxy)
+	hc, err := s.httpClient(ctx, in.UseProxy)
 	if err != nil {
 		return nil, err
 	}

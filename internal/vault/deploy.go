@@ -330,7 +330,7 @@ func (s *Service) waitAPI(ctx context.Context, cl *cluster, m *db.ClusterNode, v
 }
 
 func (s *Service) httpClient(ctx context.Context, useProxy *bool) (*httpClientResult, error) {
-	use := s.Proxy.UseByDefault(ctx, netx.SettingUseForReleases)
+	use := s.Proxy.UseByDefault(ctx, netx.SettingUseForVault)
 	if useProxy != nil {
 		use = *useProxy
 	}
@@ -441,11 +441,7 @@ func (s *Service) Deploy(ctx context.Context, actor audit.Actor, clusterID strin
 	if cl.MaintenanceMode {
 		return nil, conflict("maintenance", "集群处于维护模式（%s）", cl.MaintenanceReason)
 	}
-	reqProxy := in.UseProxy
-	if reqProxy == nil && cl.Settings.UseProxy != nil {
-		reqProxy = cl.Settings.UseProxy
-	}
-	hc, err := s.httpClient(ctx, reqProxy)
+	hc, err := s.httpClient(ctx, in.UseProxy)
 	if err != nil {
 		return nil, err
 	}

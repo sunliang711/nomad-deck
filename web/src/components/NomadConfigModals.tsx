@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '../lib/api';
-import { canEnableSystemProxy } from '../lib/proxy';
 import { useConfirm } from './ConfirmDialog';
 import { useToast } from './Toast';
 import { Badge, Button, ErrorAlert, Input, Modal, Select, TermLabel } from './UI';
@@ -521,7 +521,7 @@ export function NomadClusterSettingsModal({
   const [vaultUIURL, setVaultUIURL] = useState('');
   const [jobGC, setJobGC] = useState('');
   const [execEnabled, setExecEnabled] = useState(true);
-  const [useProxy, setUseProxy] = useState(false);
+  const [nomadProxyEnabled, setNomadProxyEnabled] = useState(false);
   const [confirmSingle, setConfirmSingle] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -542,20 +542,16 @@ export function NomadClusterSettingsModal({
     setVaultUIURL(ui.vault_ui_url || '');
     setJobGC(st.job_gc_threshold || '');
     setExecEnabled(st.exec_enabled !== false);
-    setUseProxy(Boolean(st.use_proxy));
     setConfirmSingle(false);
     setErr('');
 
     void apiGet('/api/v1/releases/cni')
       .then((r) => setCniVersions((r.versions || []) as string[]))
       .catch(() => setCniVersions([]));
+    void apiGet('/api/v1/settings')
+      .then((r) => setNomadProxyEnabled(Boolean(r.settings?.['proxy.use_for_nomad'] ?? r.settings?.['proxy.use_for_releases'])))
+      .catch(() => setNomadProxyEnabled(false));
   }, [open, cluster]);
-
-  const handleToggleProxy = async (next: boolean) => {
-    if (!(await canEnableSystemProxy(next, (msg) => { setErr(msg); toast.error(msg); }))) return;
-    setErr('');
-    setUseProxy(next);
-  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -569,7 +565,6 @@ export function NomadClusterSettingsModal({
         disable_telemetry: !telemetry,
         job_gc_threshold: jobGC.trim(),
         exec_enabled: execEnabled,
-        use_proxy: useProxy,
         confirm_single_node: confirmSingle,
         ui: {
           disabled: !uiEnabled,
@@ -629,10 +624,12 @@ export function NomadClusterSettingsModal({
               <input type="checkbox" checked={execEnabled} onChange={(e) => setExecEnabled(e.target.checked)} />
               <span>允许交互式终端与 Job Action（Exec）</span>
             </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={useProxy} onChange={(e) => void handleToggleProxy(e.target.checked)} />
-              <span>下载 CNI 更新时通过系统代理</span>
-            </label>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-slate-500 dark:text-slate-400">
+            <span>CNI 下载网络：{nomadProxyEnabled ? '通过系统代理' : '直连'}</span>
+            <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">
+              前往下载代理设置
+            </Link>
           </div>
           {uiEnabled && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
@@ -690,7 +687,7 @@ export function NomadNodeConfigModal({
   const [cniVersion, setCniVersion] = useState('');
   const [reinstallCNI, setReinstallCNI] = useState(false);
   const [extraSANs, setExtraSANs] = useState('');
-  const [useProxy, setUseProxy] = useState(false);
+  const [nomadProxyEnabled, setNomadProxyEnabled] = useState(false);
   const [confirmSingle, setConfirmSingle] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -708,7 +705,6 @@ export function NomadNodeConfigModal({
     setCniVersion(cluster.settings?.cni_version || '');
     setReinstallCNI(false);
     setExtraSANs(Array.isArray(member.config?.extra_sans) ? member.config.extra_sans.join(', ') : '');
-    setUseProxy(Boolean(cluster.settings?.use_proxy));
     setConfirmSingle(false);
     setErr('');
 
@@ -716,14 +712,11 @@ export function NomadNodeConfigModal({
       void apiGet('/api/v1/releases/cni')
         .then((r) => setCniVersions((r.versions || []) as string[]))
         .catch(() => setCniVersions([]));
+      void apiGet('/api/v1/settings')
+        .then((r) => setNomadProxyEnabled(Boolean(r.settings?.['proxy.use_for_nomad'] ?? r.settings?.['proxy.use_for_releases'])))
+        .catch(() => setNomadProxyEnabled(false));
     }
   }, [open, cluster, member, isClient]);
-
-  const handleToggleProxy = async (next: boolean) => {
-    if (!(await canEnableSystemProxy(next, (msg) => { setErr(msg); toast.error(msg); }))) return;
-    setErr('');
-    setUseProxy(next);
-  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -741,7 +734,6 @@ export function NomadNodeConfigModal({
           await apiPut(`/api/v1/clusters/${cluster.id}`, {
             cni_version: cniVersion,
             confirm_single_node: confirmSingle,
-            use_proxy: showCNIProxyOption ? useProxy : undefined,
           });
         }
       }
@@ -754,7 +746,6 @@ export function NomadNodeConfigModal({
         ...clientPayload,
         extra_sans: sans.length > 0 ? sans : undefined,
         reinstall_cni: reinstallCNI,
-        use_proxy: showCNIProxyOption ? useProxy : undefined,
         confirm_single_node: confirmSingle,
       });
       await onSubmitted(res?.task?.id, `更新节点配置: ${member.name}`);
@@ -840,10 +831,12 @@ export function NomadNodeConfigModal({
         )}
 
         {showCNIProxyOption && (
-          <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-200">
-            <input type="checkbox" checked={useProxy} onChange={(e) => void handleToggleProxy(e.target.checked)} />
-            <span>下载 CNI 插件包时通过系统代理</span>
-          </label>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
+            <span>CNI 插件下载：{nomadProxyEnabled ? '通过系统代理' : '直连'}</span>
+            <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">
+              前往下载代理设置
+            </Link>
+          </div>
         )}
 
         {isInstalled && isSingleServer && (

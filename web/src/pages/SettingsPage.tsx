@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { CheckCircle2, RefreshCw, RotateCw, X, XCircle } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -70,8 +71,22 @@ export function SettingsPage() {
   const { isAdmin } = useAuth();
   const toast = useToast();
   const askConfirm = useConfirm();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const [tab, setTab] = useState<'general' | 'releases' | 'clusters' | 'proxy' | 'security'>('general');
+  const validTabs = new Set(['general', 'releases', 'clusters', 'proxy', 'security']);
+  const queryTab = searchParams.get('tab');
+  const [tab, setTabState] = useState<'general' | 'releases' | 'clusters' | 'proxy' | 'security'>(() =>
+    queryTab && validTabs.has(queryTab) ? (queryTab as 'general' | 'releases' | 'clusters' | 'proxy' | 'security') : 'general',
+  );
+  useEffect(() => {
+    if (queryTab && validTabs.has(queryTab) && queryTab !== tab) {
+      setTabState(queryTab as typeof tab);
+    }
+  }, [queryTab, tab]);
+  const setTab = (next: 'general' | 'releases' | 'clusters' | 'proxy' | 'security') => {
+    setTabState(next);
+    setSearchParams(next === 'general' ? {} : { tab: next }, { replace: true });
+  };
   const [loading, setLoading] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingProxy, setSavingProxy] = useState(false);
@@ -91,7 +106,10 @@ export function SettingsPage() {
     password: '',
     password_set: false,
     no_proxy: '',
-    use_for_releases: false,
+    use_for_nomad: false,
+    use_for_vault: false,
+    use_for_docker_install: false,
+    use_for_docker_pull: false,
     use_for_self_update: false,
   });
   const [savedProxySnap, setSavedProxySnap] = useState('');
@@ -127,7 +145,10 @@ export function SettingsPage() {
       username: (p.username || '').trim(),
       password: p.password || '',
       no_proxy: (p.no_proxy || '').trim(),
-      use_for_releases: Boolean(p.use_for_releases),
+      use_for_nomad: Boolean(p.use_for_nomad),
+      use_for_vault: Boolean(p.use_for_vault),
+      use_for_docker_install: Boolean(p.use_for_docker_install),
+      use_for_docker_pull: Boolean(p.use_for_docker_pull),
       use_for_self_update: Boolean(p.use_for_self_update),
     });
 
@@ -144,6 +165,7 @@ export function SettingsPage() {
       setSavedSettingsSnap(buildSettingsSnap(nextSettings));
 
       const pv = pRes.proxy || {};
+      const legacyReleases = Boolean(nextSettings['proxy.use_for_releases']);
       const nextProxy = {
         configured: Boolean(pv.configured),
         mode: (pv.configured ? 'custom' : 'direct') as 'direct' | 'custom',
@@ -154,7 +176,10 @@ export function SettingsPage() {
         password: '',
         password_set: Boolean(pv.password_set),
         no_proxy: (pv.no_proxy || []).join(','),
-        use_for_releases: Boolean(nextSettings['proxy.use_for_releases']),
+        use_for_nomad: Boolean(nextSettings['proxy.use_for_nomad'] ?? legacyReleases),
+        use_for_vault: Boolean(nextSettings['proxy.use_for_vault'] ?? legacyReleases),
+        use_for_docker_install: Boolean(nextSettings['proxy.use_for_docker_install'] ?? legacyReleases),
+        use_for_docker_pull: Boolean(nextSettings['proxy.use_for_docker_pull']),
         use_for_self_update: Boolean(nextSettings['proxy.use_for_self_update']),
       };
       setProxy(nextProxy);
@@ -277,11 +302,36 @@ export function SettingsPage() {
 
   const switchProxyMode = (nextMode: 'direct' | 'custom') => {
     setProxy((prev: any) => {
-      if (nextMode === 'custom' && !prev.configured && !prev.use_for_releases && !prev.use_for_self_update) {
-        return { ...prev, mode: nextMode, use_for_releases: true, use_for_self_update: true };
+      if (
+        nextMode === 'custom' &&
+        !prev.configured &&
+        !prev.use_for_nomad &&
+        !prev.use_for_vault &&
+        !prev.use_for_docker_install &&
+        !prev.use_for_docker_pull &&
+        !prev.use_for_self_update
+      ) {
+        return {
+          ...prev,
+          mode: nextMode,
+          use_for_nomad: true,
+          use_for_vault: true,
+          use_for_docker_install: true,
+          use_for_docker_pull: false,
+          use_for_self_update: true,
+        };
       }
       return { ...prev, mode: nextMode };
     });
+  };
+
+  const disabledProxySwitches = {
+    'proxy.use_for_releases': false,
+    'proxy.use_for_nomad': false,
+    'proxy.use_for_vault': false,
+    'proxy.use_for_docker_install': false,
+    'proxy.use_for_docker_pull': false,
+    'proxy.use_for_self_update': false,
   };
 
   const saveProxy = async (e: React.FormEvent) => {
@@ -289,20 +339,43 @@ export function SettingsPage() {
     setErr('');
     setSavingProxy(true);
     try {
+      const prev = savedProxySnap ? JSON.parse(savedProxySnap) : {};
+      const prevDockerPull = Boolean(prev.use_for_docker_pull);
+      const proxyEndpointChanged =
+        prev.mode !== proxy.mode ||
+        prev.type !== proxy.type ||
+        prev.host !== (proxy.host || '').trim() ||
+        prev.port !== Number(proxy.port) ||
+        prev.username !== (proxy.username || '').trim() ||
+        Boolean(proxy.password) ||
+        prev.no_proxy !== (proxy.no_proxy || '').trim();
+
       if (proxy.mode === 'direct') {
         await apiPut('/api/v1/settings/proxy', { enabled: false });
-        await apiPut('/api/v1/settings', {
-          'proxy.use_for_releases': false,
-          'proxy.use_for_self_update': false,
-        });
-        toast.success('已切换为直连模式（已关闭下载代理）');
+        await apiPut('/api/v1/settings', disabledProxySwitches);
+        let syncMsg = '';
+        if (prevDockerPull) {
+          const syncRes = await apiPost('/api/v1/settings/proxy/sync-docker', {});
+          if (syncRes.count > 0) syncMsg = `，已同步更新 ${syncRes.count} 台主机 Docker 镜像代理`;
+        }
+        toast.success(`已切换为直连模式（已关闭下载代理）${syncMsg}`);
       } else {
+        const useDockerPull = proxy.type !== 'socks5' && Boolean(proxy.use_for_docker_pull);
         await apiPut('/api/v1/settings/proxy', proxyPayload(true));
         await apiPut('/api/v1/settings', {
-          'proxy.use_for_releases': Boolean(proxy.use_for_releases),
+          'proxy.use_for_releases': Boolean(proxy.use_for_nomad || proxy.use_for_vault || proxy.use_for_docker_install),
+          'proxy.use_for_nomad': Boolean(proxy.use_for_nomad),
+          'proxy.use_for_vault': Boolean(proxy.use_for_vault),
+          'proxy.use_for_docker_install': Boolean(proxy.use_for_docker_install),
+          'proxy.use_for_docker_pull': useDockerPull,
           'proxy.use_for_self_update': Boolean(proxy.use_for_self_update),
         });
-        toast.success('下载代理与默认使用策略已保存');
+        let syncMsg = '';
+        if (useDockerPull !== prevDockerPull || (useDockerPull && proxyEndpointChanged)) {
+          const syncRes = await apiPost('/api/v1/settings/proxy/sync-docker', {});
+          if (syncRes.count > 0) syncMsg = `，已向 ${syncRes.count} 台 Docker 主机下发镜像代理配置`;
+        }
+        toast.success(`下载代理与适用范围已保存${syncMsg}`);
       }
       await load();
     } catch (ex: any) {
@@ -325,11 +398,13 @@ export function SettingsPage() {
     setErr('');
     setClearingProxy(true);
     try {
+      const prev = savedProxySnap ? JSON.parse(savedProxySnap) : {};
+      const prevDockerPull = Boolean(prev.use_for_docker_pull);
       await apiPut('/api/v1/settings/proxy', { enabled: false });
-      await apiPut('/api/v1/settings', {
-        'proxy.use_for_releases': false,
-        'proxy.use_for_self_update': false,
-      });
+      await apiPut('/api/v1/settings', disabledProxySwitches);
+      if (prevDockerPull) {
+        await apiPost('/api/v1/settings/proxy/sync-docker', {});
+      }
       toast.success('已清空下载代理配置');
       await load();
     } catch (ex: any) {
@@ -530,7 +605,7 @@ export function SettingsPage() {
             >
               <form onSubmit={saveProxy} className="space-y-6">
                 <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                  作用于控制面拉取 Nomad / Vault 官方安装包、控制面 GitHub Release 自更新以及版本检查请求，保存后立即生效。
+                  集中控制 Nomad 集群、Vault 集群、Docker 安装/升级及镜像拉取、控制面 GitHub 自更新与版本检查是否走系统代理，保存后立即生效。
                 </p>
 
                 <div className="space-y-2">
@@ -586,7 +661,14 @@ export function SettingsPage() {
                             label="协议"
                             disabled={!isAdmin}
                             value={proxy.type}
-                            onChange={(e) => setProxy({ ...proxy, type: e.target.value })}
+                            onChange={(e) => {
+                              const nextType = e.target.value;
+                              setProxy({
+                                ...proxy,
+                                type: nextType,
+                                use_for_docker_pull: nextType === 'socks5' ? false : proxy.use_for_docker_pull,
+                              });
+                            }}
                           >
                             <option value="http">HTTP</option>
                             <option value="https">HTTPS</option>
@@ -662,30 +744,70 @@ export function SettingsPage() {
                     </div>
 
                     <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/30 p-4 space-y-3">
-                      <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">3. 默认适用范围</div>
+                      <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">3. 按场景启用下载代理</div>
                       <div className="divide-y divide-slate-200/70 dark:divide-slate-800/80">
                         <div className="flex items-center justify-between gap-4 py-2 first:pt-0">
                           <div className="min-w-0">
-                            <div className="text-xs font-medium text-slate-800 dark:text-slate-200">集群部署 / 升级与版本列表</div>
-                            <div className="text-[11px] text-slate-500 dark:text-slate-400">拉取 Nomad、Vault 与 Docker 官方安装包及版本清单时默认走代理</div>
+                            <div className="text-xs font-medium text-slate-800 dark:text-slate-200">Nomad 集群（部署 / 扩容 / 升级 / CNI 插件）</div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">获取 Nomad 官方版本列表、安装包以及下载 CNI 插件包时使用系统代理</div>
                           </div>
                           <Switch
-                            checked={Boolean(proxy.use_for_releases)}
+                            checked={Boolean(proxy.use_for_nomad)}
                             disabled={!isAdmin}
-                            onChange={(v) => setProxy({ ...proxy, use_for_releases: v })}
-                            label="默认用于集群部署 / 升级 / 版本列表"
+                            onChange={(v) => setProxy({ ...proxy, use_for_nomad: v })}
+                            label="Nomad 集群使用系统代理"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between gap-4 py-2">
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-slate-800 dark:text-slate-200">Vault 集群（部署 / 扩容 / 升级 / 版本列表）</div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">获取 Vault 官方版本列表、部署、扩容与滚动升级安装包时使用系统代理</div>
+                          </div>
+                          <Switch
+                            checked={Boolean(proxy.use_for_vault)}
+                            disabled={!isAdmin}
+                            onChange={(v) => setProxy({ ...proxy, use_for_vault: v })}
+                            label="Vault 集群使用系统代理"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between gap-4 py-2">
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-slate-800 dark:text-slate-200">Docker 安装 / 升级（主机与版本列表）</div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">拉取 Docker 官方仓库索引及分发安装包到主机时使用系统代理</div>
+                          </div>
+                          <Switch
+                            checked={Boolean(proxy.use_for_docker_install)}
+                            disabled={!isAdmin}
+                            onChange={(v) => setProxy({ ...proxy, use_for_docker_install: v })}
+                            label="Docker 安装与升级使用系统代理"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between gap-4 py-2">
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-slate-800 dark:text-slate-200">Docker 拉取容器镜像</div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                              {proxy.type === 'socks5'
+                                ? 'Docker 守护进程镜像拉取仅支持 HTTP / HTTPS 代理，SOCKS5 下不可用'
+                                : '为主机 Docker 守护进程默认配置 HTTP(S) 拉取代理（保存后将同步到未单独指定自定义代理的主机）'}
+                            </div>
+                          </div>
+                          <Switch
+                            checked={proxy.type !== 'socks5' && Boolean(proxy.use_for_docker_pull)}
+                            disabled={!isAdmin || proxy.type === 'socks5'}
+                            onChange={(v) => setProxy({ ...proxy, use_for_docker_pull: v })}
+                            label="Docker 拉取容器镜像使用系统代理"
                           />
                         </div>
                         <div className="flex items-center justify-between gap-4 py-2 last:pb-0">
                           <div className="min-w-0">
-                            <div className="text-xs font-medium text-slate-800 dark:text-slate-200">控制面自更新与版本检查</div>
-                            <div className="text-[11px] text-slate-500 dark:text-slate-400">控制面检测新版本并从 GitHub Release 下载二进制包时默认走代理</div>
+                            <div className="text-xs font-medium text-slate-800 dark:text-slate-200">控制面自更新与版本检查（GitHub）</div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">控制面检测新版本并从 GitHub Release 下载二进制包时使用系统代理</div>
                           </div>
                           <Switch
                             checked={Boolean(proxy.use_for_self_update)}
                             disabled={!isAdmin}
                             onChange={(v) => setProxy({ ...proxy, use_for_self_update: v })}
-                            label="默认用于控制面自更新"
+                            label="控制面自更新使用系统代理"
                           />
                         </div>
                       </div>

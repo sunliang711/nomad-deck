@@ -22,10 +22,14 @@ import (
 
 // Setting keys.
 const (
-	SettingProxyConfig      = "proxy.config"
-	SettingProxyPassword    = "proxy.password"
-	SettingUseForReleases   = "proxy.use_for_releases"
-	SettingUseForSelfUpdate = "proxy.use_for_self_update"
+	SettingProxyConfig         = "proxy.config"
+	SettingProxyPassword       = "proxy.password"
+	SettingUseForNomad         = "proxy.use_for_nomad"
+	SettingUseForVault         = "proxy.use_for_vault"
+	SettingUseForDockerInstall = "proxy.use_for_docker_install"
+	SettingUseForDockerPull    = "proxy.use_for_docker_pull"
+	SettingUseForSelfUpdate    = "proxy.use_for_self_update"
+	SettingUseForReleases      = "proxy.use_for_releases" // legacy alias
 )
 
 // ErrProxyNotConfigured is returned when a task asks for the proxy but none is set.
@@ -160,13 +164,21 @@ func (m *Manager) Save(ctx context.Context, tx *sql.Tx, cfg *ProxyConfig, passwo
 	return nil
 }
 
-// UseByDefault returns the default checkbox state for a setting key.
+// UseByDefault returns the default checkbox state for a setting key, falling
+// back to the legacy SettingUseForReleases key for product download settings
+// that have not been explicitly saved yet.
 func (m *Manager) UseByDefault(ctx context.Context, key string) bool {
 	var v bool
-	if err := db.GetSettingJSON(ctx, m.DB.Reader, key, &v); err != nil {
-		return false
+	err := db.GetSettingJSON(ctx, m.DB.Reader, key, &v)
+	if err == nil {
+		return v
 	}
-	return v
+	if errors.Is(err, db.ErrNotFound) && (key == SettingUseForNomad || key == SettingUseForVault || key == SettingUseForDockerInstall) {
+		if db.GetSettingJSON(ctx, m.DB.Reader, SettingUseForReleases, &v) == nil {
+			return v
+		}
+	}
+	return false
 }
 
 // Client returns an HTTP client that uses the system proxy when useProxy is

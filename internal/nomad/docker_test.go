@@ -1,6 +1,9 @@
 package nomad
 
 import (
+	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -8,6 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"nomad-deck/internal/crypto"
+	"nomad-deck/internal/db"
+	"nomad-deck/internal/netx"
 	"nomad-deck/internal/sshx"
 )
 
@@ -188,5 +194,50 @@ func TestDockerInstallVersion(t *testing.T) {
 				t.Fatalf("got %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPullProxyURLCentralSetting(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	d, err := db.Open(ctx, filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	keys, _ := crypto.NewKeyringForTest(bytes.Repeat([]byte{9}, 32))
+	pm := &netx.Manager{DB: d, Keys: keys}
+	svc := &Service{Proxy: pm, Keys: keys}
+
+	pw := "p@ss"
+	if err := d.WithTx(ctx, func(tx *sql.Tx) error {
+		if err := pm.Save(ctx, tx, &netx.ProxyConfig{Type: "http", Host: "10.0.0.2", Port: 3128, Username: "alice"}, &pw); err != nil {
+			return err
+		}
+		return db.PutSettingJSON(ctx, tx, netx.SettingUseForDockerPull, true, d.NowString())
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, err := svc.pullProxyURL(ctx, &dockerHost{}, nil)
+	if err != nil || !strings.HasPrefix(got, "http://alice:") || !strings.HasSuffix(got, "@10.0.0.2:3128") {
+		t.Fatalf("expected central http proxy url, got %q err=%v", got, err)
+	}
+
+	// Explicit mode "none" overrides centralized proxy setting.
+	got, _, err = svc.pullProxyURL(ctx, &dockerHost{}, &PullProxy{Mode: "none"})
+	if err != nil || got != "" {
+		t.Fatalf("mode none should disable pull proxy even if setting enabled, got %q err=%v", got, err)
+	}
+
+	// Disabling centralized switch reverts blank/nil host config to direct.
+	if err := d.WithTx(ctx, func(tx *sql.Tx) error {
+		return db.PutSettingJSON(ctx, tx, netx.SettingUseForDockerPull, false, d.NowString())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err = svc.pullProxyURL(ctx, &dockerHost{}, nil)
+	if err != nil || got != "" {
+		t.Fatalf("expected direct when central switch false, got %q err=%v", got, err)
 	}
 }

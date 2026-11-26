@@ -110,8 +110,10 @@ func TestSettingsAndProxyAPI(t *testing.T) {
 	if code, b := root.do("PUT", "/api/v1/settings", map[string]any{"proxy.use_for_releases": true}, nil); code != 400 || errCode(b) != "proxy_not_configured" {
 		t.Fatalf("enabling proxy.use_for_releases without proxy must fail: %d %v", code, b)
 	}
-	if code, b := root.do("PUT", "/api/v1/settings", map[string]any{"proxy.use_for_self_update": true}, nil); code != 400 || errCode(b) != "proxy_not_configured" {
-		t.Fatalf("enabling proxy.use_for_self_update without proxy must fail: %d %v", code, b)
+	for _, k := range []string{"proxy.use_for_nomad", "proxy.use_for_vault", "proxy.use_for_docker_install", "proxy.use_for_docker_pull", "proxy.use_for_self_update"} {
+		if code, b := root.do("PUT", "/api/v1/settings", map[string]any{k: true}, nil); code != 400 || errCode(b) != "proxy_not_configured" {
+			t.Fatalf("enabling %s without proxy must fail: %d %v", k, code, b)
+		}
 	}
 	code, b := root.do("PUT", "/api/v1/settings", map[string]any{"ssh.max_concurrency": 4,
 		"release.cni_checksums": map[string]any{"v1.99.0": map[string]any{"amd64": strings.Repeat("ab", 32)}}}, nil)
@@ -136,9 +138,18 @@ func TestSettingsAndProxyAPI(t *testing.T) {
 	if p["configured"] != true || p["password_set"] != true || p["type"] != "socks5" {
 		t.Fatalf("proxy view: %v", p)
 	}
-	if code, b := root.do("PUT", "/api/v1/settings", map[string]any{"proxy.use_for_releases": true, "proxy.use_for_self_update": true}, nil); code != 200 {
+	if code, b := root.do("PUT", "/api/v1/settings", map[string]any{"proxy.use_for_docker_pull": true}, nil); code != 400 {
+		t.Fatalf("enabling proxy.use_for_docker_pull with socks5 must fail: %d %v", code, b)
+	}
+	if code, b := root.do("PUT", "/api/v1/settings", map[string]any{
+		"proxy.use_for_releases":       true,
+		"proxy.use_for_nomad":          true,
+		"proxy.use_for_vault":          true,
+		"proxy.use_for_docker_install": true,
+		"proxy.use_for_self_update":    true,
+	}, nil); code != 200 {
 		t.Fatalf("enable proxy defaults when configured: %d %v", code, b)
-	} else if st := b["settings"].(map[string]any); st["proxy.use_for_releases"] != true || st["proxy.use_for_self_update"] != true {
+	} else if st := b["settings"].(map[string]any); st["proxy.use_for_nomad"] != true || st["proxy.use_for_vault"] != true || st["proxy.use_for_docker_install"] != true || st["proxy.use_for_self_update"] != true {
 		t.Fatalf("proxy defaults not saved: %v", st)
 	}
 	var raw string
@@ -146,8 +157,14 @@ func TestSettingsAndProxyAPI(t *testing.T) {
 	if strings.Contains(raw, "proxy-secret") || !strings.HasPrefix(raw, "nd1:") {
 		t.Fatalf("proxy password must be encrypted: %s", raw)
 	}
-	// Omitting the password keeps it.
+	// Omitting the password keeps it; HTTP proxy allows proxy.use_for_docker_pull.
 	root.do("PUT", "/api/v1/settings/proxy", map[string]any{"enabled": true, "type": "http", "host": "10.0.0.1", "port": 3128, "username": "u"}, nil)
+	if code, b := root.do("PUT", "/api/v1/settings", map[string]any{"proxy.use_for_docker_pull": true}, nil); code != 200 {
+		t.Fatalf("enable proxy.use_for_docker_pull under http must succeed: %d %v", code, b)
+	}
+	if code, b := root.do("POST", "/api/v1/settings/proxy/sync-docker", map[string]any{}, nil); code != 200 {
+		t.Fatalf("sync-docker: %d %v", code, b)
+	}
 	_, b = root.do("GET", "/api/v1/settings/proxy", nil, nil)
 	if b["proxy"].(map[string]any)["password_set"] != true {
 		t.Fatal("password must be kept when omitted")
@@ -161,8 +178,11 @@ func TestSettingsAndProxyAPI(t *testing.T) {
 		t.Fatal("proxy must be removable")
 	}
 	_, stRes := root.do("GET", "/api/v1/settings", nil, nil)
-	if st := stRes["settings"].(map[string]any); st["proxy.use_for_releases"] != false || st["proxy.use_for_self_update"] != false {
-		t.Fatalf("disabling proxy must clear default proxy switches: %v", st)
+	st := stRes["settings"].(map[string]any)
+	for _, k := range []string{"proxy.use_for_releases", "proxy.use_for_nomad", "proxy.use_for_vault", "proxy.use_for_docker_install", "proxy.use_for_docker_pull", "proxy.use_for_self_update"} {
+		if st[k] != false {
+			t.Fatalf("disabling proxy must clear %s: %v", k, st)
+		}
 	}
 	logs, _ := root.do("GET", "/api/v1/audit-logs?action=settings.proxy_update", nil, nil)
 	_ = logs

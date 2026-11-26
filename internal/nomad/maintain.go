@@ -390,11 +390,7 @@ func (s *Service) Upgrade(ctx context.Context, actor audit.Actor, clusterID stri
 	if err := s.requireOperable(cl); err != nil {
 		return nil, err
 	}
-	reqProxy := in.UseProxy
-	if reqProxy == nil && cl.Settings.UseProxy != nil {
-		reqProxy = cl.Settings.UseProxy
-	}
-	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, reqProxy)
+	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
 	if err != nil {
 		return nil, err
 	}

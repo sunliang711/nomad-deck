@@ -15,6 +15,7 @@ import (
 	"nomad-deck/internal/audit"
 	"nomad-deck/internal/cluster"
 	"nomad-deck/internal/db"
+	"nomad-deck/internal/netx"
 	"nomad-deck/internal/ops"
 	"nomad-deck/internal/release"
 	"nomad-deck/internal/sshx"
@@ -224,10 +225,22 @@ func dockerTarget(n *db.Node) (release.DockerTarget, error) {
 // pullProxyURL resolves the effective pull proxy to a URL with credentials
 // ("" for none).
 func (s *Service) pullProxyURL(ctx context.Context, d *dockerHost, p *PullProxy) (string, []string, error) {
-	if p == nil || p.Mode == "" || p.Mode == "none" {
+	mode := ""
+	var noProxy []string
+	if p != nil {
+		mode = p.Mode
+		noProxy = p.NoProxy
+	}
+	if mode == "none" {
 		return "", nil, nil
 	}
-	if p.Mode == "system" {
+	if mode == "" {
+		if !s.Proxy.UseByDefault(ctx, netx.SettingUseForDockerPull) {
+			return "", nil, nil
+		}
+		mode = "system"
+	}
+	if mode == "system" {
 		cfg, pass, err := s.Proxy.Load(ctx)
 		if err != nil {
 			return "", nil, err
@@ -238,7 +251,7 @@ func (s *Service) pullProxyURL(ctx context.Context, d *dockerHost, p *PullProxy)
 		if cfg.Type == "socks5" {
 			return "", nil, badRequest("系统代理为 SOCKS5，Docker 镜像拉取代理需要 HTTP(S) 代理")
 		}
-		return cfg.URL(pass).String(), p.NoProxy, nil
+		return cfg.URL(pass).String(), noProxy, nil
 	}
 	u, err := url.Parse(p.URL)
 	if err != nil {
@@ -733,7 +746,7 @@ func (s *Service) InstallDocker(ctx context.Context, actor audit.Actor, nodeID s
 	if issues := cluster.HostIssues(d.node); cluster.Blocking(issues) != nil {
 		return nil, cluster.Blocking(issues)
 	}
-	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
+	hc, err := cluster.NewHTTPClientFor(ctx, s.Proxy, netx.SettingUseForDockerInstall, in.UseProxy)
 	if err != nil {
 		return nil, err
 	}
@@ -858,7 +871,7 @@ func (s *Service) UpgradeDocker(ctx context.Context, actor audit.Actor, nodeID s
 	if err := s.checkDockerUpgrade(d, in); err != nil {
 		return nil, err
 	}
-	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
+	hc, err := cluster.NewHTTPClientFor(ctx, s.Proxy, netx.SettingUseForDockerInstall, in.UseProxy)
 	if err != nil {
 		return nil, err
 	}
@@ -1455,7 +1468,7 @@ func (s *Service) UpgradeClusterDocker(ctx context.Context, actor audit.Actor, c
 	if len(targets) == 0 {
 		return nil, conflict("nothing_to_upgrade", "没有需要升级的托管 Docker 主机")
 	}
-	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
+	hc, err := cluster.NewHTTPClientFor(ctx, s.Proxy, netx.SettingUseForDockerInstall, in.UseProxy)
 	if err != nil {
 		return nil, err
 	}
@@ -1476,4 +1489,35 @@ func (s *Service) UpgradeClusterDocker(ctx context.Context, actor audit.Actor, c
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "docker.cluster_upgrade", ResourceType: "cluster", ResourceID: clusterID,
 		ResourceName: cl.Name, OperationTaskID: task.ID, Summary: map[string]any{"to": in.Version, "nodes": len(targets)}})
 	return task, nil
+}
+
+// SyncDockerSystemProxy reapplies the centralized Docker image pull proxy
+// setting to all managed/external hosts that do not specify a custom or none pull proxy.
+func (s *Service) SyncDockerSystemProxy(ctx context.Context, actor audit.Actor) ([]string, error) {
+	nodes, err := db.ListNodes(ctx, s.DB.Reader)
+	if err != nil {
+		return nil, err
+	}
+	var taskIDs []string
+	for _, n := range nodes {
+		if n.DockerMode != "managed" && n.DockerMode != "external" {
+			continue
+		}
+		d, err := s.loadDockerHost(ctx, n.ID)
+		if err != nil {
+			return nil, err
+		}
+		if eff := d.effective(); eff.PullProxy != nil && (eff.PullProxy.Mode == "custom" || eff.PullProxy.Mode == "none") {
+			continue
+		}
+		d.host.PullProxy = nil
+		task, err := s.UpdateDockerConfig(ctx, actor, n.ID, DockerConfigInput{DockerConfig: d.host})
+		if err != nil {
+			return nil, err
+		}
+		if task != nil {
+			taskIDs = append(taskIDs, task.ID)
+		}
+	}
+	return taskIDs, nil
 }

@@ -128,10 +128,16 @@ type HTTPClient struct {
 	ProxyAddr string
 }
 
-// NewHTTPClient returns the download client, honouring the per-task proxy
-// choice (nil means the system default).
+// NewHTTPClient returns the Nomad download client, honouring an explicit
+// per-request override or the centralized Nomad proxy setting.
 func NewHTTPClient(ctx context.Context, p *netx.Manager, useProxy *bool) (*HTTPClient, error) {
-	use := p.UseByDefault(ctx, netx.SettingUseForReleases)
+	return NewHTTPClientFor(ctx, p, netx.SettingUseForNomad, useProxy)
+}
+
+// NewHTTPClientFor returns a download client using the given settingKey as the
+// default when useProxy is nil.
+func NewHTTPClientFor(ctx context.Context, p *netx.Manager, settingKey string, useProxy *bool) (*HTTPClient, error) {
+	use := p.UseByDefault(ctx, settingKey)
 	if useProxy != nil {
 		use = *useProxy
 	}

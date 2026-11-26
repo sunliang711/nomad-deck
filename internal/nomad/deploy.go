@@ -541,11 +541,7 @@ func (s *Service) Deploy(ctx context.Context, actor audit.Actor, clusterID strin
 	if cl.MaintenanceMode {
 		return nil, conflict("maintenance", "集群处于维护模式（%s）", cl.MaintenanceReason)
 	}
-	reqProxy := in.UseProxy
-	if reqProxy == nil && cl.Settings.UseProxy != nil {
-		reqProxy = cl.Settings.UseProxy
-	}
-	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, reqProxy)
+	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
 	if err != nil {
 		return nil, err
 	}

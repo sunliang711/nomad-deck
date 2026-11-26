@@ -154,9 +154,13 @@ var settingDefs = map[string]settingDef{
 		}
 		return v, nil
 	}},
-	"self_update.backup_retention": {Default: 3, Validate: intRange(1, 20)},
-	netx.SettingUseForReleases:     {Default: false, Validate: boolVal},
-	netx.SettingUseForSelfUpdate:   {Default: false, Validate: boolVal},
+	"self_update.backup_retention":   {Default: 3, Validate: intRange(1, 20)},
+	netx.SettingUseForReleases:       {Default: false, Validate: boolVal},
+	netx.SettingUseForNomad:          {Default: false, Validate: boolVal},
+	netx.SettingUseForVault:          {Default: false, Validate: boolVal},
+	netx.SettingUseForDockerInstall:  {Default: false, Validate: boolVal},
+	netx.SettingUseForDockerPull:     {Default: false, Validate: boolVal},
+	netx.SettingUseForSelfUpdate:     {Default: false, Validate: boolVal},
 	"release.mirror_url":           {Default: "", Validate: optHTTPURL},
 	"release.pgp_public_key": {Default: "", Validate: func(raw json.RawMessage) (any, error) {
 		var v string
@@ -206,10 +210,12 @@ var settingDefs = map[string]settingDef{
 
 func (a *API) settingValues(ctx context.Context) map[string]any {
 	out := map[string]any{}
+	missing := map[string]bool{}
 	for k, def := range settingDefs {
 		raw, _, err := db.GetSetting(ctx, a.DB.Reader, k)
 		if err != nil {
 			out[k] = def.Default
+			missing[k] = true
 			continue
 		}
 		var v any
@@ -217,6 +223,11 @@ func (a *API) settingValues(ctx context.Context) map[string]any {
 			v = def.Default
 		}
 		out[k] = v
+	}
+	for _, k := range []string{netx.SettingUseForNomad, netx.SettingUseForVault, netx.SettingUseForDockerInstall} {
+		if missing[k] {
+			out[k] = out[netx.SettingUseForReleases]
+		}
 	}
 	return out
 }
@@ -246,14 +257,33 @@ func (a *API) putSettings(w http.ResponseWriter, r *http.Request) {
 		vals[k] = v
 		restart = restart || def.RestartToApply
 	}
-	if vals[netx.SettingUseForReleases] == true || vals[netx.SettingUseForSelfUpdate] == true {
-		configured, err := a.Proxy.Configured(r.Context())
+	proxyKeys := []string{
+		netx.SettingUseForReleases,
+		netx.SettingUseForNomad,
+		netx.SettingUseForVault,
+		netx.SettingUseForDockerInstall,
+		netx.SettingUseForDockerPull,
+		netx.SettingUseForSelfUpdate,
+	}
+	anyProxy := false
+	for _, k := range proxyKeys {
+		if vals[k] == true {
+			anyProxy = true
+			break
+		}
+	}
+	if anyProxy {
+		cfg, _, err := a.Proxy.Load(r.Context())
 		if err != nil {
 			a.writeErr(w, r, err)
 			return
 		}
-		if !configured {
+		if cfg == nil || cfg.Host == "" {
 			writeError(w, http.StatusBadRequest, "proxy_not_configured", "尚未配置系统代理，请先配置系统代理")
+			return
+		}
+		if vals[netx.SettingUseForDockerPull] == true && cfg.Type == "socks5" {
+			writeError(w, http.StatusBadRequest, "invalid_argument", "系统代理为 SOCKS5，Docker 镜像拉取代理需要 HTTP(S) 代理")
 			return
 		}
 	}
@@ -339,10 +369,21 @@ func (a *API) putProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		if !in.Enabled {
 			now := a.DB.NowString()
-			for _, k := range []string{netx.SettingUseForReleases, netx.SettingUseForSelfUpdate} {
+			for _, k := range []string{
+				netx.SettingUseForReleases,
+				netx.SettingUseForNomad,
+				netx.SettingUseForVault,
+				netx.SettingUseForDockerInstall,
+				netx.SettingUseForDockerPull,
+				netx.SettingUseForSelfUpdate,
+			} {
 				if err := db.PutSettingJSON(r.Context(), tx, k, false, now); err != nil {
 					return err
 				}
+			}
+		} else if cfg != nil && cfg.Type == "socks5" {
+			if err := db.PutSettingJSON(r.Context(), tx, netx.SettingUseForDockerPull, false, a.DB.NowString()); err != nil {
+				return err
 			}
 		}
 		summary := map[string]any{"enabled": in.Enabled}
@@ -406,9 +447,31 @@ func (a *API) revealProxyPassword(w http.ResponseWriter, r *http.Request) {
 
 // ---- Releases ----
 
+func (a *API) syncDockerProxy(w http.ResponseWriter, r *http.Request) {
+	if a.Nomad == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"task_ids": []string{}, "count": 0})
+		return
+	}
+	taskIDs, err := a.Nomad.SyncDockerSystemProxy(r.Context(), a.actor(r))
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task_ids": taskIDs, "count": len(taskIDs)})
+}
+
 func (a *API) listReleases(w http.ResponseWriter, r *http.Request) {
 	product := chi.URLParam(r, "product")
-	useProxy := a.Proxy.UseByDefault(r.Context(), netx.SettingUseForReleases)
+	settingKey := netx.SettingUseForReleases
+	switch product {
+	case "nomad":
+		settingKey = netx.SettingUseForNomad
+	case "vault":
+		settingKey = netx.SettingUseForVault
+	case "docker":
+		settingKey = netx.SettingUseForDockerInstall
+	}
+	useProxy := a.Proxy.UseByDefault(r.Context(), settingKey)
 	if v := r.URL.Query().Get("use_proxy"); v != "" {
 		useProxy = v == "true"
 	}

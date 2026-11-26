@@ -274,11 +274,7 @@ func (s *Service) NodeJoin(ctx context.Context, actor audit.Actor, clusterID, no
 	if err := cluster.Blocking(issues); err != nil {
 		return nil, err
 	}
-	reqProxy := in.UseProxy
-	if reqProxy == nil && cl.Settings.UseProxy != nil {
-		reqProxy = cl.Settings.UseProxy
-	}
-	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, reqProxy)
+	hc, err := cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy)
 	if err != nil {
 		return nil, err
 	}
@@ -821,11 +817,7 @@ func (s *Service) UpdateNodeConfig(ctx context.Context, actor audit.Actor, clust
 	}
 	var hc *cluster.HTTPClient
 	if in.CNI && (!old.CNI || in.ReinstallCNI) {
-		reqProxy := in.UseProxy
-		if reqProxy == nil && cl.Settings.UseProxy != nil {
-			reqProxy = cl.Settings.UseProxy
-		}
-		if hc, err = cluster.NewHTTPClient(ctx, s.Proxy, reqProxy); err != nil {
+		if hc, err = cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy); err != nil {
 			return nil, err
 		}
 	}
@@ -978,11 +970,7 @@ func (s *Service) UpdateSettings(ctx context.Context, actor audit.Actor, cluster
 			return nil, err
 		}
 		if cniChanged {
-			reqProxy := in.UseProxy
-			if reqProxy == nil && cl.Settings.UseProxy != nil {
-				reqProxy = cl.Settings.UseProxy
-			}
-			if hc, err = cluster.NewHTTPClient(ctx, s.Proxy, reqProxy); err != nil {
+			if hc, err = cluster.NewHTTPClient(ctx, s.Proxy, in.UseProxy); err != nil {
 				return nil, err
 			}
 		}

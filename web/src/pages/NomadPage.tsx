@@ -99,8 +99,7 @@ export function NomadPage() {
   const [showJoin, setShowJoin] = useState(false);
   const [joinNodeId, setJoinNodeId] = useState('');
   const [joinRole, setJoinRole] = useState('server_client');
-  const [useProxy, setUseProxy] = useState(false);
-  const [defaultUseProxy, setDefaultUseProxy] = useState(false);
+  const [proxyEnabled, setProxyEnabled] = useState(false);
   const [joinBusy, setJoinBusy] = useState(false);
   const [drainClients, setDrainClients] = useState(true);
   const [gateView, setGateView] = useState<any>(null);
@@ -182,7 +181,7 @@ export function NomadPage() {
   useEffect(() => {
     void apiGet('/api/v1/settings').then((r) => {
       setDeployVer(r.settings?.['defaults.nomad_version'] || 'latest');
-      setDefaultUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
+      setProxyEnabled(Boolean(r.settings?.['proxy.use_for_nomad'] ?? r.settings?.['proxy.use_for_releases']));
     }).catch((ex) => setErr(ex.message));
   }, []);
 
@@ -205,32 +204,6 @@ export function NomadPage() {
   }, [selectedId]);
 
   const cluster = clusters.find((c) => c.id === selectedId);
-  const clusterProxyPref = cluster?.settings?.use_proxy;
-
-  useEffect(() => {
-    setUseProxy(clusterProxyPref !== undefined ? Boolean(clusterProxyPref) : defaultUseProxy);
-  }, [selectedId, clusterProxyPref, defaultUseProxy]);
-
-  const handleToggleProxy = async (next: boolean) => {
-    if (!isAdmin) return;
-    try {
-      if (selectedId) {
-        const res = await apiPut(`/api/v1/clusters/${selectedId}/proxy`, { use_proxy: next });
-        if (res.cluster) {
-          setClusters((prev) => prev.map((c) => (c.id === selectedId ? { ...c, ...res.cluster } : c)));
-        }
-      }
-      await apiPut('/api/v1/settings', { 'proxy.use_for_releases': next });
-      setDefaultUseProxy(next);
-      setUseProxy(next);
-      setErr('');
-      toast.success(next ? '已开启并保存代理设置' : '已关闭并保存代理设置');
-    } catch (ex: any) {
-      const msg = ex?.message || '保存代理勾选状态失败';
-      setErr(msg);
-      toast.error(msg);
-    }
-  };
 
   useEffect(() => {
     setGateView(null);
@@ -376,17 +349,16 @@ export function NomadPage() {
                 setDeployVer={setDeployVer}
                 upVer={upVer}
                 setUpVer={setUpVer}
-                useProxy={useProxy}
-                setUseProxy={(v) => void handleToggleProxy(v)}
+                proxyEnabled={proxyEnabled}
                 drainClients={drainClients}
                 setDrainClients={setDrainClients}
                 onDeploy={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', use_proxy: useProxy })
+                  apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest' })
                     .then((r) => { if (r.task?.id) openTask(r.task.id, '部署 Nomad'); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onUpgrade={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', use_proxy: useProxy, drain_clients: drainClients, confirm: true })
+                  apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', drain_clients: drainClients, confirm: true })
                     .then((r) => { if (r.task?.id) openTask(r.task.id, '滚动升级 Nomad'); })
                     .catch((ex) => setErr(ex.message))
                 }
@@ -716,7 +688,7 @@ export function NomadPage() {
             e.preventDefault();
             setJoinBusy(true);
             try {
-              const r = await apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { role: joinRole, use_proxy: useProxy });
+              const r = await apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { role: joinRole });
               setShowJoin(false);
               if (r.task?.id) openTask(r.task.id, '扩容 Nomad 节点');
             } catch (ex: any) {
@@ -736,7 +708,10 @@ export function NomadPage() {
             <option value="server">server</option>
             <option value="client">client</option>
           </Select>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={useProxy} onChange={(e) => void handleToggleProxy(e.target.checked)} />使用系统代理</label>
+          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+            <span>下载网络：{proxyEnabled ? '通过系统代理' : '直连'}</span>
+            <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">前往下载代理设置</Link>
+          </div>
           <div className="flex justify-end gap-2">
             <Button type="button" onClick={() => setShowJoin(false)}>取消</Button>
             <Button type="submit" variant="primary" loading={joinBusy}>确认扩容</Button>

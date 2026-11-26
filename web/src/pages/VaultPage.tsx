@@ -121,8 +121,7 @@ export function VaultPage() {
   // Create wizard
   const [showCreate, setShowCreate] = useState(false);
   const [deployVer, setDeployVer] = useState('latest');
-  const [useProxy, setUseProxy] = useState(false);
-  const [defaultUseProxy, setDefaultUseProxy] = useState(false);
+  const [proxyEnabled, setProxyEnabled] = useState(false);
   const [joinBusy, setJoinBusy] = useState(false);
   const [deployConfirmSwap, setDeployConfirmSwap] = useState(false);
   const [upVer, setUpVer] = useState('');
@@ -331,7 +330,7 @@ export function VaultPage() {
   useEffect(() => {
     void apiGet('/api/v1/settings').then((r) => {
       setDeployVer(r.settings?.['defaults.vault_version'] || 'latest');
-      setDefaultUseProxy(Boolean(r.settings?.['proxy.use_for_releases']));
+      setProxyEnabled(Boolean(r.settings?.['proxy.use_for_vault'] ?? r.settings?.['proxy.use_for_releases']));
     }).catch((ex) => setErr(ex.message));
   }, []);
 
@@ -350,32 +349,6 @@ export function VaultPage() {
   }, [selectedId]);
 
   const cluster = clusters.find((c) => c.id === selectedId);
-  const clusterProxyPref = cluster?.settings?.use_proxy;
-
-  useEffect(() => {
-    setUseProxy(clusterProxyPref !== undefined ? Boolean(clusterProxyPref) : defaultUseProxy);
-  }, [selectedId, clusterProxyPref, defaultUseProxy]);
-
-  const handleToggleProxy = async (next: boolean) => {
-    if (!isAdmin) return;
-    try {
-      if (selectedId) {
-        const res = await apiPut(`/api/v1/clusters/${selectedId}/proxy`, { use_proxy: next });
-        if (res.cluster) {
-          setClusters((prev) => prev.map((c) => (c.id === selectedId ? { ...c, ...res.cluster } : c)));
-        }
-      }
-      await apiPut('/api/v1/settings', { 'proxy.use_for_releases': next });
-      setDefaultUseProxy(next);
-      setUseProxy(next);
-      setErr('');
-      toast.success(next ? '已开启并保存代理设置' : '已关闭并保存代理设置');
-    } catch (ex: any) {
-      const msg = ex?.message || '保存代理勾选状态失败';
-      setErr(msg);
-      toast.error(msg);
-    }
-  };
 
   useEffect(() => {
     setRootToken('');
@@ -552,12 +525,11 @@ export function VaultPage() {
                 setDeployVer={setDeployVer}
                 upVer={upVer}
                 setUpVer={setUpVer}
-                useProxy={useProxy}
-                setUseProxy={(v) => void handleToggleProxy(v)}
+                proxyEnabled={proxyEnabled}
                 confirmSwap={deployConfirmSwap}
                 setConfirmSwap={setDeployConfirmSwap}
                 onDeploy={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', use_proxy: useProxy, confirm_swap: deployConfirmSwap })
+                  apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', confirm_swap: deployConfirmSwap })
                     .then((r) => { if (r.task?.id) openTask(r.task.id, '部署 Vault'); })
                     .catch((ex) => setErr(ex.message))
                 }
@@ -573,7 +545,7 @@ export function VaultPage() {
                   </Link>
                 }
                 onUpgrade={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', use_proxy: useProxy, confirm: true })
+                  apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', confirm: true })
                     .then((r) => { if (r.task?.id) openTask(r.task.id, '滚动升级 Vault'); })
                     .catch((ex) => setErr(ex.message))
                 }
@@ -1666,7 +1638,7 @@ export function VaultPage() {
             e.preventDefault();
             setJoinBusy(true);
             try {
-              const r = await apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { use_proxy: useProxy, confirm_swap: confirmSwap });
+              const r = await apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { confirm_swap: confirmSwap });
               setShowJoin(false);
               if (r.task?.id) openTask(r.task.id, '扩容 Vault 节点');
             } catch (ex: any) {
@@ -1681,7 +1653,10 @@ export function VaultPage() {
             <option value="">选择主机</option>
             {nodes.filter((n) => !clusterNodes.some((m: any) => m.node_id === n.id)).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.host})</option>)}
           </Select>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={useProxy} onChange={(e) => void handleToggleProxy(e.target.checked)} />使用系统代理</label>
+          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+            <span>下载网络：{proxyEnabled ? '通过系统代理' : '直连'}</span>
+            <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">前往下载代理设置</Link>
+          </div>
           <label className="flex items-center gap-2"><input type="checkbox" checked={confirmSwap} onChange={(e) => setConfirmSwap(e.target.checked)} />确认未加密 Swap 风险</label>
           <p className="text-slate-500">加入主机使用集群当前版本，完成 Raft 加入与解封后核对投票成员状态。</p>
           <div className="flex justify-end gap-2">

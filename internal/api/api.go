@@ -370,6 +370,7 @@ func (a *API) Handler() http.Handler {
 				r.Put("/settings/proxy", a.putProxy)
 				r.Post("/settings/proxy/test", a.testProxy)
 				r.Post("/settings/proxy/reveal", a.revealProxyPassword)
+				r.Post("/settings/proxy/sync-docker", a.syncDockerProxy)
 			})
 		})
 	})

@@ -38,7 +38,7 @@ export function VersionPage() {
   const askConfirm = useConfirm();
 
   const [info, setInfo] = useState<any>(null);
-  const [useProxy, setUseProxy] = useState(false);
+  const [proxyEnabled, setProxyEnabled] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState('');
   const [checkedAt, setCheckedAt] = useState<Date | null>(null);
@@ -80,16 +80,14 @@ export function VersionPage() {
   }, []);
 
   const checkUpdate = useCallback(
-    async (proxyOverride?: boolean, clearFinished = false) => {
+    async (clearFinished = false) => {
       setChecking(true);
       setCheckError('');
       if (clearFinished && isAdmin) {
         await clearUpgradeSchedule();
       }
       try {
-        const q = new URLSearchParams({ refresh: 'true' });
-        if (proxyOverride !== undefined) q.set('use_proxy', String(proxyOverride));
-        const res = await apiGet(`/api/v1/system/version?${q.toString()}`);
+        const res = await apiGet('/api/v1/system/version?refresh=true');
         setInfo(res.system);
         setCheckedAt(new Date());
       } catch (ex: any) {
@@ -140,7 +138,7 @@ export function VersionPage() {
         setSchedule(sc);
         const activeNow = sc?.status === 'waiting' || sc?.status === 'upgrading';
         prevScheduleActiveRef.current = activeNow;
-        setUseProxy(Boolean(setRes?.settings?.['proxy.use_for_self_update']));
+        setProxyEnabled(Boolean(setRes?.settings?.['proxy.use_for_self_update']));
         if (!activeNow) {
           void checkUpdate();
         }
@@ -301,20 +299,6 @@ export function VersionPage() {
     timeout: '确认更新超时',
   }[updatePhase];
 
-  const handleToggleProxy = async (next: boolean) => {
-    if (!isAdmin) return;
-    try {
-      await apiPut('/api/v1/settings', { 'proxy.use_for_self_update': next });
-      setUseProxy(next);
-      setCheckError('');
-      toast.success(next ? '已保存：版本检查与自更新走系统代理' : '已保存：版本检查与自更新直连');
-    } catch (ex: any) {
-      const msg = ex?.message || '保存代理设置失败';
-      setCheckError(msg);
-      toast.error(msg);
-    }
-  };
-
   const runImmediateUpdate = async () => {
     const latestVer = info?.latest?.version;
     if (!info?.update_available || !latestVer || updateBusy) return;
@@ -344,7 +328,7 @@ export function VersionPage() {
     try {
       const res = await api('/api/v1/system/self-update', {
         method: 'POST',
-        body: JSON.stringify({ target_version: latestVer, use_proxy: useProxy }),
+        body: JSON.stringify({ target_version: latestVer }),
         signal: ctrl.signal,
       });
       if (submitCtrlRef.current !== ctrl) return;
@@ -372,10 +356,7 @@ export function VersionPage() {
     setScheduleBusy(true);
     setScheduleError('');
     try {
-      const res = await apiPost('/api/v1/system/self-update/schedule', {
-        ...payload,
-        use_proxy: useProxy,
-      });
+      const res = await apiPost('/api/v1/system/self-update/schedule', payload);
       setSchedule(res.schedule);
       prevScheduleActiveRef.current = true;
       setScheduleModalOpen(false);
@@ -604,7 +585,7 @@ export function VersionPage() {
               <Button
                 loading={checking}
                 disabled={updateBusy || scheduleActive}
-                onClick={() => void checkUpdate(useProxy, scheduleFinished)}
+                onClick={() => void checkUpdate(scheduleFinished)}
               >
                 {!checking && <RefreshCw className="h-3.5 w-3.5" />}
                 <span>重新检查</span>
@@ -622,16 +603,12 @@ export function VersionPage() {
               )}
             </div>
 
-            <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 select-none cursor-pointer">
-              <input
-                type="checkbox"
-                checked={useProxy}
-                disabled={!isAdmin || updateBusy}
-                onChange={(e) => void handleToggleProxy(e.target.checked)}
-                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-              />
-              <span>使用系统代理访问 GitHub（自动保存）</span>
-            </label>
+            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span>GitHub 访问：{proxyEnabled ? '通过系统代理' : '直连'}</span>
+              <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">
+                前往下载代理设置
+              </Link>
+            </div>
           </div>
 
           <ErrorAlert message={checkError} onClose={() => setCheckError('')} />
@@ -755,7 +732,7 @@ export function VersionPage() {
           )}
 
           <p className="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-            更新只替换控制面服务本身，托管中的 Nomad / Vault 集群不受影响。如勾选「使用系统代理」，版本检查与下载会经由「系统设置 → 代理」；替换前会校验 Ed25519 签名与 SHA-256、试运行新程序并在线备份数据库，保留上一版本。
+            更新只替换控制面服务本身，托管中的 Nomad / Vault 集群不受影响。版本检查与下载是否使用系统代理，可在「<Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">系统设置 → 下载代理</Link>」中按需开启；替换前会校验 Ed25519 签名与 SHA-256、试运行新程序并在线备份数据库，保留上一版本。
           </p>
         </div>
       </Card>

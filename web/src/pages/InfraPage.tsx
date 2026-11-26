@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router-dom';
 import { Activity, AlertTriangle, CheckCircle2, Copy, KeyRound, MoreHorizontal, Plus, RefreshCw, Server as ServerIcon, Trash2 } from 'lucide-react';
 import { apiDelete, apiGet, apiPost, apiPut, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { copyText as copyToClipboard } from '../lib/clipboard';
-import { canEnableSystemProxy } from '../lib/proxy';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -131,13 +131,13 @@ export function InfraPage() {
   const [dockerErr, setDockerErr] = useState('');
   const [dockerBusy, setDockerBusy] = useState(false);
   const [dockerVer, setDockerVer] = useState('');
-  const [dockerUseProxy, setDockerUseProxy] = useState(false);
+  const [dockerInstallProxyEnabled, setDockerInstallProxyEnabled] = useState(false);
+  const [dockerPullProxyEnabled, setDockerPullProxyEnabled] = useState(false);
   const [dockerDrain, setDockerDrain] = useState(false);
   const [dockerConfirm, setDockerConfirm] = useState(false);
   const [dockerAllowInterruption, setDockerAllowInterruption] = useState(false);
   const [dockerCfg, setDockerCfg] = useState({
     registry_mirrors: '',
-    use_system_proxy: false,
     proxy_url: '',
   });
 
@@ -549,7 +549,8 @@ export function InfraPage() {
     try {
       const [res, defaults] = await Promise.all([apiGet(`/api/v1/nodes/${n.id}/docker`), apiGet('/api/v1/settings')]);
       setDockerVer(defaults.settings?.['defaults.docker_version'] || '');
-      setDockerUseProxy(Boolean(defaults.settings?.['proxy.use_for_releases']));
+      setDockerInstallProxyEnabled(Boolean(defaults.settings?.['proxy.use_for_docker_install'] ?? defaults.settings?.['proxy.use_for_releases']));
+      setDockerPullProxyEnabled(Boolean(defaults.settings?.['proxy.use_for_docker_pull']));
       // Nomad's Docker driver can end tasks when the daemon connection closes.
       setDockerDrain(Boolean(res.docker?.cluster_id));
       setDockerConfirm(false);
@@ -558,8 +559,7 @@ export function InfraPage() {
       const cfg = res.docker?.host_config || res.docker?.effective || {};
       setDockerCfg({
         registry_mirrors: (cfg.registry_mirrors || []).join(','),
-        use_system_proxy: cfg.pull_proxy?.mode === 'system',
-        proxy_url: cfg.pull_proxy?.url || '',
+        proxy_url: cfg.pull_proxy?.mode === 'custom' ? (cfg.pull_proxy?.url || '') : '',
       });
     } catch (ex: any) {
       setDockerErr(ex?.message || '加载 Docker 信息失败');
@@ -575,7 +575,6 @@ export function InfraPage() {
     try {
       const res = await apiPost(`/api/v1/nodes/${dockerNode.id}/docker/${action}`, {
         version: dockerVer.trim(),
-        use_proxy: dockerUseProxy,
         drain: dockerDrain,
         confirm: dockerConfirm,
         allow_interruption: dockerAllowInterruption,
@@ -600,12 +599,10 @@ export function InfraPage() {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
+      const customURL = dockerCfg.proxy_url.trim();
       const res = await apiPut(`/api/v1/nodes/${dockerNode.id}/docker/config`, {
         registry_mirrors: mirrors,
-        pull_proxy: {
-          mode: dockerCfg.use_system_proxy ? 'system' : (dockerCfg.proxy_url.trim() ? 'custom' : 'none'),
-          url: dockerCfg.proxy_url.trim(),
-        },
+        pull_proxy: customURL ? { mode: 'custom', url: customURL } : null,
       });
       if (res.task?.id) {
         setDockerNode(null);
@@ -616,18 +613,6 @@ export function InfraPage() {
     } finally {
       setDockerBusy(false);
     }
-  };
-
-  const toggleDockerUseProxy = async (next: boolean) => {
-    if (!(await canEnableSystemProxy(next, (msg) => { setDockerErr(msg); toast.error(msg); }))) return;
-    setDockerErr('');
-    setDockerUseProxy(next);
-  };
-
-  const toggleDockerPullSystemProxy = async (next: boolean) => {
-    if (!(await canEnableSystemProxy(next, (msg) => { setDockerErr(msg); toast.error(msg); }))) return;
-    setDockerErr('');
-    setDockerCfg((prev) => ({ ...prev, use_system_proxy: next }));
   };
 
   const testDockerProxy = async () => {
@@ -1398,10 +1383,10 @@ export function InfraPage() {
                 <Button loading={dockerBusy} onClick={() => void runDockerAction('adopt')}>转为托管</Button>
               )}
             </div>
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={dockerUseProxy} onChange={(e) => void toggleDockerUseProxy(e.target.checked)} />
-              <span>安装/升级使用系统代理</span>
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
+              <span>安装/升级下载：{dockerInstallProxyEnabled ? '通过系统代理' : '直连'}</span>
+              <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">前往下载代理设置</Link>
+            </div>
             </div>
             {dockerInfo.mode !== 'absent' && <details className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
               <summary className="cursor-pointer font-medium">升级策略与中断确认</summary>
@@ -1423,28 +1408,21 @@ export function InfraPage() {
             </details>}
             {dockerInfo.mode !== 'absent' && <div className="space-y-3 rounded-xl border border-slate-200 p-4 dark:border-slate-700">
               <div className="text-sm font-semibold">镜像下载与代理</div>
-              <p className="leading-5 text-slate-500">安装包代理和镜像代理分别配置。如果无法拉取 Docker Hub 镜像，可在这里沿用系统代理。</p>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
+                <span>默认镜像拉取代理：{dockerPullProxyEnabled ? '通过系统代理' : '直连'}</span>
+                <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">在系统设置中按需开启</Link>
+              </div>
               <Input
                 label="Registry Mirrors（逗号分隔）"
                 value={dockerCfg.registry_mirrors}
                 onChange={(e) => setDockerCfg({ ...dockerCfg, registry_mirrors: e.target.value })}
               />
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={dockerCfg.use_system_proxy}
-                  onChange={(e) => void toggleDockerPullSystemProxy(e.target.checked)}
-                />
-                <span>沿用控制面系统代理作为镜像拉取代理</span>
-              </label>
-              {!dockerCfg.use_system_proxy && (
-                <Input
-                  label="自定义镜像代理 URL"
-                  placeholder="http://10.0.0.1:3128"
-                  value={dockerCfg.proxy_url}
-                  onChange={(e) => setDockerCfg({ ...dockerCfg, proxy_url: e.target.value })}
-                />
-              )}
+              <Input
+                label="自定义镜像代理 URL（可选，覆盖系统设置）"
+                placeholder="留空则跟随「系统设置 → 下载代理」，例如 http://10.0.0.1:3128"
+                value={dockerCfg.proxy_url}
+                onChange={(e) => setDockerCfg({ ...dockerCfg, proxy_url: e.target.value })}
+              />
               <div className="flex gap-2">
                 <Button variant="primary" loading={dockerBusy} onClick={() => void saveDockerCfg()}>应用守护进程配置</Button>
                 <Button disabled={dockerBusy} onClick={() => void testDockerProxy()}>从节点测试代理</Button>

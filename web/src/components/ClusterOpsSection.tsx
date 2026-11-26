@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { AlertTriangle, ArrowRight, ArrowUpCircle, CheckCircle2, Circle, KeyRound, Loader2, Server, ShieldAlert, ShieldCheck, SlidersHorizontal, Terminal, Trash2, Wrench } from 'lucide-react';
 import { apiGet, fmtTime } from '../lib/api';
 import { useOpsDrawer } from '../lib/opsDrawer';
@@ -16,8 +17,7 @@ interface ClusterOpsSectionProps {
   setDeployVer: (v: string) => void;
   upVer: string;
   setUpVer: (v: string) => void;
-  useProxy: boolean;
-  setUseProxy: (v: boolean) => void;
+  proxyEnabled: boolean;
   confirmSwap?: boolean;
   setConfirmSwap?: (v: boolean) => void;
   drainClients?: boolean;
@@ -55,8 +55,7 @@ export function ClusterOpsSection({
   setDeployVer,
   upVer,
   setUpVer,
-  useProxy,
-  setUseProxy,
+  proxyEnabled,
   confirmSwap = false,
   setConfirmSwap,
   drainClients = true,
@@ -110,7 +109,7 @@ export function ClusterOpsSection({
   const fetchVersions = async () => {
     setLoadingVersions(true);
     try {
-      const res = await apiGet(`/api/v1/releases/${product}?use_proxy=${useProxy ? 'true' : 'false'}`);
+      const res = await apiGet(`/api/v1/releases/${product}`);
       setAvailableVersions((res.versions || []).slice(0, 25));
     } catch (ex: any) {
       onError(ex?.message || `获取 ${product} 版本列表失败`);
@@ -175,10 +174,12 @@ export function ClusterOpsSection({
   );
 
   const proxyOption = (
-    <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-      <input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} />
-      通过系统代理下载
-    </label>
+    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+      <span>下载网络：{proxyEnabled ? '通过系统代理' : '直连'}</span>
+      <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">
+        前往下载代理设置
+      </Link>
+    </div>
   );
 
   const headerStatusValue = isNotDeployed

@@ -428,13 +428,24 @@ func (s *Service) PushKey(ctx context.Context, actor audit.Actor, id, password s
 	}
 	_ = s.Audit.Record(ctx, nil, ev)
 	if err != nil {
-		var mm *sshx.ErrHostKeyMismatch
-		if errors.As(err, &mm) {
-			return conflict("host_key_mismatch", "主机指纹与已信任的指纹不一致")
-		}
-		return &auth.Error{Status: 502, Code: "push_key_failed", Message: "推送公钥失败：" + err.Error()}
+		return formatPushKeyError(err)
 	}
 	return nil
+}
+
+func formatPushKeyError(err error) error {
+	var mm *sshx.ErrHostKeyMismatch
+	if errors.As(err, &mm) {
+		return conflict("host_key_mismatch", "主机指纹与已信任的指纹不一致")
+	}
+	if strings.Contains(err.Error(), "unable to authenticate") {
+		return &auth.Error{
+			Status:  502,
+			Code:    "push_key_failed",
+			Message: "推送公钥失败：SSH 密码认证被拒绝（请确认密码正确且目标主机允许密码登录；若无密码，请改用手动配置公钥）：" + err.Error(),
+		}
+	}
+	return &auth.Error{Status: 502, Code: "push_key_failed", Message: "推送公钥失败：" + err.Error()}
 }
 
 // TestResult is returned by Test.

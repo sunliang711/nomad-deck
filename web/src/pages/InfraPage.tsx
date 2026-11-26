@@ -26,6 +26,14 @@ import {
   statusTone,
 } from '../components/UI';
 
+function setupCommandForKey(k?: { public_key?: string; setup_command?: string } | null): string {
+  if (!k) return '';
+  if (k.setup_command) return k.setup_command;
+  if (!k.public_key) return '';
+  const escaped = `'${k.public_key.replace(/'/g, `'\\''`)}'`;
+  return `mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && (grep -qxF ${escaped} ~/.ssh/authorized_keys || echo ${escaped} >> ~/.ssh/authorized_keys)`;
+}
+
 export function InfraPage() {
   const { isAdmin } = useAuth();
   const { openTask } = useOpsDrawer();
@@ -35,6 +43,8 @@ export function InfraPage() {
   const [keys, setKeys] = useState<any[]>([]);
   const [nodes, setNodes] = useState<any[]>([]);
   const [err, setErr] = useState('');
+  const [nodeModalErr, setNodeModalErr] = useState('');
+  const [pushModalErr, setPushModalErr] = useState('');
   const [metricsBusy, setMetricsBusy] = useState(false);
   const [formBusy, setFormBusy] = useState(false);
 
@@ -56,8 +66,10 @@ export function InfraPage() {
     use_sudo: true,
     notes: '',
   });
+  const [oneTimePassword, setOneTimePassword] = useState('');
   const [pushNode, setPushNode] = useState<any>(null);
   const [pushPassword, setPushPassword] = useState('');
+  const [pushAndTest, setPushAndTest] = useState(true);
   const [pwResetNode, setPwResetNode] = useState<any>(null);
   const [probeWarnings, setProbeWarnings] = useState<{ node: string; warnings: string[] } | null>(null);
   const [openMenu, setOpenMenu] = useState<{ id: string; top: number; right: number } | null>(null);
@@ -143,6 +155,7 @@ export function InfraPage() {
 
   const openAddNode = () => {
     setErr('');
+    setNodeModalErr('');
     if (keys.length === 0) {
       setTab('keys');
       toast.info('请先生成或导入 SSH 密钥，再添加主机');
@@ -151,11 +164,14 @@ export function InfraPage() {
     setEditingNode(null);
     const defKey = keys.find((k) => k.is_default)?.id || keys[0]?.id || '';
     setNodeForm({ name: '', host: '', ssh_port: 22, ssh_user: 'root', ssh_key_id: defKey, use_sudo: true, notes: '' });
+    setOneTimePassword('');
+    setSaveAndTest(true);
     setShowNodeModal(true);
   };
 
   const openEditNode = (n: any) => {
     setErr('');
+    setNodeModalErr('');
     setEditingNode(n);
     setNodeForm({
       name: n.name,
@@ -166,13 +182,35 @@ export function InfraPage() {
       use_sudo: Boolean(n.use_sudo),
       notes: n.notes || '',
     });
+    setOneTimePassword('');
+    setSaveAndTest(true);
     setShowNodeModal(true);
+  };
+
+  const closeNodeModal = () => {
+    setShowNodeModal(false);
+    setOneTimePassword('');
+    setNodeModalErr('');
+  };
+
+  const openPushModal = (n: any) => {
+    setErr('');
+    setPushModalErr('');
+    setPushPassword('');
+    setPushAndTest(true);
+    setPushNode(n);
+  };
+
+  const closePushModal = () => {
+    setPushNode(null);
+    setPushPassword('');
+    setPushModalErr('');
   };
 
   const saveNode = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormBusy(true);
-    setErr('');
+    setNodeModalErr('');
     try {
       let savedNode: any = editingNode;
       if (editingNode) {
@@ -181,22 +219,54 @@ export function InfraPage() {
       } else {
         const res = await apiPost('/api/v1/nodes', nodeForm);
         savedNode = res.node;
+        if (savedNode) {
+          setEditingNode(savedNode);
+        }
       }
-      setShowNodeModal(false);
+
+      let pushed = false;
+      if (oneTimePassword !== '' && savedNode?.id) {
+        try {
+          await apiPost(`/api/v1/nodes/${savedNode.id}/push-key`, { password: oneTimePassword });
+          setOneTimePassword('');
+          pushed = true;
+        } catch (pushEx: any) {
+          await load();
+          setNodeModalErr(
+            `主机「${savedNode.name || nodeForm.name}」已保存，但${pushEx?.message || '推送公钥失败'}。请核对一次性密码重试，或留空密码改用手动配置公钥。`,
+          );
+          return;
+        }
+      }
+
+      closeNodeModal();
+
       if (saveAndTest && savedNode?.id) {
         try {
           const testRes = await apiPost(`/api/v1/nodes/${savedNode.id}/test`);
           setProbeWarnings({ node: savedNode.name || nodeForm.name, warnings: testRes.warnings || [] });
-          toast.success(`主机 ${savedNode.name || nodeForm.name} 已保存并连接成功`);
+          toast.success(
+            pushed
+              ? `主机 ${savedNode.name || nodeForm.name} 已保存、推送公钥并连接成功`
+              : `主机 ${savedNode.name || nodeForm.name} 已保存并连接成功`,
+          );
         } catch (testEx: any) {
-          toast.info(`主机已保存，暂未连通：${testEx?.message || '请先完成公钥授权或使用推送公钥'}`);
+          toast.info(
+            pushed
+              ? `主机已保存并完成公钥推送，但探测未通过：${testEx?.message || '请检查主机网络或 SSH 配置'}`
+              : `主机已保存，暂未连通：${testEx?.message || '请手动配置公钥或点击「推送公钥」后再测试连接'}`,
+          );
         }
       } else {
-        toast.success(`主机 ${nodeForm.name} 已保存`);
+        toast.success(
+          pushed
+            ? `主机 ${savedNode?.name || nodeForm.name} 已保存并推送公钥`
+            : `主机 ${savedNode?.name || nodeForm.name} 已保存`,
+        );
       }
       await load();
     } catch (ex: any) {
-      setErr(ex?.message || '保存主机失败');
+      setNodeModalErr(ex?.message || '保存主机失败');
     } finally {
       setFormBusy(false);
     }
@@ -216,16 +286,26 @@ export function InfraPage() {
   const doPushKey = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!pushNode) return;
+    const targetNode = pushNode;
     setFormBusy(true);
-    setErr('');
+    setPushModalErr('');
     try {
-      await apiPost(`/api/v1/nodes/${pushNode.id}/push-key`, { password: pushPassword });
-      setPushPassword('');
-      const name = pushNode.name;
-      setPushNode(null);
-      toast.success(`已成功推送公钥到主机 ${name}`);
+      await apiPost(`/api/v1/nodes/${targetNode.id}/push-key`, { password: pushPassword });
+      closePushModal();
+      if (pushAndTest) {
+        try {
+          const testRes = await apiPost(`/api/v1/nodes/${targetNode.id}/test`);
+          setProbeWarnings({ node: targetNode.name, warnings: testRes.warnings || [] });
+          toast.success(`已向 ${targetNode.name} 推送公钥并连接成功`);
+        } catch (testEx: any) {
+          toast.info(`已成功推送公钥到主机 ${targetNode.name}，但探测未通过：${testEx?.message || '请稍后重试测试连接'}`);
+        }
+      } else {
+        toast.success(`已成功推送公钥到主机 ${targetNode.name}`);
+      }
+      await load();
     } catch (ex: any) {
-      setErr(ex?.message || '推送公钥失败');
+      setPushModalErr(ex?.message || '推送公钥失败');
     } finally {
       setFormBusy(false);
     }
@@ -429,9 +509,7 @@ export function InfraPage() {
           {nodes.length === 0 ? (
             (() => {
               const defKey = keys.find((k) => k.is_default) || keys[0];
-              const authCmd = defKey
-                ? `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '${defKey.public_key}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`
-                : '';
+              const authCmd = setupCommandForKey(defKey);
               return (
                 <div className="space-y-6 py-2">
                   <div className="flex flex-wrap items-center justify-between gap-4">
@@ -453,7 +531,7 @@ export function InfraPage() {
                       <div className="font-semibold text-indigo-600 dark:text-indigo-300">1. 准备 SSH 授权</div>
                       <p className="leading-5 text-slate-500 dark:text-slate-400">
                         {defKey
-                          ? `已就绪默认密钥「${defKey.name}」，可直接复制下方授权命令到目标主机执行，或添加后再用密码推送公钥。`
+                          ? `已就绪默认密钥「${defKey.name}」。有密码可在新增主机时选填一次性密码自动推送；无密码请复制下方授权命令到目标机执行。`
                           : '前往「SSH 密钥库」生成或导入私钥。'}
                       </p>
                       {defKey && (
@@ -465,7 +543,7 @@ export function InfraPage() {
                     <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-4 space-y-1.5">
                       <div className="font-semibold text-indigo-600 dark:text-indigo-300">2. 登记主机地址</div>
                       <p className="leading-5 text-slate-500 dark:text-slate-400">
-                        点击右上角「新增第一台主机」，填入主机名称、IP 或域名及 SSH 用户名（如 root）。
+                        点击右上角「新增第一台主机」，填入主机名称、IP 或域名及 SSH 用户；有一次性密码也可一并填入推送公钥。
                       </p>
                     </div>
                     <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-4 space-y-1.5">
@@ -579,6 +657,11 @@ export function InfraPage() {
                       {isAdmin && (
                         <td className="py-3 text-right">
                           <div className="relative inline-flex items-center justify-end gap-1.5 whitespace-nowrap">
+                            {n.status !== 'online' && (
+                              <Button size="sm" onClick={() => openPushModal(n)}>
+                                推送公钥
+                              </Button>
+                            )}
                             <Button size="sm" onClick={() => void testNode(n)}>
                               测试连接
                             </Button>
@@ -621,7 +704,7 @@ export function InfraPage() {
                                 <button
                                   type="button"
                                   role="menuitem"
-                                  onClick={() => { setOpenMenu(null); setErr(''); setPushNode(n); }}
+                                  onClick={() => { setOpenMenu(null); openPushModal(n); }}
                                   className="w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
                                 >
                                   推送 SSH 公钥
@@ -710,7 +793,7 @@ export function InfraPage() {
                       size="sm"
                       onClick={() =>
                         copyText(
-                          `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '${k.public_key}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`,
+                          setupCommandForKey(k),
                           '已复制目标机配置命令',
                         )
                       }
@@ -797,76 +880,186 @@ export function InfraPage() {
       </Modal>
 
       {/* Create/Edit Node modal */}
-      <Modal open={showNodeModal} title={editingNode ? '编辑主机' : '新增 Linux 主机'} busy={formBusy} onClose={() => setShowNodeModal(false)}>
-        <form onSubmit={saveNode} className="space-y-3.5">
-          <ErrorAlert message={err} onClose={() => setErr('')} />
-          <Input label="主机名称" required placeholder="例如 node-1" value={nodeForm.name} onChange={(e) => setNodeForm({ ...nodeForm, name: e.target.value })} />
-          <div className="grid grid-cols-3 gap-2.5">
-            <div className="col-span-2">
-              <Input label="主机地址 (IP/域名)" required placeholder="例如 10.0.1.10" value={nodeForm.host} onChange={(e) => setNodeForm({ ...nodeForm, host: e.target.value })} />
+      {(() => {
+        const selectedKey = keys.find((k) => k.id === nodeForm.ssh_key_id) || keys.find((k) => k.is_default) || keys[0];
+        const selectedKeyCmd = setupCommandForKey(selectedKey);
+        const submitLabel =
+          oneTimePassword !== ''
+            ? saveAndTest
+              ? '保存、推送公钥并测试'
+              : '保存并推送公钥'
+            : saveAndTest
+              ? '保存并测试连接'
+              : '保存';
+        const authSetupSection = selectedKey && (
+          <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-slate-950/40">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">SSH 公钥认证准备</span>
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">支持一次性密码自动推送，或无密码手动配置</span>
             </div>
-            <Input
-              label="SSH 端口"
-              type="number"
-              min={1}
-              max={65535}
-              required
-              value={nodeForm.ssh_port}
-              onChange={(e) => setNodeForm({ ...nodeForm, ssh_port: Number(e.target.value) })}
+            <SecretInput
+              label="一次性 SSH 密码（可选，用于自动推送公钥）"
+              placeholder="有密码可在此填写；无密码或已授权请留空"
+              autoComplete="new-password"
+              resetKey={`${showNodeModal}:${editingNode?.id || 'new'}`}
+              value={oneTimePassword}
+              onChangeValue={setOneTimePassword}
+              hint="仅本次在内存中使用以写入目标主机 ~/.ssh/authorized_keys，不会保存或记入审计日志。"
             />
+            <div className="space-y-2 rounded-lg border border-slate-200/90 bg-white px-3 py-2.5 text-xs dark:border-slate-800 dark:bg-slate-900/70">
+              <p className="leading-5 text-slate-600 dark:text-slate-300">
+                {oneTimePassword !== ''
+                  ? `已填写一次性密码，保存时将自动推送密钥「${selectedKey.name}」的公钥。`
+                  : `机器没有密码或已禁用密码登录？请先在目标主机执行授权命令，或手动配置密钥「${selectedKey.name}」的公钥：`}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                <Button type="button" size="sm" onClick={() => copyText(selectedKeyCmd, '已复制目标主机授权命令')}>
+                  <Copy className="h-3 w-3" /> 复制授权命令
+                </Button>
+                <Button type="button" size="sm" onClick={() => copyText(selectedKey.public_key, '已复制公钥')}>
+                  <Copy className="h-3 w-3" /> 复制公钥
+                </Button>
+              </div>
+              <details className="pt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                <summary className="cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200">
+                  查看手动授权命令
+                </summary>
+                <code className="mt-1.5 block select-all break-all rounded-lg bg-slate-900 p-2.5 font-mono text-[11px] leading-relaxed text-slate-100 dark:bg-slate-950">
+                  {selectedKeyCmd}
+                </code>
+              </details>
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input label="SSH 用户" autoComplete="off" required placeholder="root" value={nodeForm.ssh_user} onChange={(e) => setNodeForm({ ...nodeForm, ssh_user: e.target.value })} />
-            <Select label="SSH 密钥" value={nodeForm.ssh_key_id} onChange={(e) => setNodeForm({ ...nodeForm, ssh_key_id: e.target.value })}>
-              {keys.map((k) => (
-                <option key={k.id} value={k.id}>
-                  {k.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="space-y-2 pt-0.5">
-            {nodeForm.ssh_user.trim() !== 'root' ? (
+        );
+
+        return (
+          <Modal
+            open={showNodeModal}
+            title={editingNode ? '编辑主机' : '新增 Linux 主机'}
+            busy={formBusy}
+            onClose={closeNodeModal}
+            footer={
+              <div className="flex justify-end gap-2">
+                <Button type="button" disabled={formBusy} onClick={closeNodeModal}>取消</Button>
+                <Button type="submit" form="node-form" variant="primary" loading={formBusy}>{submitLabel}</Button>
+              </div>
+            }
+          >
+            <form id="node-form" onSubmit={saveNode} className="space-y-3.5">
+              <ErrorAlert message={nodeModalErr} onClose={() => setNodeModalErr('')} />
+              <Input label="主机名称" required placeholder="例如 node-1" value={nodeForm.name} onChange={(e) => setNodeForm({ ...nodeForm, name: e.target.value })} />
+              <div className="grid grid-cols-3 gap-2.5">
+                <div className="col-span-2">
+                  <Input label="主机地址 (IP/域名)" required placeholder="例如 10.0.1.10" value={nodeForm.host} onChange={(e) => setNodeForm({ ...nodeForm, host: e.target.value })} />
+                </div>
+                <Input
+                  label="SSH 端口"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  required
+                  value={nodeForm.ssh_port}
+                  onChange={(e) => setNodeForm({ ...nodeForm, ssh_port: Number(e.target.value) })}
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Input label="SSH 用户" autoComplete="off" required placeholder="root" value={nodeForm.ssh_user} onChange={(e) => setNodeForm({ ...nodeForm, ssh_user: e.target.value })} />
+                <Select label="SSH 密钥" value={nodeForm.ssh_key_id} onChange={(e) => setNodeForm({ ...nodeForm, ssh_key_id: e.target.value })}>
+                  {keys.map((k) => (
+                    <option key={k.id} value={k.id}>
+                      {k.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              {editingNode?.status === 'online' ? (
+                <details className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+                  <summary className="cursor-pointer select-none text-xs font-medium text-slate-700 dark:text-slate-300">
+                    重新推送或手动配置 SSH 公钥（可选）
+                  </summary>
+                  <div className="mt-3">{authSetupSection}</div>
+                </details>
+              ) : (
+                authSetupSection
+              )}
+              <div className="space-y-2 pt-0.5">
+                {nodeForm.ssh_user.trim() !== 'root' ? (
+                  <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={nodeForm.use_sudo}
+                      onChange={(e) => setNodeForm({ ...nodeForm, use_sudo: e.target.checked })}
+                    />
+                    <span>使用免密 sudo（非 root 用户安装服务时需要）</span>
+                  </label>
+                ) : (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">当前使用 root 登录，将直接管理服务，无需 sudo 提权。</p>
+                )}
+                <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={saveAndTest}
+                    onChange={(e) => setSaveAndTest(e.target.checked)}
+                  />
+                  <span>保存后立即测试 SSH 连接并探测环境</span>
+                </label>
+              </div>
+              <Input label="备注（可选）" placeholder="用途说明或机房位置" value={nodeForm.notes} onChange={(e) => setNodeForm({ ...nodeForm, notes: e.target.value })} />
+            </form>
+          </Modal>
+        );
+      })()}
+
+      {/* Push key modal */}
+      {(() => {
+        const pushTargetKey = keys.find((k) => k.id === pushNode?.ssh_key_id) || keys.find((k) => k.is_default) || keys[0];
+        const pushTargetCmd = setupCommandForKey(pushTargetKey);
+        return (
+          <Modal open={Boolean(pushNode)} title={`推送公钥到 ${pushNode?.name}`} busy={formBusy} onClose={closePushModal}>
+            <form onSubmit={doPushKey} className="space-y-4">
+              <ErrorAlert message={pushModalErr} onClose={() => setPushModalErr('')} />
+              <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                使用一次性 SSH 密码将关联密钥{pushTargetKey ? `「${pushTargetKey.name}」` : ''}的公钥幂等写入目标主机 <code className="font-mono">~/.ssh/authorized_keys</code>，密码仅在内存使用，不入库、不记审计。
+              </p>
+              <SecretInput
+                label="目标主机一次性 SSH 密码"
+                required
+                autoComplete="new-password"
+                resetKey={pushNode?.id || ''}
+                value={pushPassword}
+                onChangeValue={setPushPassword}
+              />
               <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
                 <input
                   type="checkbox"
-                  checked={nodeForm.use_sudo}
-                  onChange={(e) => setNodeForm({ ...nodeForm, use_sudo: e.target.checked })}
+                  checked={pushAndTest}
+                  onChange={(e) => setPushAndTest(e.target.checked)}
                 />
-                <span>使用免密 sudo（非 root 用户安装服务时需要）</span>
+                <span>推送成功后立即测试 SSH 连接并探测环境</span>
               </label>
-            ) : (
-              <p className="text-xs text-slate-500 dark:text-slate-400">当前使用 root 登录，将直接管理服务，无需 sudo 提权。</p>
-            )}
-            <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
-              <input
-                type="checkbox"
-                checked={saveAndTest}
-                onChange={(e) => setSaveAndTest(e.target.checked)}
-              />
-              <span>保存后立即测试 SSH 连接并探测环境</span>
-            </label>
-          </div>
-          <Input label="备注（可选）" placeholder="用途说明或机房位置" value={nodeForm.notes} onChange={(e) => setNodeForm({ ...nodeForm, notes: e.target.value })} />
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" disabled={formBusy} onClick={() => setShowNodeModal(false)}>取消</Button>
-            <Button type="submit" variant="primary" loading={formBusy}>{saveAndTest ? '保存并测试连接' : '保存'}</Button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Push key modal */}
-      <Modal open={Boolean(pushNode)} title={`推送公钥到 ${pushNode?.name}`} busy={formBusy} onClose={() => setPushNode(null)}>
-        <form onSubmit={doPushKey} className="space-y-4">
-          <ErrorAlert message={err} onClose={() => setErr('')} />
-          <p className="text-xs text-slate-500">使用一次性 SSH 密码将关联公钥幂等写入目标主机 authorized_keys，密码仅在内存使用，不入库、不记审计。</p>
-          <SecretInput label="目标主机 SSH 密码" required value={pushPassword} onChangeValue={setPushPassword} />
-          <div className="flex justify-end gap-2">
-            <Button type="button" disabled={formBusy} onClick={() => setPushNode(null)}>取消</Button>
-            <Button type="submit" variant="primary" loading={formBusy}>推送公钥</Button>
-          </div>
-        </form>
-      </Modal>
+              {pushTargetKey && (
+                <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2.5 text-xs dark:border-slate-800 dark:bg-slate-950/40">
+                  <p className="text-slate-500 dark:text-slate-400">
+                    目标主机没有密码或禁用密码登录？可复制命令手动配置公钥：
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button type="button" size="sm" onClick={() => copyText(pushTargetCmd, '已复制目标主机授权命令')}>
+                      <Copy className="h-3 w-3" /> 复制授权命令
+                    </Button>
+                    <Button type="button" size="sm" onClick={() => copyText(pushTargetKey.public_key, '已复制公钥')}>
+                      <Copy className="h-3 w-3" /> 复制公钥
+                    </Button>
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button type="button" disabled={formBusy} onClick={closePushModal}>取消</Button>
+                <Button type="submit" variant="primary" loading={formBusy}>推送公钥</Button>
+              </div>
+            </form>
+          </Modal>
+        );
+      })()}
 
       {/* Docker management modal */}
       <Modal open={Boolean(dockerNode)} title={`Docker 管理：${dockerNode?.name}`} busy={dockerBusy} onClose={() => setDockerNode(null)} wide>

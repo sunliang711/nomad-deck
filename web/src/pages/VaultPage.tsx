@@ -101,6 +101,7 @@ export function VaultPage() {
   const [manageTab, setManageTab] = useState<'kv' | 'policies' | 'auth'>('kv');
   const [kvMount, setKvMount] = useState('');
   const [kvPath, setKvPath] = useState('');
+  const [kvListedDir, setKvListedDir] = useState('');
   const [kvKeys, setKvKeys] = useState<string[]>([]);
   const [kvListing, setKvListing] = useState(false);
   const [kvItem, setKvItem] = useState<{ path: string; data: string; cas: number } | null>(null);
@@ -210,12 +211,15 @@ export function VaultPage() {
       return;
     }
     setKvListing(true);
+    const normalizedDir = pathStr.trim().replace(/^\/+|\/+$/g, '');
     try {
       const r = await apiGet(`/api/v1/vault/${selectedId}/kv/list?mount=${encodeURIComponent(mountName)}&path=${encodeURIComponent(pathStr)}`);
+      setKvListedDir(normalizedDir);
       setKvKeys(r.keys || []);
     } catch (ex: any) {
       // Empty path in Vault KV v2 may return 404 when no keys exist yet.
       if (String(ex?.message || '').includes('404')) {
+        setKvListedDir(normalizedDir);
         setKvKeys([]);
       } else {
         setErr(ex?.message || '读取密钥目录失败');
@@ -256,6 +260,43 @@ export function VaultPage() {
       if (k) out[k] = row.value;
     }
     return out;
+  };
+
+  const handleDeleteKVSecret = async (targetPath: string) => {
+    const cleanTarget = targetPath.trim().replace(/^\/+|\/+$/g, '');
+    if (!selectedId || !kvMount || !cleanTarget || kvSaving) return;
+    if (
+      !(await askConfirm(
+        `确认彻底删除 Secret「${kvMount.replace(/\/+$/, '')}/${cleanTarget}」及其所有历史版本吗？删除后不可恢复。`,
+        { title: '删除 KV Secret', confirmText: '确认删除', danger: true },
+      ))
+    ) {
+      return;
+    }
+    setKvErr('');
+    setKvSaving(true);
+    try {
+      await apiDelete(
+        `/api/v1/vault/${selectedId}/kv/item?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(cleanTarget)}&mode=delete-metadata`,
+      );
+      toast.success(`Secret「${cleanTarget}」已删除`);
+      if (kvItem && kvItem.path.trim().replace(/^\/+|\/+$/g, '') === cleanTarget) {
+        setKvItem(null);
+      }
+      const parentDir = cleanTarget.includes('/') ? `${cleanTarget.slice(0, cleanTarget.lastIndexOf('/') + 1)}` : '';
+      setKvPath(parentDir);
+      await listKVKeys(kvMount, parentDir);
+    } catch (ex: any) {
+      const msg = ex?.message || '删除 Secret 失败';
+      if (kvItem) {
+        setKvErr(msg);
+      } else {
+        setErr(msg);
+      }
+      toast.error(msg);
+    } finally {
+      setKvSaving(false);
+    }
   };
 
   const loadManage = useCallback(async () => {
@@ -347,6 +388,7 @@ export function VaultPage() {
     setKvKeys([]);
     setKvMount('');
     setKvPath('');
+    setKvListedDir('');
     setGateView(null);
     setAuths([]);
     setPolicies([]);
@@ -931,6 +973,7 @@ export function VaultPage() {
                               const nextM = e.target.value;
                               setKvMount(nextM);
                               setKvPath('');
+    setKvListedDir('');
                               void listKVKeys(nextM, '');
                             }}
                           >
@@ -965,6 +1008,7 @@ export function VaultPage() {
                             type="button"
                             onClick={() => {
                               setKvPath('');
+    setKvListedDir('');
                               void listKVKeys(kvMount, '');
                             }}
                             className="font-mono font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
@@ -1002,42 +1046,58 @@ export function VaultPage() {
                           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                             {kvKeys.map((k) => {
                               const isDir = k.endsWith('/');
-                              const base = kvPath.replace(/\/+$/, '');
-                              const full = base ? `${base}/${k}` : k;
+                              const full = kvListedDir ? `${kvListedDir}/${k}` : k;
                               return (
-                                <button
+                                <div
                                   key={k}
-                                  type="button"
-                                  onClick={() => {
-                                    if (isDir) {
-                                      setKvPath(full);
-                                      void listKVKeys(kvMount, full);
-                                      return;
-                                    }
-                                    setKvPath(full);
-                                    if (!isAdmin) return;
-                                    void apiGet(`/api/v1/vault/${selectedId}/kv/item?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(full)}`)
-                                      .then((r) =>
-                                        openKVEditor({
-                                          path: full,
-                                          data: JSON.stringify(r.secret?.data || r.secret, null, 2),
-                                          cas: Number(r.secret?.metadata?.version ?? 0),
-                                        }),
-                                      )
-                                      .catch((ex) => setErr(ex.message));
-                                  }}
-                                  className="flex items-center justify-between gap-2 rounded-xl border border-slate-200/90 bg-white px-3.5 py-2.5 text-left transition hover:border-indigo-400 hover:bg-indigo-50/40 dark:border-slate-800 dark:bg-slate-900/70 dark:hover:border-indigo-500/50 dark:hover:bg-indigo-950/25"
+                                  className="flex items-center justify-between gap-1.5 rounded-xl border border-slate-200/90 bg-white pr-2 transition hover:border-indigo-400 hover:bg-indigo-50/40 dark:border-slate-800 dark:bg-slate-900/70 dark:hover:border-indigo-500/50 dark:hover:bg-indigo-950/25"
                                 >
-                                  <div className="flex items-center gap-2.5 min-w-0">
-                                    {isDir ? (
-                                      <Folder className="h-4 w-4 shrink-0 text-amber-500" />
-                                    ) : (
-                                      <KeyRound className="h-4 w-4 shrink-0 text-indigo-500" />
-                                    )}
-                                    <span className="font-mono font-medium text-slate-800 dark:text-slate-100 truncate">{k}</span>
-                                  </div>
-                                  <span className="text-[11px] text-slate-400 shrink-0">{isDir ? '进入目录' : '查看/编辑'}</span>
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (isDir) {
+                                        setKvPath(full);
+                                        void listKVKeys(kvMount, full);
+                                        return;
+                                      }
+                                      setKvPath(full);
+                                      if (!isAdmin) return;
+                                      void apiGet(`/api/v1/vault/${selectedId}/kv/item?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(full)}`)
+                                        .then((r) => {
+                                          const rawData = r.secret && 'data' in r.secret ? r.secret.data : r.secret;
+                                          openKVEditor({
+                                            path: full,
+                                            data: JSON.stringify(rawData ?? {}, null, 2),
+                                            cas: Number(r.secret?.metadata?.version ?? 0),
+                                          });
+                                        })
+                                        .catch((ex) => setErr(ex.message));
+                                    }}
+                                    className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3.5 py-2.5 text-left"
+                                  >
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      {isDir ? (
+                                        <Folder className="h-4 w-4 shrink-0 text-amber-500" />
+                                      ) : (
+                                        <KeyRound className="h-4 w-4 shrink-0 text-indigo-500" />
+                                      )}
+                                      <span className="font-mono font-medium text-slate-800 dark:text-slate-100 truncate">{k}</span>
+                                    </div>
+                                    <span className="text-[11px] text-slate-400 shrink-0">{isDir ? '进入目录' : '查看/编辑'}</span>
+                                  </button>
+                                  {!isDir && isAdmin && (
+                                    <button
+                                      type="button"
+                                      aria-label={`删除 ${k}`}
+                                      title="删除 Secret"
+                                      disabled={kvSaving}
+                                      onClick={() => void handleDeleteKVSecret(full)}
+                                      className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40 dark:hover:bg-rose-950/50 dark:hover:text-rose-400"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                </div>
                               );
                             })}
                           </div>
@@ -1477,12 +1537,26 @@ export function VaultPage() {
                 </div>
               );
             })()}
-            <div className="flex justify-end gap-2 pt-1">
-              <Button type="button" disabled={kvSaving} onClick={() => { setKvItem(null); setKvErr(''); }}>关闭</Button>
-              <Button
-                variant="primary"
-                loading={kvSaving}
-                onClick={async () => {
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <div>
+                {kvItem.cas > 0 && (
+                  <Button
+                    type="button"
+                    variant="danger-outline"
+                    disabled={kvSaving}
+                    onClick={() => void handleDeleteKVSecret(kvItem.path)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>删除 Secret</span>
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button type="button" disabled={kvSaving} onClick={() => { setKvItem(null); setKvErr(''); }}>关闭</Button>
+                <Button
+                  variant="primary"
+                  loading={kvSaving}
+                  onClick={async () => {
                   const targetPath = kvItem.path.trim().replace(/^\/+|\/+$/g, '');
                   if (!targetPath) {
                     setKvErr('请填写 Secret 路径，例如 apps/postgres');
@@ -1525,6 +1599,7 @@ export function VaultPage() {
               >
                 保存 Secret
               </Button>
+              </div>
             </div>
           </div>
         )}
@@ -1555,6 +1630,7 @@ export function VaultPage() {
                 setKvItem(null);
                 setKvKeys([]);
                 setKvPath('');
+    setKvListedDir('');
                 setShowKVMount(false);
                 toast.success('KV v2 挂载已启用');
               })

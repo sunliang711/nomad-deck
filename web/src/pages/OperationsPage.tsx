@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, Terminal } from 'lucide-react';
 import { apiGet, fmtTime } from '../lib/api';
 import { useOpsDrawer } from '../lib/opsDrawer';
-import { formatActionLabel, formatTaskDuration, isTaskActiveStatus } from '../lib/actionLabels';
+import { formatActionLabel, formatTaskDuration, isTaskActiveStatus, isTaskFailureStatus } from '../lib/actionLabels';
 import { Button, EmptyState, ErrorAlert, LoadingState, PageHeader, StatusBadge } from '../components/UI';
 import { FilterSelect } from '../components/FilterControls';
 
@@ -12,7 +12,7 @@ export function OperationsPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [err, setErr] = useState('');
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const { openTask, runningCount, unreadCount, markAllRead } = useOpsDrawer();
+  const { openTask, runningCount, unreadCount, readIds, markTaskRead, markAllRead } = useOpsDrawer();
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -113,11 +113,27 @@ export function OperationsPage() {
             )}
             {ops.map((t) => {
               const active = isTaskActiveStatus(t.status);
+              const failed = isTaskFailureStatus(t.status);
+              const isUnread = failed && !readIds.has(t.id);
               const label = formatActionLabel(t.action);
               return (
-                <tr key={t.id}>
+                <tr key={t.id} className={isUnread ? 'bg-rose-50/40 dark:bg-rose-950/15' : ''}>
                   <td className="px-4 py-3">
-                    <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{label}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-slate-900 dark:text-slate-100">{label}</span>
+                      {failed && (
+                        isUnread ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
+                            <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                            未读
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                            已读
+                          </span>
+                        )
+                      )}
+                    </div>
                     <div className="font-mono text-[11px] text-slate-400">{t.action}</div>
                     {t.error_message && (
                       <div className="text-[11px] text-rose-600 dark:text-rose-400 mt-0.5 max-w-md break-words">
@@ -139,10 +155,17 @@ export function OperationsPage() {
                     {formatTaskDuration(t.started_at, t.finished_at, t.created_at, nowMs)}
                   </td>
                   <td className="px-4 py-3 text-right whitespace-nowrap">
-                    <Button size="sm" onClick={() => openTask(t.id, label)}>
-                      <Terminal className="h-3.5 w-3.5" />
-                      <span>{active ? '查看进度' : '查看详情'}</span>
-                    </Button>
+                    <div className="inline-flex items-center justify-end gap-1.5">
+                      {isUnread && (
+                        <Button size="sm" onClick={() => markTaskRead(t.id)}>
+                          标为已读
+                        </Button>
+                      )}
+                      <Button size="sm" onClick={() => openTask(t.id, label)}>
+                        <Terminal className="h-3.5 w-3.5" />
+                        <span>{active ? '查看进度' : '查看详情'}</span>
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               );

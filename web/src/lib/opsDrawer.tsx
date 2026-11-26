@@ -32,11 +32,13 @@ interface OpsDrawerCtx {
   tasks: OperationSummary[];
   runningCount: number;
   unreadCount: number;
+  readIds: Set<string>;
   loadingTasks: boolean;
   openTask: (taskId: string, title?: string) => void;
   openTaskList: () => void;
   openNodeLogs: (clusterId: string, nodeId: string, title?: string) => void;
   refreshTasks: () => Promise<void>;
+  markTaskRead: (taskId: string) => void;
   markAllRead: () => void;
   close: () => void;
 }
@@ -45,11 +47,13 @@ const Ctx = createContext<OpsDrawerCtx>({
   tasks: [],
   runningCount: 0,
   unreadCount: 0,
+  readIds: new Set(),
   loadingTasks: false,
   openTask: () => {},
   openTaskList: () => {},
   openNodeLogs: () => {},
   refreshTasks: async () => {},
+  markTaskRead: () => {},
   markAllRead: () => {},
   close: () => {},
 });
@@ -60,6 +64,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
   const toast = useToast();
 
   const [target, setTarget] = useState<DrawerTarget | null>(null);
+  const [listFilter, setListFilter] = useState<'all' | 'unread'>('all');
   const [tasks, setTasks] = useState<OperationSummary[]>([]);
   const [loadingTasks, setLoadingTasks] = useState(false);
   const [readIds, setReadIds] = useState<Set<string>>(new Set());
@@ -76,20 +81,31 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
   const knownStatusRef = useRef<Map<string, string>>(new Map());
   const trackedRef = useRef<Set<string>>(new Set());
   const deliveredRef = useRef<Set<string>>(new Set());
+  const targetRef = useRef<DrawerTarget | null>(null);
+  const tasksRef = useRef<OperationSummary[]>([]);
+  const readIdsRef = useRef<Set<string>>(new Set());
+
+  targetRef.current = target;
+  tasksRef.current = tasks;
 
   const storageKey = `nd_ops_read:${user?.username || 'anon'}`;
 
   useEffect(() => {
     try {
       const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
-      setReadIds(new Set(Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []));
+      const next = new Set(Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []);
+      readIdsRef.current = next;
+      setReadIds(next);
     } catch {
-      setReadIds(new Set());
+      const empty = new Set<string>();
+      readIdsRef.current = empty;
+      setReadIds(empty);
     }
   }, [storageKey]);
 
   const persistRead = useCallback(
     (next: Set<string>) => {
+      readIdsRef.current = next;
       setReadIds(next);
       try {
         localStorage.setItem(storageKey, JSON.stringify([...next].slice(-500)));
@@ -103,7 +119,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
   const markRead = useCallback(
     (ids: string[]) => {
       if (!ids.length) return;
-      const next = new Set(readIds);
+      const next = new Set(readIdsRef.current);
       let changed = false;
       for (const id of ids) {
         if (!next.has(id)) {
@@ -113,8 +129,10 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
       }
       if (changed) persistRead(next);
     },
-    [persistRead, readIds],
+    [persistRead],
   );
+
+  const markTaskRead = useCallback((taskId: string) => markRead([taskId]), [markRead]);
 
   const refreshTasks = useCallback(async () => {
     if (!authenticated) return;
@@ -122,6 +140,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
     try {
       const res = await apiGet<{ operations: OperationSummary[] }>('/api/v1/operations?limit=50');
       const list = res.operations || [];
+      tasksRef.current = list;
       setTasks(list);
 
       const known = knownStatusRef.current;
@@ -133,6 +152,13 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
         if (doneNow && !deliveredRef.current.has(item.id) && (trackedRef.current.has(item.id) || activeBefore)) {
           deliveredRef.current.add(item.id);
           trackedRef.current.delete(item.id);
+          const viewingThisTask = targetRef.current?.kind === 'task' && targetRef.current.taskId === item.id;
+          if (viewingThisTask) {
+            if (isTaskFailureStatus(item.status)) {
+              markRead([item.id]);
+            }
+            continue;
+          }
           const label = formatActionLabel(item.action);
           const viewAction = {
             label: '查看详情',
@@ -150,7 +176,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoadingTasks(false);
     }
-  }, [authenticated, toast]);
+  }, [authenticated, markRead, toast]);
 
   const runningCount = useMemo(
     () => tasks.filter((t) => isTaskActiveStatus(t.status)).length,
@@ -194,8 +220,18 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
       markRead([target.taskId]);
       void apiGet<{ operation: OperationSummary; steps: any[] }>(`/api/v1/operations/${target.taskId}`)
         .then((res) => {
-          setDetailTask(res.operation || null);
-          setTaskStatus(res.operation?.status || '');
+          const op = res.operation || null;
+          const st = op?.status || '';
+          if (st) {
+            knownStatusRef.current.set(target.taskId, st);
+            if (!isTaskActiveStatus(st)) {
+              deliveredRef.current.add(target.taskId);
+              trackedRef.current.delete(target.taskId);
+              if (isTaskFailureStatus(st)) markRead([target.taskId]);
+            }
+          }
+          setDetailTask(op);
+          setTaskStatus(st);
           setSteps(
             (res.steps || []).map((s) => ({
               id: s.id,
@@ -223,12 +259,18 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
           } else if (ev === 'log' && data?.data) {
             setLogs((prev) => prev + data.data);
           } else if (ev === 'done' && data) {
-            setTaskStatus(data.status || 'done');
+            const doneStatus = data.status || 'done';
+            deliveredRef.current.add(target.taskId);
+            trackedRef.current.delete(target.taskId);
+            if (isTaskFailureStatus(doneStatus)) {
+              markRead([target.taskId]);
+            }
+            setTaskStatus(doneStatus);
             setDetailTask((prev) =>
-              prev ? { ...prev, status: data.status || prev.status, error_message: data.error || prev.error_message, finished_at: new Date().toISOString() } : prev,
+              prev ? { ...prev, status: doneStatus || prev.status, error_message: data.error || prev.error_message, finished_at: new Date().toISOString() } : prev,
             );
             if (data.error) {
-              setLogs((prev) => prev + `\n[完成: ${data.status}] ${data.error}\n`);
+              setLogs((prev) => prev + `\n[完成: ${doneStatus}] ${data.error}\n`);
             }
             void refreshTasks();
             stop?.();
@@ -267,14 +309,24 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
 
   const openTask = useCallback(
     (taskId: string, title?: string) => {
-      trackedRef.current.add(taskId);
+      const known = knownStatusRef.current.get(taskId) || tasksRef.current.find((t) => t.id === taskId)?.status;
+      if (known && !isTaskActiveStatus(known)) {
+        deliveredRef.current.add(taskId);
+        trackedRef.current.delete(taskId);
+        if (isTaskFailureStatus(known)) {
+          markRead([taskId]);
+        }
+      } else {
+        trackedRef.current.add(taskId);
+      }
       setTarget({ kind: 'task', taskId, title });
       void refreshTasks();
     },
-    [refreshTasks],
+    [markRead, refreshTasks],
   );
 
   const openTaskList = useCallback(() => {
+    setListFilter('all');
     setTarget({ kind: 'list' });
     void refreshTasks();
   }, [refreshTasks]);
@@ -286,6 +338,12 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
   const close = useCallback(() => setTarget(null), []);
 
   const markAllRead = useCallback(() => markRead(unreadIds), [markRead, unreadIds]);
+
+  const unreadSet = useMemo(() => new Set(unreadIds), [unreadIds]);
+  const displayedTasks = useMemo(
+    () => (listFilter === 'unread' ? tasks.filter((t) => unreadSet.has(t.id)) : tasks),
+    [listFilter, tasks, unreadSet],
+  );
 
   const handleCopyLogs = async () => {
     if (!logs) return;
@@ -333,11 +391,13 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
         tasks,
         runningCount,
         unreadCount: unreadIds.length,
+        readIds,
         loadingTasks,
         openTask,
         openTaskList,
         openNodeLogs,
         refreshTasks,
+        markTaskRead,
         markAllRead,
         close,
       }}
@@ -419,36 +479,130 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
             tasks.length === 0 ? (
               <EmptyState title="暂无运维任务记录" description="发起集群部署、升级或节点维护操作后，这里会实时展示任务进度。" />
             ) : (
-              tasks.slice(0, 20).map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => openTask(t.id, formatActionLabel(t.action))}
-                  className="w-full text-left rounded-xl border border-slate-200/80 dark:border-slate-800 p-3.5 hover:border-indigo-400 hover:bg-indigo-50/30 dark:hover:bg-indigo-500/5 transition space-y-1.5"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-sm text-slate-900 dark:text-slate-100 truncate">
-                        {formatActionLabel(t.action)}
-                      </div>
-                      <div className="font-mono text-[11px] text-slate-400 truncate">
-                        {t.action} · {t.target_type}:{t.target_id}
-                      </div>
-                    </div>
-                    <StatusBadge value={t.status} />
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 px-3 py-2">
+                  <div className="inline-flex items-center gap-1 rounded-lg bg-white dark:bg-slate-900 p-0.5 border border-slate-200/80 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setListFilter('all')}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                        listFilter === 'all'
+                          ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300'
+                          : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      全部 ({tasks.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setListFilter('unread')}
+                      className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                        listFilter === 'unread'
+                          ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300'
+                          : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      <span>未读异常</span>
+                      {unreadIds.length > 0 && (
+                        <span className="inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[10px] font-semibold">
+                          {unreadIds.length}
+                        </span>
+                      )}
+                    </button>
                   </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap gap-x-3 gap-y-0.5">
-                    <span>触发人：{t.triggered_by || '-'}</span>
-                    <span>开始：{fmtTime(t.started_at || t.created_at)}</span>
-                    <span>耗时：{formatTaskDuration(t.started_at, t.finished_at, t.created_at, nowMs)}</span>
-                  </div>
-                  {t.error_message && (
-                    <div className="text-xs text-rose-600 dark:text-rose-400 line-clamp-2 break-words">
-                      {t.error_message}
-                    </div>
+                  {unreadIds.length > 0 ? (
+                    <Button size="sm" onClick={markAllRead}>
+                      全部标为已读 ({unreadIds.length})
+                    </Button>
+                  ) : (
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500">所有异常已阅</span>
                   )}
-                </button>
-              ))
+                </div>
+
+                {displayedTasks.length === 0 ? (
+                  <EmptyState
+                    title="没有未读异常任务"
+                    description="所有失败或待核对任务均已阅读，点击「全部」可查看历史记录。"
+                    action={
+                      <Button size="sm" onClick={() => setListFilter('all')}>
+                        查看全部任务
+                      </Button>
+                    }
+                  />
+                ) : (
+                  <div role="list" className="space-y-2.5">
+                    {displayedTasks.map((t) => {
+                      const failed = isTaskFailureStatus(t.status);
+                      const isUnread = failed && !readIds.has(t.id);
+                      const label = formatActionLabel(t.action);
+                      return (
+                        <div
+                          key={t.id}
+                          role="listitem"
+                          className={`rounded-xl border transition p-3.5 space-y-2 ${
+                            isUnread
+                              ? 'border-rose-200/90 border-l-4 border-l-rose-500 bg-rose-50/45 dark:border-rose-500/35 dark:border-l-rose-500 dark:bg-rose-950/20'
+                              : 'border-slate-200/80 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-500/40'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => openTask(t.id, label)}
+                            className="w-full text-left space-y-1.5 group focus:outline-none"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-sm text-slate-900 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 truncate">
+                                    {label}
+                                  </span>
+                                  {failed &&
+                                    (isUnread ? (
+                                      <span className="inline-flex items-center gap-1 shrink-0 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                                        未读
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                                        已读
+                                      </span>
+                                    ))}
+                                </div>
+                                <div className="font-mono text-[11px] text-slate-400 truncate">
+                                  {t.action} · {t.target_type}:{t.target_id}
+                                </div>
+                              </div>
+                              <StatusBadge value={t.status} />
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap gap-x-3 gap-y-0.5">
+                              <span>触发人：{t.triggered_by || '-'}</span>
+                              <span>开始：{fmtTime(t.started_at || t.created_at)}</span>
+                              <span>耗时：{formatTaskDuration(t.started_at, t.finished_at, t.created_at, nowMs)}</span>
+                            </div>
+                            {t.error_message && (
+                              <div className="text-xs text-rose-600 dark:text-rose-400 line-clamp-2 break-words">
+                                {t.error_message}
+                              </div>
+                            )}
+                          </button>
+                          {isUnread && (
+                            <div className="flex items-center justify-end pt-1 border-t border-rose-200/60 dark:border-rose-500/20">
+                              <button
+                                type="button"
+                                onClick={() => markTaskRead(t.id)}
+                                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100/80 dark:text-rose-300 dark:hover:bg-rose-500/20 transition"
+                              >
+                                <Check className="w-3 h-3" />
+                                <span>标为已读</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             )
           ) : (
             <>

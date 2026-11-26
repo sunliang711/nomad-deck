@@ -66,6 +66,17 @@ const BUILTIN_DESCRIPTIONS: Record<string, string> = {
   cleanup_operation_logs: '按系统设置保留天数清理过期的异步运维任务日志。',
 };
 
+const OVERLAP_LABELS: Record<string, string> = {
+  skip_if_running: '运行中跳过',
+  allow_concurrent: '允许并发',
+  queue_one: '排队一次',
+};
+
+const MISFIRE_LABELS: Record<string, string> = {
+  skip: '漏过不补',
+  run_once: '补跑一次',
+};
+
 function formatDuration(startedAt: string, finishedAt?: string): string {
   if (!finishedAt || finishedAt.startsWith('0001-01-01')) return '';
   const ms = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
@@ -571,9 +582,9 @@ export function CronPage() {
                         {j.cron_expr}
                       </code>
                     </td>
-                    <td className="px-4 py-3.5 align-top text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                      <div>{j.overlap_policy}</div>
-                      <div className="text-[11px] text-slate-400">{j.misfire_policy}</div>
+                    <td className="px-4 py-3.5 align-top text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                      <div>{OVERLAP_LABELS[j.overlap_policy] || j.overlap_policy}</div>
+                      <div className="text-[11px] text-slate-400">{MISFIRE_LABELS[j.misfire_policy] || j.misfire_policy}</div>
                     </td>
                     <td className="px-4 py-3.5 align-top text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">
                       {nextTime ? fmtTime(nextTime) : <span className="text-slate-400">—</span>}

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Boxes, Plus, RefreshCw } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Boxes, FileCode2, Plus, RefreshCw } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useOpsDrawer } from '../lib/opsDrawer';
@@ -385,6 +385,17 @@ export function NomadPage() {
                   apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, {})
                     .then((r) => { if (r.task?.id) openTask(r.task.id, `缩容节点: ${n.name}`); })
                     .catch((ex) => setErr(ex.message))
+                }
+                quickActions={
+                  <>
+                    <Button size="sm" onClick={() => setTab('workbench')}>
+                      运行态工作台
+                    </Button>
+                    <Link to="/jobs" className="primary-button">
+                      <FileCode2 className="h-3.5 w-3.5" />
+                      <span>前往 Job 中心</span>
+                    </Link>
+                  </>
                 }
                 onError={setErr}
               />

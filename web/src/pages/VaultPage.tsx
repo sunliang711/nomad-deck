@@ -22,6 +22,7 @@ import {
   SectionTabs,
   Select,
   StatusBadge,
+  Switch,
   TermLabel,
   statusTone,
 } from '../components/UI';
@@ -221,8 +222,9 @@ export function VaultPage() {
   }, [selectedId, loadDetail]);
 
   useEffect(() => {
+    if (selectedId && tab === 'status') void loadDetail();
     if (selectedId && tab === 'manage') void loadManage();
-  }, [selectedId, tab, loadManage]);
+  }, [selectedId, tab, loadDetail, loadManage]);
 
   const clusterNodes = status?.nodes || [];
   const custody = custodyData || {};
@@ -338,6 +340,21 @@ export function VaultPage() {
                     .then((r) => { if (r.task?.id) openTask(r.task.id, '部署 Vault'); })
                     .catch((ex) => setErr(ex.message))
                 }
+                onInitVault={() =>
+                  apiPost(`/api/v1/vault/${selectedId}/init`, { key_shares: 5, key_threshold: 3 })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, '初始化 Vault 托管'); })
+                    .catch((ex) => setErr(ex.message))
+                }
+                quickActions={
+                  <>
+                    <Button size="sm" onClick={() => setTab('custody')}>
+                      密钥托管
+                    </Button>
+                    <Button size="sm" variant="primary" onClick={() => { setTab('manage'); void loadManage(); }}>
+                      Auth / Policy / KV
+                    </Button>
+                  </>
+                }
                 onUpgrade={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', use_proxy: useProxy, confirm: true })
                     .then((r) => { if (r.task?.id) openTask(r.task.id, '滚动升级 Vault'); })
@@ -399,144 +416,225 @@ export function VaultPage() {
             </div>
           )}
 
-          {tab === 'custody' && (
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-              <Card title="托管状态与控制">
-                <div className="space-y-3 text-xs">
-                  <div><TermLabel term="当前代际" tip="每次执行 Rekey 会生成新的密钥代际（Generation），旧代际历史仅保留审计轨迹。" />：{custody.seal_generation ?? '-'}</div>
-                  <div>
-                    <TermLabel term="自动解封" tip="开启后控制面在巡检发现 Vault 节点被密封时自动下发托管分片完成 Unseal。" />：
-                    <Badge tone={custody.auto_unseal_by_deck ? 'green' : 'amber'}>{custody.auto_unseal_by_deck ? '开启' : '关闭'}</Badge>
-                  </div>
-                  {isAdmin && <Button size="sm" onClick={() => void apiPut(`/api/v1/vault/${selectedId}/custody`, { auto_unseal_by_deck: !custody.auto_unseal_by_deck }).then(() => loadDetail()).catch((ex) => setErr(ex.message))}>{custody.auto_unseal_by_deck ? '关闭自动解封' : '开启自动解封'}</Button>}
-                  {custody.unseal_suppressed_reason && (
-                    <div className="rounded bg-amber-50 p-2 text-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
-                      抑制原因：{custody.unseal_suppressed_reason}
-                      {isAdmin && <Button size="sm" onClick={() => setPwAction({ title: '解除自动解封抑制', run: async (pw) => { await apiPut(`/api/v1/vault/${selectedId}/custody`, { clear_suppression: true, current_password: pw }); await loadDetail(); } })}>解除抑制</Button>}
-                    </div>
-                  )}
-                  <div><TermLabel term="运维 Token 到期" tip="控制面持有的定期续期管理员 Token（非永久 Root Token），用于日常策略/KV 管理。" />：{fmtTime(custody.admin_token_expires_at)}</div>
-                  {isAdmin && (
-                    <div className="flex flex-wrap gap-2 pt-2">
-                      <Button variant="primary" onClick={() => void apiPost(`/api/v1/vault/${selectedId}/init`, { key_shares: 5, key_threshold: 3 }).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>
-                        初始化托管
-                      </Button>
-                      <Button onClick={() => void apiPost(`/api/v1/vault/${selectedId}/unseal`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>
-                        <Unlock className="h-3.5 w-3.5" /> 全集群解封
-                      </Button>
-                      <Button
-                        variant="danger"
-                        onClick={async () => {
-                          if (!(await askConfirm('确定要安全封存整个 Vault 集群吗？封存后将暂停对外提供密钥读写服务。', { title: '封存 Vault 集群', confirmText: '确认封存', danger: true }))) return;
-                          void apiPost(`/api/v1/vault/${selectedId}/seal`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message));
-                        }}
-                      >
-                        <Lock className="h-3.5 w-3.5" /> 安全封存
-                      </Button>
-                      <Button
-                        onClick={() =>
-                          setPwAction({
-                            title: '确认执行 Vault Rekey 密钥轮换',
-                            run: async (pw) => {
-                              const r = await apiPost(`/api/v1/vault/${selectedId}/rekey`, { current_password: pw });
-                              if (r.task?.id) openTask(r.task.id, 'Vault Rekey');
-                            },
-                          })
-                        }
-                      >
-                        Rekey 轮换
-                      </Button>
-                      <Button
-                        onClick={() =>
-                          setPwAction({
-                            title: '确认应急重签 Vault 运维 Token',
-                            run: async (pw) => {
-                              const r = await apiPost(`/api/v1/vault/${selectedId}/custody/recover-token`, { current_password: pw });
-                              if (r.task?.id) openTask(r.task.id, '重签 Vault 运维 Token');
-                            },
-                          })
-                        }
-                      >
-                        应急重签运维 Token
-                      </Button>
-                      <Button
-                        onClick={() =>
-                          setPwAction({
-                            title: '签发临时 Root Token（使用托管解封密钥重建）',
-                            run: async (pw) => {
-                              const r = await apiPost(`/api/v1/vault/${selectedId}/root-token`, { current_password: pw });
-                              setRootToken(r.root_token || '');
-                              toast.info('已签发临时 Root Token，使用完毕后请及时吊销');
-                            },
-                          })
-                        }
-                      >
-                        签发临时 Root Token
-                      </Button>
-                      <Button
-                        onClick={() => {
-                          setDlPw('');
-                          setDlPass('');
-                          setDlErr('');
-                          setDlModal({
-                            title: '导出 Vault 离线紧急备份 (.ndvkb)',
-                            run: async (pw, passphrase) => {
-                              await apiDownload(`/api/v1/vault/${selectedId}/custody/backup`, { current_password: pw, passphrase }, `${cluster.name}.ndvkb`);
-                            },
-                          });
-                        }}
-                      >
-                        导出离线备份
-                      </Button>
-                    </div>
-                  )}
-
-                  {rootToken && (
-                    <div className="space-y-2 pt-2">
-                      <MaskedSecret
-                        value={rootToken}
-                        label={<TermLabel term="临时 Root Token（控制面不落盘保存，请用后及时吊销）" tip="通过 Vault sys/generate-root 与托管 Unseal Key 动态重建的 Root Token，可用于登录 Vault 原生 Web UI 或执行高危恢复操作。" />}
-                      />
-                      {isAdmin && (
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={() =>
-                              void apiPost(`/api/v1/vault/${selectedId}/root-token/revoke`, { token: rootToken })
+          {tab === 'custody' && (() => {
+            const isInitialized = (status?.init_state || cluster.init_state) === 'initialized';
+            return (
+              <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+                <Card title="托管状态与日常解封">
+                  <div className="space-y-5 text-xs">
+                    <dl className="grid grid-cols-[auto_1fr] items-center gap-x-6 gap-y-3 rounded-xl border border-slate-200/80 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                      <dt className="text-slate-500">
+                        <TermLabel term="当前代际" tip="每次执行 Rekey 会生成新的密钥代际（Generation），旧代际历史仅保留审计轨迹。" />
+                      </dt>
+                      <dd className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                        {custody.seal_generation ? `#${custody.seal_generation}` : '尚未初始化'}
+                      </dd>
+                      <dt className="text-slate-500">
+                        <TermLabel term="自动解封" tip="开启后控制面在巡检发现 Vault 节点被密封时自动下发托管分片完成 Unseal。" />
+                      </dt>
+                      <dd className="flex items-center gap-2.5">
+                        {isAdmin ? (
+                          <Switch
+                            checked={Boolean(custody.auto_unseal_by_deck)}
+                            label="自动解封开关"
+                            onChange={(next) =>
+                              void apiPut(`/api/v1/vault/${selectedId}/custody`, { auto_unseal_by_deck: next })
                                 .then(() => {
-                                  setRootToken('');
-                                  toast.success('临时 Root Token 已向 Vault 吊销');
+                                  toast.success(next ? '已开启自动解封' : '已关闭自动解封');
+                                  return loadDetail();
                                 })
                                 .catch((ex) => setErr(ex.message))
                             }
+                          />
+                        ) : null}
+                        <Badge tone={custody.auto_unseal_by_deck ? 'green' : 'amber'}>
+                          {custody.auto_unseal_by_deck ? '已开启' : '已关闭'}
+                        </Badge>
+                      </dd>
+                      <dt className="text-slate-500">
+                        <TermLabel term="运维 Token 到期" tip="控制面持有的定期续期管理员 Token（非永久 Root Token），用于日常策略/KV 管理。" />
+                      </dt>
+                      <dd className="text-slate-700 dark:text-slate-200">{fmtTime(custody.admin_token_expires_at)}</dd>
+                    </dl>
+
+                    {custody.unseal_suppressed_reason && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-800 dark:border-amber-500/30 dark:bg-amber-950/50 dark:text-amber-200">
+                        <span>抑制原因：{custody.unseal_suppressed_reason}</span>
+                        {isAdmin && (
+                          <Button
+                            size="sm"
+                            onClick={() =>
+                              setPwAction({
+                                title: '解除自动解封抑制',
+                                run: async (pw) => {
+                                  await apiPut(`/api/v1/vault/${selectedId}/custody`, { clear_suppression: true, current_password: pw });
+                                  await loadDetail();
+                                },
+                              })
+                            }
                           >
-                            吊销 Root Token
+                            解除抑制
                           </Button>
-                          <Button size="sm" onClick={() => setRootToken('')}>隐藏卡片</Button>
+                        )}
+                      </div>
+                    )}
+
+                    {isAdmin && (
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <div className="font-semibold text-slate-800 dark:text-slate-100">初始化与密封控制</div>
+                          <div className="flex flex-wrap gap-2">
+                            {!isInitialized && (
+                              <Button
+                                variant="primary"
+                                onClick={() =>
+                                  void apiPost(`/api/v1/vault/${selectedId}/init`, { key_shares: 5, key_threshold: 3 })
+                                    .then((r) => r.task?.id && openTask(r.task.id, '初始化 Vault 托管'))
+                                    .catch((ex) => setErr(ex.message))
+                                }
+                              >
+                                一键初始化托管
+                              </Button>
+                            )}
+                            <Button
+                              disabled={!isInitialized}
+                              onClick={() =>
+                                void apiPost(`/api/v1/vault/${selectedId}/unseal`, {})
+                                  .then((r) => r.task?.id && openTask(r.task.id, '解封 Vault 集群'))
+                                  .catch((ex) => setErr(ex.message))
+                              }
+                            >
+                              <Unlock className="h-3.5 w-3.5" /> 全集群解封
+                            </Button>
+                            <Button
+                              variant="danger"
+                              disabled={!isInitialized}
+                              onClick={async () => {
+                                if (!(await askConfirm('确定要安全封存整个 Vault 集群吗？封存后将暂停对外提供密钥读写服务。', { title: '封存 Vault 集群', confirmText: '确认封存', danger: true }))) return;
+                                void apiPost(`/api/v1/vault/${selectedId}/seal`, {})
+                                  .then((r) => r.task?.id && openTask(r.task.id, '封存 Vault 集群'))
+                                  .catch((ex) => setErr(ex.message));
+                              }}
+                            >
+                              <Lock className="h-3.5 w-3.5" /> 安全封存
+                            </Button>
+                          </div>
                         </div>
-                      )}
+
+                        <div className="border-t border-slate-200 pt-3.5 space-y-2 dark:border-slate-800">
+                          <div className="font-semibold text-slate-800 dark:text-slate-100">密钥轮换与应急凭据</div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              disabled={!isInitialized}
+                              onClick={() =>
+                                setPwAction({
+                                  title: '确认执行 Vault Rekey 密钥轮换',
+                                  run: async (pw) => {
+                                    const r = await apiPost(`/api/v1/vault/${selectedId}/rekey`, { current_password: pw });
+                                    if (r.task?.id) openTask(r.task.id, 'Vault Rekey');
+                                  },
+                                })
+                              }
+                            >
+                              Rekey 轮换
+                            </Button>
+                            <Button
+                              disabled={!isInitialized}
+                              onClick={() =>
+                                setPwAction({
+                                  title: '确认应急重签 Vault 运维 Token',
+                                  run: async (pw) => {
+                                    const r = await apiPost(`/api/v1/vault/${selectedId}/custody/recover-token`, { current_password: pw });
+                                    if (r.task?.id) openTask(r.task.id, '重签 Vault 运维 Token');
+                                  },
+                                })
+                              }
+                            >
+                              应急重签运维 Token
+                            </Button>
+                            <Button
+                              disabled={!isInitialized}
+                              onClick={() =>
+                                setPwAction({
+                                  title: '签发临时 Root Token（使用托管解封密钥重建）',
+                                  run: async (pw) => {
+                                    const r = await apiPost(`/api/v1/vault/${selectedId}/root-token`, { current_password: pw });
+                                    setRootToken(r.root_token || '');
+                                    toast.info('已签发临时 Root Token，使用完毕后请及时吊销');
+                                  },
+                                })
+                              }
+                            >
+                              签发临时 Root Token
+                            </Button>
+                            <Button
+                              disabled={!isInitialized}
+                              onClick={() => {
+                                setDlPw('');
+                                setDlPass('');
+                                setDlErr('');
+                                setDlModal({
+                                  title: '导出 Vault 离线紧急备份 (.ndvkb)',
+                                  run: async (pw, passphrase) => {
+                                    await apiDownload(`/api/v1/vault/${selectedId}/custody/backup`, { current_password: pw, passphrase }, `${cluster.name}.ndvkb`);
+                                  },
+                                });
+                              }}
+                            >
+                              导出离线备份
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {rootToken && (
+                      <div className="space-y-2 pt-2">
+                        <MaskedSecret
+                          value={rootToken}
+                          label={<TermLabel term="临时 Root Token（控制面不落盘保存，请用后及时吊销）" tip="通过 Vault sys/generate-root 与托管 Unseal Key 动态重建的 Root Token，可用于登录 Vault 原生 Web UI 或执行高危恢复操作。" />}
+                        />
+                        {isAdmin && (
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              onClick={() =>
+                                void apiPost(`/api/v1/vault/${selectedId}/root-token/revoke`, { token: rootToken })
+                                  .then(() => {
+                                    setRootToken('');
+                                    toast.success('临时 Root Token 已向 Vault 吊销');
+                                  })
+                                  .catch((ex) => setErr(ex.message))
+                              }
+                            >
+                              吊销 Root Token
+                            </Button>
+                            <Button size="sm" onClick={() => setRootToken('')}>隐藏卡片</Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </Card>
+
+                <Card title="Unseal Key 代际历史">
+                  {gens.length === 0 ? (
+                    <EmptyState title="暂无密钥代际" description="完成首次初始化后，这里会记录每次生成或 Rekey 的密钥代际与门限。" />
+                  ) : (
+                    <div className="space-y-2 text-xs">
+                      {gens.map((g) => (
+                        <div key={g.generation} className="flex items-center justify-between rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+                          <span className="font-medium text-slate-800 dark:text-slate-100">代际 #{g.generation}（门限 {g.key_threshold} / 共 {g.key_shares} 份）</span>
+                          <Badge tone={statusTone(g.state)}>{g.state === 'active' ? '当前生效' : g.state}</Badge>
+                        </div>
+                      ))}
                     </div>
                   )}
-                </div>
-              </Card>
-
-              <Card title="Unseal Key 代际历史">
-                {gens.length === 0 ? (
-                  <EmptyState text="暂无密钥代际" />
-                ) : (
-                  <div className="space-y-2 text-xs">
-                    {gens.map((g) => (
-                      <div key={g.generation} className="flex items-center justify-between rounded border border-slate-200 p-2 dark:border-slate-800">
-                        <span>代际 #{g.generation}（{g.key_threshold}/{g.key_shares}）</span>
-                        <Badge tone={statusTone(g.state)}>{g.state}</Badge>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </Card>
-            </div>
-          )}
+                </Card>
+              </div>
+            );
+          })()}
 
           {tab === 'snapshots' && (
             <Card

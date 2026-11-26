@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, Search, Terminal } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, fmtBytes, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Sparkline, StatusBadge, TermLabel } from './UI';
+import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Sparkline, StatusBadge, TermLabel } from './UI';
 import { useToast } from './Toast';
 import { useConfirm } from './ConfirmDialog';
 import { TerminalModal } from './TerminalModal';
@@ -283,10 +283,42 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
       {searchRes && (
-        <Card title="搜索结果" actions={<Button size="sm" onClick={() => setSearchRes(null)}>关闭</Button>}>
-          <pre className="max-h-48 overflow-auto rounded bg-slate-950 p-2 font-mono text-xs text-slate-100">
-            {JSON.stringify(searchRes, null, 2)}
-          </pre>
+        <Card title="全局搜索结果" actions={<Button size="sm" onClick={() => setSearchRes(null)}>关闭</Button>}>
+          {(() => {
+            const matches = searchRes?.Matches || searchRes?.matches || {};
+            const entries = Object.entries<any>(matches).filter(([, list]) => Array.isArray(list) && list.length > 0);
+            if (entries.length === 0) {
+              return (
+                <div className="space-y-2 text-xs text-slate-500">
+                  <div>未找到匹配项。</div>
+                  <details>
+                    <summary className="cursor-pointer hover:text-indigo-600">查看原始响应</summary>
+                    <pre className="mt-2 max-h-48 overflow-auto rounded bg-slate-950 p-2 font-mono text-xs text-slate-100">
+                      {JSON.stringify(searchRes, null, 2)}
+                    </pre>
+                  </details>
+                </div>
+              );
+            }
+            return (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 text-xs">
+                {entries.map(([kind, list]) => (
+                  <div key={kind} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3 space-y-1.5">
+                    <div className="font-semibold text-slate-800 dark:text-slate-100">
+                      {kind} ({list.length})
+                    </div>
+                    <ul className="space-y-1 font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                      {list.slice(0, 8).map((item: any, idx: number) => (
+                        <li key={idx} className="truncate">
+                          {typeof item === 'string' ? item : item.ID || item.Name || JSON.stringify(item)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </Card>
       )}
 
@@ -564,69 +596,211 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
 
       {subTab === 'clients' && (
         <Card title={<TermLabel term="Nomad Client 节点" tip="工作负载执行节点；Drain 操作会平滑驱逐节点上的运行实例并阻止新调度。" />}>
-          <div className="space-y-2 text-xs">
-            {clients.map((c) => (
-              <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2.5 dark:border-slate-800">
-                <div>
-                  <span className="font-semibold">{c.name}</span> <span className="font-mono text-slate-500">({(c.id || '').slice(0, 8)})</span>
-                  <div className="text-slate-500">调度：{c.scheduling_eligibility} · Drain：{c.drain ? '是' : '否'}</div>
+          {clients.length === 0 ? (
+            <EmptyState title="暂无 Client 节点" description="当节点以 Client 或 Server + Client 模式加入集群后将在此显示。" />
+          ) : (
+            <div className="space-y-2.5 text-xs">
+              {clients.map((c) => (
+                <div key={c.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-3.5 dark:border-slate-800">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-sm text-slate-900 dark:text-slate-100">{c.name}</span>
+                      <span className="font-mono text-slate-500">({(c.id || '').slice(0, 8)})</span>
+                    </div>
+                    <div className="text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap gap-2">
+                      <span>调度：{c.scheduling_eligibility === 'eligible' ? '允许调度' : '不可调度'}</span>
+                      <span>·</span>
+                      <span>Drain：{c.drain ? '排空中' : '否'}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <StatusBadge value={c.status} />
+                    {isAdmin && (
+                      <>
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            void apiPost(`/api/v1/nomad/${clusterId}/clients/${c.id}/eligibility`, {
+                              eligible: c.scheduling_eligibility !== 'eligible',
+                            }).then(() => { toast.success(c.scheduling_eligibility === 'eligible' ? '已设为不可调度' : '已恢复可调度'); return loadInfraViews('clients'); }).catch((ex) => setErr(ex.message))
+                          }
+                        >
+                          {c.scheduling_eligibility === 'eligible' ? '设为不可调度' : '恢复可调度'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() =>
+                            void askConfirm(
+                              c.drain ? `确定要取消节点 ${c.name} 的 Drain 状态吗？` : `确定要对节点 ${c.name} 执行 Drain 吗？将驱逐其上运行实例。`,
+                              {
+                                title: c.drain ? '取消节点 Drain' : '启用节点 Drain',
+                                confirmText: c.drain ? '确认取消' : '确认 Drain',
+                                danger: !c.drain,
+                              },
+                            )
+                              .then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/clients/${c.id}/drain`, { cancel: Boolean(c.drain) }).then(() => { toast.success(c.drain ? '已取消 Drain' : '已开启 Drain'); return loadInfraViews('clients'); }) : undefined)
+                              .catch((ex) => setErr(ex.message))
+                          }
+                        >
+                          {c.drain ? '取消 Drain' : 'Drain'}
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <StatusBadge value={c.status} />
-                  {isAdmin && (
-                    <>
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          void apiPost(`/api/v1/nomad/${clusterId}/clients/${c.id}/eligibility`, {
-                            eligible: c.scheduling_eligibility !== 'eligible',
-                          }).then(() => { toast.success(c.scheduling_eligibility === 'eligible' ? '已设为不可调度' : '已恢复可调度'); return loadInfraViews('clients'); }).catch((ex) => setErr(ex.message))
-                        }
-                      >
-                        {c.scheduling_eligibility === 'eligible' ? '设为不可调度' : '恢复可调度'}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        onClick={() =>
-                          void askConfirm(
-                            c.drain ? `确定要取消节点 ${c.name} 的 Drain 状态吗？` : `确定要对节点 ${c.name} 执行 Drain 吗？将驱逐其上运行实例。`,
-                            {
-                              title: c.drain ? '取消节点 Drain' : '启用节点 Drain',
-                              confirmText: c.drain ? '确认取消' : '确认 Drain',
-                              danger: !c.drain,
-                            },
-                          )
-                            .then((ok) => ok ? apiPost(`/api/v1/nomad/${clusterId}/clients/${c.id}/drain`, { cancel: Boolean(c.drain) }).then(() => { toast.success(c.drain ? '已取消 Drain' : '已开启 Drain'); return loadInfraViews('clients'); }) : undefined)
-                            .catch((ex) => setErr(ex.message))
-                        }
-                      >
-                        {c.drain ? '取消 Drain' : 'Drain'}
-                      </Button>
-                    </>
-                  )}
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {subTab === 'servers' && (() => {
+        const ap = (servers as any)?.autopilot || {};
+        const apServers: any[] = Array.isArray(ap.Servers) ? ap.Servers : Array.isArray(servers) ? servers : [];
+        const serfMembers: any[] = Array.isArray((servers as any)?.members?.Members) ? (servers as any).members.Members : [];
+        return (
+          <Card title="Nomad Server 成员" actions={<Button size="sm" onClick={() => void loadInfraViews('servers')}><RefreshCw className="h-3.5 w-3.5" /></Button>}>
+            <div className="space-y-4 text-xs">
+              {ap.Healthy !== undefined && (
+                <div className="flex flex-wrap items-center gap-4 rounded-xl border border-slate-200/80 bg-slate-50/70 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/40">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="text-slate-500">Autopilot 状态：</span>
+                    <StatusBadge value={ap.Healthy ? 'healthy' : 'degraded'} />
+                  </span>
+                  <span>
+                    <span className="text-slate-500">可容忍节点故障：</span>
+                    <strong className="font-mono">{ap.FailureTolerance ?? 0}</strong> 台
+                  </span>
+                  <span>
+                    <span className="text-slate-500">Server 总数：</span>
+                    <strong className="font-mono">{apServers.length || serfMembers.length}</strong> 台
+                  </span>
+                </div>
+              )}
+
+              {apServers.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
+                        <th className="py-2 pr-3">节点名称</th>
+                        <th className="py-2 pr-3">RPC 地址</th>
+                        <th className="py-2 pr-3">角色</th>
+                        <th className="py-2 pr-3">Serf / 健康</th>
+                        <th className="py-2 pr-3">版本</th>
+                        <th className="py-2 text-right">Raft Index</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {apServers.map((s: any, idx: number) => (
+                        <tr key={s.ID || s.Name || idx}>
+                          <td className="py-2.5 pr-3 font-medium text-slate-900 dark:text-slate-100">{s.Name || s.ID}</td>
+                          <td className="py-2.5 pr-3 font-mono text-slate-600 dark:text-slate-300">{s.Address || '-'}</td>
+                          <td className="py-2.5 pr-3">
+                            <div className="flex flex-wrap gap-1">
+                              {s.Leader && <Badge tone="blue">Leader</Badge>}
+                              {!s.Leader && <Badge>Follower</Badge>}
+                              {s.Voter && <Badge tone="green">Voter</Badge>}
+                            </div>
+                          </td>
+                          <td className="py-2.5 pr-3">
+                            <div className="flex items-center gap-1.5">
+                              <StatusBadge value={s.SerfStatus || 'unknown'} />
+                              {s.Healthy !== undefined && <StatusBadge value={s.Healthy ? 'healthy' : 'degraded'} />}
+                            </div>
+                          </td>
+                          <td className="py-2.5 pr-3 font-mono">{s.Version || '-'}</td>
+                          <td className="py-2.5 text-right font-mono tabular-nums">{s.LastIndex ?? '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <EmptyState title="暂无 Server 信息" description="集群部署完成后将展示 Autopilot 与 Raft 成员状态。" />
+              )}
+
+              <details className="rounded-lg border border-slate-200/80 dark:border-slate-800 p-2.5">
+                <summary className="cursor-pointer text-slate-500 hover:text-indigo-600">查看原始 JSON 数据</summary>
+                <pre className="mt-2 max-h-64 overflow-auto rounded bg-slate-950 p-3 font-mono text-xs text-slate-100">
+                  {JSON.stringify(servers, null, 2)}
+                </pre>
+              </details>
+            </div>
+          </Card>
+        );
+      })()}
+
+      {subTab === 'topology' && (() => {
+        const totals = topology?.totals || {};
+        const dcs: Record<string, any[]> = topology?.datacenters || {};
+        const cpuTotal = Number(totals.cpu_total_mhz || 0);
+        const cpuUsed = Number(totals.cpu_allocated_mhz || 0);
+        const memTotal = Number(totals.memory_total_mb || 0);
+        const memUsed = Number(totals.memory_allocated_mb || 0);
+        const cpuPct = cpuTotal > 0 ? Math.min(100, Math.round((cpuUsed / cpuTotal) * 100)) : 0;
+        const memPct = memTotal > 0 ? Math.min(100, Math.round((memUsed / memTotal) * 100)) : 0;
+        return (
+          <Card title="拓扑容量视图" actions={<Button size="sm" onClick={() => void loadInfraViews('topology')}><RefreshCw className="h-3.5 w-3.5" /></Button>}>
+            <div className="space-y-5 text-xs">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 space-y-2">
+                  <div className="flex justify-between">
+                    <span className="font-semibold text-slate-800 dark:text-slate-100">集群总 CPU 分配</span>
+                    <span className="font-mono">{cpuUsed} / {cpuTotal} MHz ({cpuPct}%)</span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                    <div className="h-full bg-indigo-500 transition-all" style={{ width: `${cpuPct}%` }} />
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 space-y-2">
+                  <div className="flex justify-between">
+                    <span className="font-semibold text-slate-800 dark:text-slate-100">集群总内存分配</span>
+                    <span className="font-mono">{memUsed} / {memTotal} MB ({memPct}%)</span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                    <div className="h-full bg-sky-500 transition-all" style={{ width: `${memPct}%` }} />
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
-        </Card>
-      )}
 
-      {subTab === 'servers' && (
-        <Card title="Nomad Server 成员">
-          <pre className="max-h-96 overflow-auto rounded bg-slate-950 p-3 font-mono text-xs text-slate-100">
-            {JSON.stringify(servers, null, 2)}
-          </pre>
-        </Card>
-      )}
+              {Object.entries(dcs).map(([dc, dcNodes]) => (
+                <div key={dc} className="space-y-2.5">
+                  <div className="font-semibold text-sm text-slate-800 dark:text-slate-100">
+                    数据中心：{dc} <span className="text-xs font-normal text-slate-500">({dcNodes.length} 个 Client)</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {dcNodes.map((n: any) => (
+                      <div key={n.id} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <span className="font-semibold text-slate-900 dark:text-slate-100">{n.name}</span>
+                            <span className="ml-2 font-mono text-[11px] text-slate-500">{(n.id || '').slice(0, 8)}</span>
+                          </div>
+                          <StatusBadge value={n.status} />
+                        </div>
+                        <div className="flex flex-wrap gap-4 text-slate-500 dark:text-slate-400">
+                          <span>总 CPU：<strong className="font-mono text-slate-700 dark:text-slate-200">{n.cpu_total_mhz ?? 0} MHz</strong></span>
+                          <span>总内存：<strong className="font-mono text-slate-700 dark:text-slate-200">{n.memory_total_mb ?? 0} MB</strong></span>
+                          <span>运行 Allocation：<strong className="font-mono text-slate-700 dark:text-slate-200">{(n.allocations || []).length}</strong></span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
 
-      {subTab === 'topology' && (
-        <Card title="拓扑容量视图">
-          <pre className="max-h-96 overflow-auto rounded bg-slate-950 p-3 font-mono text-xs text-slate-100">
-            {JSON.stringify(topology, null, 2)}
-          </pre>
-        </Card>
-      )}
+              <details className="rounded-lg border border-slate-200/80 dark:border-slate-800 p-2.5">
+                <summary className="cursor-pointer text-slate-500 hover:text-indigo-600">查看原始 JSON 数据</summary>
+                <pre className="mt-2 max-h-64 overflow-auto rounded bg-slate-950 p-3 font-mono text-xs text-slate-100">
+                  {JSON.stringify(topology, null, 2)}
+                </pre>
+              </details>
+            </div>
+          </Card>
+        );
+      })()}
 
       {subTab === 'storage' && (
         <Card title={<TermLabel term="CSI 卷与存储插件" tip="通过 Container Storage Interface (CSI) 对接外部持久化块/文件存储。" />}>
@@ -716,10 +890,43 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
       )}
 
       {subTab === 'evaluations' && (
-        <Card title="全局 Evaluations">
-          <pre className="max-h-96 overflow-auto rounded bg-slate-950 p-3 font-mono text-xs text-slate-100">
-            {JSON.stringify(evaluations, null, 2)}
-          </pre>
+        <Card title="全局 Evaluations" actions={<Button size="sm" onClick={() => void loadInfraViews('evaluations')}><RefreshCw className="h-3.5 w-3.5" /></Button>}>
+          {evaluations.length === 0 ? (
+            <EmptyState title="暂无调度评估记录" description="提交或变更 Job 时，Nomad 产生的调度计算记录会展示在这里。" />
+          ) : (
+            <div className="space-y-3 text-xs">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
+                      <th className="py-2 pr-3">Eval ID</th>
+                      <th className="py-2 pr-3">Job</th>
+                      <th className="py-2 pr-3">触发原因</th>
+                      <th className="py-2 pr-3">状态</th>
+                      <th className="py-2">说明</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {evaluations.slice(0, 30).map((ev: any) => (
+                      <tr key={ev.ID}>
+                        <td className="py-2 pr-3 font-mono">{(ev.ID || '').slice(0, 8)}</td>
+                        <td className="py-2 pr-3 font-mono font-medium">{ev.JobID || '-'}</td>
+                        <td className="py-2 pr-3">{ev.TriggeredBy || '-'}</td>
+                        <td className="py-2 pr-3"><StatusBadge value={ev.Status} /></td>
+                        <td className="py-2 text-slate-500">{ev.StatusDescription || (ev.BlockedEval ? '等待资源或约束' : '-')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <details className="rounded-lg border border-slate-200/80 dark:border-slate-800 p-2.5">
+                <summary className="cursor-pointer text-slate-500 hover:text-indigo-600">查看原始 JSON 数据</summary>
+                <pre className="mt-2 max-h-64 overflow-auto rounded bg-slate-950 p-3 font-mono text-xs text-slate-100">
+                  {JSON.stringify(evaluations, null, 2)}
+                </pre>
+              </details>
+            </div>
+          )}
         </Card>
       )}
 

@@ -177,7 +177,7 @@ export function AccountsPage() {
                       <tr key={a.id}>
                         <td className="py-3 pr-3 font-medium text-slate-900 dark:text-slate-100">{a.username}</td>
                         <td className="py-3 pr-3">
-                          <Badge tone={a.role === 'admin' ? 'blue' : 'neutral'}>{a.role}</Badge>
+                          <Badge tone={a.role === 'admin' ? 'blue' : 'neutral'}>{a.role === 'admin' ? '系统管理员' : '只读运维'}</Badge>
                         </td>
                         <td className="py-3 pr-3">
                           <StatusBadge value={a.disabled ? 'disabled' : 'enabled'} label={a.disabled ? '已停用' : '启用'} />
@@ -189,17 +189,18 @@ export function AccountsPage() {
                               size="sm"
                               onClick={() => {
                                 const nextRole = a.role === 'admin' ? 'viewer' : 'admin';
+                                const nextRoleLabel = nextRole === 'admin' ? '系统管理员' : '只读运维';
                                 setPwAction({
-                                  title: `将 ${a.username} 角色改为 ${nextRole}`,
+                                  title: `将 ${a.username} 角色改为 ${nextRoleLabel}`,
                                   run: async (pw) => {
                                     await apiPut(`/api/v1/admins/${a.id}/role`, { role: nextRole, current_password: pw });
-                                    toast.success(`已将 ${a.username} 切换为 ${nextRole}`);
+                                    toast.success(`已将 ${a.username} 切换为 ${nextRoleLabel}`);
                                     await load();
                                   },
                                 });
                               }}
                             >
-                              切换为 {a.role === 'admin' ? 'viewer' : 'admin'}
+                              {a.role === 'admin' ? '设为只读' : '设为管理员'}
                             </Button>
                             <Button
                               size="sm"

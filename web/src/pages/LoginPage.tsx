@@ -84,17 +84,17 @@ export function LoginPage() {
           <div className="text-[40px] xl:text-5xl font-semibold leading-tight tracking-tight">
             Nomad 与 Vault
             <br />
-            <span className="text-indigo-300">统一集群控制面</span>
+            <span className="text-indigo-300 text-[32px] xl:text-[40px] font-medium block mt-2">统一集群控制面</span>
           </div>
           <p className="text-slate-400 text-sm leading-7 mt-6">
-            基于纯 Go SSH/SFTP 与官方 HTTP API 的双通道架构，集中编排集群部署、滚动升级、mTLS 证书轮换、Workload Identity 联动与可视化 Job 调度。
+            无需在节点预装代理，通过 SSH 一键部署与管理 Nomad 调度集群和 Vault 密钥库，内置自动解封、证书续期、加密灾备与可视化任务编排。
           </p>
           <div className="flex flex-wrap gap-4 text-xs text-slate-300 mt-8">
-            <span>SSH 无代理编排</span>
+            <span>一键建群部署</span>
             <span className="text-slate-600">/</span>
-            <span>Vault 托管与自动解封</span>
+            <span>Vault 自动解封托管</span>
             <span className="text-slate-600">/</span>
-            <span>Raft 快照与加密灾备</span>
+            <span>可视化 Job 编排</span>
           </div>
         </div>
 
@@ -146,7 +146,7 @@ export function LoginPage() {
                   required
                   value={setupToken}
                   onChange={(e) => setSetupToken(e.target.value)}
-                  placeholder="请粘贴终端日志或 data/setup.token 中的令牌"
+                  placeholder="粘贴启动日志或 setup.token 文件中的令牌"
                   className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>

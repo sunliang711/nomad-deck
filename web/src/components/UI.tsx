@@ -20,7 +20,7 @@ export function PageHeader({
         <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">{title}</h1>
         {subtitle && <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{subtitle}</p>}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2 shrink-0">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2 min-w-0 max-w-full">{actions}</div>}
     </div>
   );
 }
@@ -55,7 +55,8 @@ type Tone = 'neutral' | 'green' | 'amber' | 'red' | 'blue';
 
 const statusLabels: Record<string, string> = {
   healthy: '健康', online: '在线', running: '运行中', success: '成功', succeeded: '成功',
-  active: '运行中', ok: '正常', completed: '已完成', enabled: '已启用', ready: '就绪',
+  active: '运行中', ok: '正常', completed: '已完成', complete: '已完成', enabled: '已启用', ready: '就绪',
+  alive: '存活', leaving: '离开中', left: '已退出', stopped: '已停止', ineligible: '不可调度', draining: '排空中',
   initialized: '已初始化', uninitialized: '待部署', unknown: '待探测', degraded: '状态异常',
   pending: '等待中', waiting: '等待中', upgrading: '升级中', warn: '需关注', sealed: '已密封',
   init_in_doubt: '初始化待核对', needs_reconcile: '需核对', partial_success: '部分成功',
@@ -106,8 +107,10 @@ export function statusTone(status?: string): Tone {
     case 'active':
     case 'ok':
     case 'completed':
+    case 'complete':
     case 'enabled':
     case 'ready':
+    case 'alive':
     case 'initialized':
     case 'applied':
       return 'green';
@@ -117,6 +120,9 @@ export function statusTone(status?: string): Tone {
     case 'upgrading':
     case 'warn':
     case 'sealed':
+    case 'draining':
+    case 'leaving':
+    case 'ineligible':
     case 'init_in_doubt':
     case 'needs_reconcile':
     case 'partial_success':
@@ -458,7 +464,7 @@ export function Select({
       {label && <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">{label}</span>}
       <select
         {...rest}
-        className={`w-full rounded-lg border border-[#dce3ee] bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 ${className}`}
+        className={`w-full rounded-lg border border-[#dce3ee] bg-white pl-3 pr-8 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 ${className}`}
       >
         {children}
       </select>
@@ -769,33 +775,43 @@ export function SectionTabs({
       {tabs.map((t) => {
         const isActive = active === t.id;
         return (
-          <button
+          <div
             key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={isActive}
-            tabIndex={isActive ? 0 : -1}
-            onClick={() => onChange(t.id)}
-            className={`inline-flex shrink-0 items-center gap-1.5 rounded-[10px] px-3.5 py-2 text-xs sm:text-sm transition whitespace-nowrap border ${
+            className={`inline-flex shrink-0 items-center rounded-[10px] transition border ${
               isActive
-                ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30 font-semibold'
-                : 'border-transparent text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white font-medium'
+                ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30'
+                : 'border-transparent text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            <span>{t.label}</span>
-            {t.tip && <InfoTip text={t.tip} />}
-            {t.badge !== undefined && (
-              <span
-                className={`inline-flex items-center text-[11px] px-1.5 py-0.5 rounded font-medium leading-none ${
-                  isActive
-                    ? 'bg-indigo-100 dark:bg-indigo-500/25 text-indigo-700 dark:text-indigo-200'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
-                }`}
-              >
-                {t.badge}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              onClick={() => onChange(t.id)}
+              className={`inline-flex items-center gap-1.5 rounded-[10px] py-2 text-xs sm:text-sm whitespace-nowrap ${
+                t.tip ? 'pl-3.5 pr-1.5' : 'px-3.5'
+              } ${isActive ? 'font-semibold' : 'font-medium'}`}
+            >
+              <span>{t.label}</span>
+              {t.badge !== undefined && (
+                <span
+                  className={`inline-flex items-center text-[11px] px-1.5 py-0.5 rounded font-medium leading-none ${
+                    isActive
+                      ? 'bg-indigo-100 dark:bg-indigo-500/25 text-indigo-700 dark:text-indigo-200'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  {t.badge}
+                </span>
+              )}
+            </button>
+            {t.tip && (
+              <span className="pr-2.5 flex items-center">
+                <InfoTip text={t.tip} />
               </span>
             )}
-          </button>
+          </div>
         );
       })}
     </nav>

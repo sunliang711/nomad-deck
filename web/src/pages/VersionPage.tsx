@@ -411,12 +411,18 @@ export function VersionPage() {
 
         <Card title="发起升级 / 预约升级">
           <div className="space-y-4 text-xs">
+            {info && !info.available && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-slate-600 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+                当前构建未启用自更新（缺少发布验签公钥），以下原地升级与预约升级操作已锁定；如需更新请使用安装脚本或替换二进制文件。
+              </div>
+            )}
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={useProxy} onChange={(e) => void handleToggleProxy(e.target.checked)} />
               <span>使用系统代理访问 GitHub Release（自动保存）</span>
             </label>
             <Input
               label="目标版本（latest 或具体版本号，如 v1.2.0）"
+              disabled={info ? !info.available : false}
               value={targetVer}
               onChange={(e) => setTargetVer(e.target.value)}
             />
@@ -430,8 +436,8 @@ export function VersionPage() {
             <form onSubmit={createSchedule} className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
               <div className="font-semibold text-sm text-slate-800 dark:text-slate-100">预约升级（等待新版本发布后自动升级）</div>
               <div className="grid grid-cols-2 gap-3">
-                <Input label="等待时长（秒）" type="number" value={waitSec} onChange={(e) => setWaitSec(Number(e.target.value))} />
-                <Input label="检查间隔（秒）" type="number" value={intervalSec} onChange={(e) => setIntervalSec(Number(e.target.value))} />
+                <Input label="等待时长（秒）" type="number" disabled={info ? !info.available : false} value={waitSec} onChange={(e) => setWaitSec(Number(e.target.value))} />
+                <Input label="检查间隔（秒）" type="number" disabled={info ? !info.available : false} value={intervalSec} onChange={(e) => setIntervalSec(Number(e.target.value))} />
               </div>
               {isAdmin && (
                 <div className="flex gap-2">

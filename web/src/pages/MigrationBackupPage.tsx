@@ -22,11 +22,11 @@ import {
 } from '../components/UI';
 
 const optionalTables = [
-  { id: 'admins', label: 'admins（管理员账号，迁移可选）' },
-  { id: 'job_revisions', label: 'job_revisions（Job 修订历史）' },
-  { id: 'audit_logs', label: 'audit_logs（审计日志）' },
-  { id: 'operation_tasks', label: 'operation_tasks（运维任务与步骤日志）' },
-  { id: 'cron_job_runs', label: 'cron_job_runs（定时任务历史）' },
+  { id: 'admins', label: '管理员账号（迁移可选）' },
+  { id: 'job_revisions', label: 'Job 修订历史' },
+  { id: 'audit_logs', label: '审计日志' },
+  { id: 'operation_tasks', label: '运维任务与步骤日志' },
+  { id: 'cron_job_runs', label: '定时任务执行历史' },
 ];
 
 export function MigrationBackupPage() {
@@ -329,7 +329,7 @@ export function MigrationBackupPage() {
               </div>
 
               <div>
-                <div className="mb-2 font-medium text-slate-700 dark:text-slate-200">额外包含历史表（admins 固定包含）</div>
+                <div className="mb-2 font-medium text-slate-700 dark:text-slate-200">额外包含历史数据（管理员账号固定包含）</div>
                 <div className="flex flex-wrap gap-4">
                   {optionalTables
                     .filter((t) => t.id !== 'admins')
@@ -344,7 +344,7 @@ export function MigrationBackupPage() {
                             )
                           }
                         />
-                        <span>{t.id}</span>
+                        <span>{t.label}</span>
                       </label>
                     ))}
                 </div>

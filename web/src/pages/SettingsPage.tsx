@@ -33,19 +33,19 @@ interface SettingItemMeta {
 }
 
 const settingMeta: SettingItemMeta[] = [
-  { key: 'cron.timezone', group: 'general', label: '定时任务时区 (cron.timezone)', tip: '内置和自定义 Cron 任务的触发时区，例如 Asia/Shanghai 或 UTC。', type: 'text' },
-  { key: 'ssh.timeout_sec', group: 'general', label: 'SSH 超时秒数', type: 'number' },
+  { key: 'cron.timezone', group: 'general', label: '定时任务时区', tip: '内置和自定义 Cron 任务的触发时区，例如 Asia/Shanghai 或 UTC。', type: 'text' },
+  { key: 'ssh.timeout_sec', group: 'general', label: 'SSH 连接超时（秒）', type: 'number' },
   { key: 'ssh.max_concurrency', group: 'general', label: 'SSH 最大并发（需重启）', type: 'number' },
   { key: 'auth.session_ttl_hours', group: 'general', label: '会话绝对有效期（小时）', tip: '单次登录会话最长有效时间，到期必须重新登录。', type: 'number' },
   { key: 'auth.session_idle_minutes', group: 'general', label: '会话空闲超时（分钟）', tip: '连续无操作超过该分钟数后会话自动失效。', type: 'number' },
   { key: 'audit.retention_days', group: 'general', label: '审计日志保留天数', type: 'number' },
   { key: 'ops.retention_days', group: 'general', label: '运维日志保留天数', type: 'number' },
 
-  { key: 'defaults.nomad_version', group: 'releases', label: '默认 Nomad 版本 (支持 latest 或 x.y.z)', tip: '填 latest 可自动解析 HashiCorp 最新稳定版。', type: 'text' },
-  { key: 'defaults.vault_version', group: 'releases', label: '默认 Vault 版本 (支持 latest 或 x.y.z)', tip: '填 latest 可自动解析 HashiCorp 最新稳定版。', type: 'text' },
+  { key: 'defaults.nomad_version', group: 'releases', label: '默认 Nomad 版本', tip: '填 latest 可自动解析 HashiCorp 最新稳定版，或指定具体版本号。', type: 'text' },
+  { key: 'defaults.vault_version', group: 'releases', label: '默认 Vault 版本', tip: '填 latest 可自动解析 HashiCorp 最新稳定版，或指定具体版本号。', type: 'text' },
   { key: 'defaults.docker_version', group: 'releases', label: '默认 Docker 版本', type: 'text' },
   { key: 'release.mirror_url', group: 'releases', label: 'HashiCorp 镜像源 URL', tip: '覆盖默认 releases.hashicorp.com 地址，适合内网制品库或反代加速。', type: 'text' },
-  { key: 'release.transfer_rate_limit', group: 'releases', label: '分发限速 (bytes/s, 0=不限)', tip: '限制控制面向节点 SFTP 分发安装包时的带宽上限。', type: 'number' },
+  { key: 'release.transfer_rate_limit', group: 'releases', label: '分发限速（字节/秒，0=不限）', tip: '限制控制面向节点 SFTP 分发安装包时的带宽上限。', type: 'number' },
   { key: 'upgrade.max_minor_skip', group: 'releases', label: '滚动升级允许跨小版本上限', tip: '例如设为 2 时，不允许从 1.7 直接跨 3 个次版本升到 1.10，防止 Raft 状态机不兼容。', type: 'number' },
   { key: 'self_update.channel', group: 'releases', label: '自更新发布通道', type: 'select', options: ['stable', 'prerelease'] },
   { key: 'self_update.backup_retention', group: 'releases', label: '升级前数据库备份保留份数', type: 'number' },
@@ -374,8 +374,8 @@ export function SettingsPage() {
         <>
           {(tab === 'general' || tab === 'releases' || tab === 'clusters') && (
             <Card title={activeGroupTitle}>
-              <form onSubmit={saveSettings} className="space-y-5">
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <form onSubmit={saveSettings} className="space-y-5 max-w-4xl">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   {visibleMeta.map((m) => {
                     const labelNode = m.tip ? <TermLabel term={m.label} tip={m.tip} /> : m.label;
                     if (m.type === 'bool') {

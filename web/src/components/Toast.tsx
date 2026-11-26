@@ -57,7 +57,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       <div
         aria-live="polite"
         aria-relevant="additions"
-        className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-md w-[calc(100vw-2rem)] pointer-events-none"
+        className="fixed bottom-4 right-4 sm:bottom-5 sm:right-5 z-[100] flex flex-col gap-2 max-w-md w-[calc(100vw-2rem)] pointer-events-none"
       >
         {items.map((item) => {
           const style =

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Boxes, Download, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { ArrowUpRight, Boxes, Download, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { apiDelete, apiDownload, apiGet, apiPost, fmtTime, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../components/Toast';
@@ -24,7 +24,37 @@ import {
 import { CodeEditor } from '../components/CodeEditor';
 import { VisualJobBuilder, type VisualJobBuilderHandle } from '../components/VisualJobBuilder';
 
-const sampleHCL = `job "hello" {
+const STARTER_SAMPLES: Array<{ id: string; label: string; desc: string; hcl: string }> = [
+  {
+    id: 'raw_exec',
+    label: 'Shell 入门 (raw_exec)',
+    desc: '无需 Docker，直接在节点运行轻量脚本',
+    hcl: `job "hello-shell" {
+  datacenters = ["dc1"]
+  type        = "service"
+
+  group "app" {
+    count = 1
+    task "echo" {
+      driver = "raw_exec"
+      config {
+        command = "/bin/sh"
+        args    = ["-c", "while true; do echo 'NomadDeck hello at '$(date); sleep 15; done"]
+      }
+      resources {
+        cpu    = 50
+        memory = 64
+      }
+    }
+  }
+}
+`,
+  },
+  {
+    id: 'docker',
+    label: 'Nginx 容器 (docker)',
+    desc: '标准 Docker 容器服务示例',
+    hcl: `job "hello" {
   datacenters = ["dc1"]
   type        = "service"
 
@@ -42,10 +72,40 @@ const sampleHCL = `job "hello" {
     }
   }
 }
-`;
+`,
+  },
+  {
+    id: 'batch',
+    label: '一次性批处理 (batch)',
+    desc: '执行完即退出的短任务示例',
+    hcl: `job "hello-batch" {
+  datacenters = ["dc1"]
+  type        = "batch"
+
+  group "job" {
+    count = 1
+    task "run" {
+      driver = "raw_exec"
+      config {
+        command = "/bin/sh"
+        args    = ["-c", "echo 'Batch task finished on '$(hostname); uname -a"]
+      }
+      resources {
+        cpu    = 50
+        memory = 32
+      }
+    }
+  }
+}
+`,
+  },
+];
+
+const sampleHCL = STARTER_SAMPLES[0].hcl;
 
 export function JobCenterPage() {
   const { isAdmin } = useAuth();
+  const navigate = useNavigate();
   const toast = useToast();
   const askConfirm = useConfirm();
   const [clusters, setClusters] = useState<any[]>([]);
@@ -206,7 +266,10 @@ export function JobCenterPage() {
     try {
       await apiPost(`/api/v1/nomad/${clusterId}/job-ops/apply`, { plan_id: plan.plan_id });
       clearPlan();
-      toast.success('Job Apply 提交成功');
+      toast.success('Job 已提交运行', {
+        label: '查看运行态',
+        onClick: () => navigate(`/nomad?id=${clusterId}`),
+      });
       await loadJobs();
     } catch (ex: any) {
       setErr(ex?.message || 'Apply 失败');
@@ -267,14 +330,20 @@ export function JobCenterPage() {
         subtitle="编写任务 → 校验配置 → 预览计划 → 确认运行，支持 HCL、可视化与 JSON"
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <div className="w-40">
-              <Select aria-label="目标 Nomad 集群" value={clusterId} disabled={modeBusy || (editMode === 'visual' && !visualReady)} onChange={(e) => { setClusterId(e.target.value); clearPlan(); }}>
-                {clusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </Select>
-            </div>
-            <div className="w-32">
-              <Input aria-label="任务命名空间" value={namespace} onChange={(e) => { setNamespace(e.target.value); clearPlan(); }} placeholder="Namespace" />
-            </div>
+            <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+              <span className="shrink-0">集群</span>
+              <div className="w-40">
+                <Select aria-label="目标 Nomad 集群" value={clusterId} disabled={modeBusy || (editMode === 'visual' && !visualReady)} onChange={(e) => { setClusterId(e.target.value); clearPlan(); }}>
+                  {clusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </Select>
+              </div>
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+              <span className="shrink-0">命名空间</span>
+              <div className="w-28">
+                <Input aria-label="任务命名空间" value={namespace} onChange={(e) => { setNamespace(e.target.value); clearPlan(); }} placeholder="default" />
+              </div>
+            </label>
             <Button onClick={() => { void loadClusters(); void loadJobs(); }}>
               <RefreshCw className="h-4 w-4" />
               <span>刷新</span>
@@ -413,67 +482,144 @@ export function JobCenterPage() {
           className="min-w-0"
           title={<TermLabel term="Job 编排工作台" tip="支持编写 Nomad HCL（HashiCorp Configuration Language）、表单可视化编排或 JSON 定义，提交前可做语法校验和变更比对。" />}
           actions={
-            isAdmin && (
-              <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedCluster && !needsDeployment && (
+                <Link
+                  to={`/nomad?id=${clusterId}`}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400 mr-1"
+                >
+                  <span>运行态工作台</span>
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                </Link>
+              )}
+              {isAdmin && (
                 <Button size="sm" onClick={() => setShowCompose(true)}>Compose 导入</Button>
-                <Button size="sm" disabled={needsDeployment || modeBusy || editMode === 'visual' && !visualReady} onClick={() => void validateJob()}>
-                  <TermLabel term="1. 校验配置" tip="调用 Nomad API 校验 HCL/JSON 语法、驱动字段与参数合法性，不改动运行状态。" />
-                </Button>
-                <Button size="sm" variant="primary" disabled={needsDeployment || modeBusy || editMode === 'visual' && !visualReady} onClick={() => void runPlan()}>
-                  <TermLabel term="2. 预览计划" tip="预演调度变更与滚动影响范围（Plan Dry-Run），确认无误后再提交部署。" />
-                </Button>
-              </div>
-            )
+              )}
+            </div>
           }
         >
-          <div className="space-y-3 text-xs">
-            <SectionTabs
-              tabs={[
-                { id: 'hcl', label: '原生 HCL 编辑器', tip: 'Nomad 原生 HashiCorp Configuration Language 声明式任务定义。' },
-                ...(isAdmin ? [{ id: 'visual', label: '可视化编排' }] : []),
-                { id: 'json', label: 'JSON 定义' },
-              ]}
-              active={editMode}
-              onChange={(m) => { void changeMode(m as 'hcl' | 'visual' | 'json'); }}
-            />
-
-            <div className={editMode === 'visual' ? 'grid items-start gap-3 2xl:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)]' : ''}>
-              {editMode === 'visual' && <VisualJobBuilder ref={visualRef} clusterId={clusterId} source={hcl} readOnly={!isAdmin}
-                onSourceChange={(value) => { setHcl(value); clearPlan(); }} onValidityChange={(valid) => { setVisualReady(valid); if (!valid) clearPlan(); }} />}
-              <div className="min-w-0 space-y-2">
-                {editMode === 'visual' && <div className="font-semibold">实时 HCL 预览</div>}
-                <CodeEditor value={hcl} onChange={(value) => { setHcl(value); clearPlan(); }} readOnly={!isAdmin || editMode === 'visual'} height={editMode === 'visual' ? '700px' : '340px'} />
-              </div>
+          <div className="space-y-4 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <SectionTabs
+                tabs={[
+                  { id: 'hcl', label: '原生 HCL 编辑器', tip: 'Nomad 原生 HashiCorp Configuration Language 声明式任务定义。' },
+                  ...(isAdmin ? [{ id: 'visual', label: '可视化编排' }] : []),
+                  { id: 'json', label: 'JSON 定义' },
+                ]}
+                active={editMode}
+                onChange={(m) => { void changeMode(m as 'hcl' | 'visual' | 'json'); }}
+              />
+              {isAdmin && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-slate-500 dark:text-slate-400 mr-1">入门示例：</span>
+                  {STARTER_SAMPLES.map((s) => (
+                    <Button
+                      key={s.id}
+                      size="sm"
+                      title={s.desc}
+                      onClick={() => {
+                        setHcl(s.hcl);
+                        setEditMode('hcl');
+                        setJobVariables({});
+                        clearPlan();
+                      }}
+                    >
+                      {s.label}
+                    </Button>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {isAdmin && (
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  placeholder="模板名称"
-                  value={tplName}
-                  onChange={(e) => setTplName(e.target.value)}
-                  className="rounded border border-slate-300 bg-white px-2.5 py-1 dark:border-slate-700 dark:bg-slate-950"
+            {editMode === 'visual' ? (
+              <div className="space-y-3">
+                <VisualJobBuilder
+                  ref={visualRef}
+                  clusterId={clusterId}
+                  source={hcl}
+                  readOnly={!isAdmin}
+                  onSourceChange={(value) => { setHcl(value); clearPlan(); }}
+                  onValidityChange={(valid) => { setVisualReady(valid); if (!valid) clearPlan(); }}
                 />
-                <Button
-                  size="sm"
-                  disabled={modeBusy || editMode === 'json' || editMode === 'visual' && !visualReady}
-                  onClick={() =>
-                    tplName &&
-                    void apiPost('/api/v1/job-templates', { name: tplName, edit_mode: 'hcl', hcl })
-                      .then(() => { setTplName(''); toast.success('模板已保存'); return loadClusters(); })
-                      .catch((ex) => setErr(ex.message))
-                  }
-                >
-                  存为模板
-                </Button>
+                <details className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+                  <summary className="cursor-pointer px-4 py-2.5 font-semibold text-slate-700 dark:text-slate-200">
+                    实时 HCL 预览 <span className="ml-1.5 font-normal text-slate-400">· 展开查看同步生成的 Nomad 配置源码</span>
+                  </summary>
+                  <div className="border-t border-slate-100 p-3 dark:border-slate-800">
+                    <CodeEditor value={hcl} onChange={(value) => { setHcl(value); clearPlan(); }} readOnly height="280px" />
+                  </div>
+                </details>
+              </div>
+            ) : (
+              <CodeEditor value={hcl} onChange={(value) => { setHcl(value); clearPlan(); }} readOnly={!isAdmin} height="380px" />
+            )}
+
+            {isAdmin && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/40">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    placeholder="输入名称保存为模板..."
+                    value={tplName}
+                    onChange={(e) => setTplName(e.target.value)}
+                    className="w-48 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-950"
+                  />
+                  <Button
+                    size="sm"
+                    disabled={!tplName.trim() || modeBusy || editMode === 'json' || (editMode === 'visual' && !visualReady)}
+                    onClick={() =>
+                      tplName.trim() &&
+                      void apiPost('/api/v1/job-templates', { name: tplName.trim(), edit_mode: 'hcl', hcl })
+                        .then(() => { setTplName(''); toast.success('模板已保存'); return loadClusters(); })
+                        .catch((ex) => setErr(ex.message))
+                    }
+                  >
+                    存为模板
+                  </Button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    disabled={needsDeployment || modeBusy || (editMode === 'visual' && !visualReady)}
+                    onClick={() => void validateJob()}
+                  >
+                    1. 校验配置
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={plan ? 'secondary' : 'primary'}
+                    disabled={needsDeployment || modeBusy || (editMode === 'visual' && !visualReady)}
+                    onClick={() => void runPlan()}
+                  >
+                    2. 预览计划
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    disabled={!plan?.plan_id || needsDeployment || modeBusy}
+                    title={!plan?.plan_id ? '请先点击「2. 预览计划」生成执行计划' : '确认将任务提交至 Nomad 集群运行'}
+                    onClick={() => void runApply()}
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    <span>3. 确认运行</span>
+                  </Button>
+                </div>
               </div>
             )}
 
             {plan && (
               <div className="space-y-2 rounded-xl border border-indigo-300 bg-indigo-50/40 p-3.5 dark:border-indigo-500/40 dark:bg-indigo-950/30">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="font-semibold text-indigo-900 dark:text-indigo-200 break-all">调度变更预览 <span className="font-mono font-normal text-xs">{plan.plan_id}</span></span>
-                  {isAdmin && <Button size="sm" variant="primary" onClick={() => void runApply()}>3. 确认运行</Button>}
+                  <span className="font-semibold text-indigo-900 dark:text-indigo-200 break-all">
+                    调度变更预览 · 请核对后点击上方或右侧「3. 确认运行」{' '}
+                    <span className="font-mono font-normal text-xs opacity-75">{plan.plan_id}</span>
+                  </span>
+                  {isAdmin && (
+                    <Button size="sm" variant="primary" onClick={() => void runApply()}>
+                      <Play className="h-3.5 w-3.5" />
+                      <span>3. 确认运行</span>
+                    </Button>
+                  )}
                 </div>
                 <pre className="max-h-56 overflow-auto rounded-lg bg-slate-950 p-2.5 font-mono text-[11px] text-slate-100">
                   {JSON.stringify(plan.diff || plan, null, 2)}

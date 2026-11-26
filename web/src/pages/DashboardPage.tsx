@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowRight,
@@ -7,6 +7,7 @@ import {
   Boxes,
   Clock,
   FileWarning,
+  Info,
   RefreshCw,
   Server,
   ShieldCheck,
@@ -15,10 +16,9 @@ import { apiGet, fmtTime } from '../lib/api';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { Badge, Button, Card, EmptyState, ErrorAlert, LoadingState, PageHeader, StatusBadge } from '../components/UI';
 import { GettingStarted } from '../components/GettingStarted';
-import { formatActionLabel } from '../lib/actionLabels';
+import { RESOURCE_LABELS, formatActionLabel } from '../lib/actionLabels';
 
 export function DashboardPage() {
-  const navigate = useNavigate();
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
@@ -52,6 +52,13 @@ export function DashboardPage() {
   const vaultAlerts = data?.vault_alerts || [];
   const clockAlerts = nodes.clock_skew_alerts || [];
 
+  const clusterItems = (clusters.items || []) as any[];
+  const hasHosts = (nodes.total ?? 0) > 0;
+  const hasNomad = (clusters.nomad ?? 0) > 0;
+  const hasVault = (clusters.vault ?? 0) > 0;
+  const hasReadyNomad = clusterItems.some((c) => c.type === 'nomad' && c.init_state === 'initialized' && c.health_status === 'healthy');
+  const hasReadyVault = clusterItems.some((c) => c.type === 'vault' && c.init_state === 'initialized' && c.health_status === 'healthy');
+
   const cards = [
     {
       icon: <Server className="w-5 h-5" />,
@@ -65,14 +72,14 @@ export function DashboardPage() {
       label: '纳管集群',
       value: clusters.total ?? 0,
       sub: `Nomad ${clusters.nomad ?? 0} · Vault ${clusters.vault ?? 0}`,
-      to: '/nomad',
+      to: hasNomad ? '/nomad' : '/vault',
     },
     {
       icon: <ShieldCheck className="w-5 h-5" />,
       label: '证书临期预警',
       value: certAlerts.length,
-      sub: certAlerts.length > 0 ? '请尽快执行续期或轮换' : (clusters.total ?? 0) > 0 ? '所有集群证书有效期正常' : '创建集群后自动监控证书',
-      to: '/vault',
+      sub: certAlerts.length > 0 ? '请尽快执行续期或轮换' : (clusters.total ?? 0) > 0 ? '所有集群证书有效期正常' : '部署集群后自动监控',
+      to: hasVault ? '/vault' : '/nomad',
     },
     {
       icon: <FileWarning className="w-5 h-5" />,
@@ -83,8 +90,14 @@ export function DashboardPage() {
     },
   ];
 
-  const hasNomad = (clusters.nomad ?? 0) > 0;
-  const hasReadyNomad = (clusters.items || []).some((c: any) => c.type === 'nomad' && c.init_state === 'initialized' && c.health_status === 'healthy');
+  const hasAlertsOrTips =
+    vaultAlerts.length > 0 ||
+    clockAlerts.length > 0 ||
+    certAlerts.length > 0 ||
+    Boolean(backupAlerts?.missing_offsite_target && (clusters.total ?? 0) > 0);
+
+  const recentOps = (data?.recent_operations || []).slice(0, 6);
+  const recentAudit = (data?.recent_audit_logs || []).slice(0, 6);
 
   return (
     <div className="space-y-6">
@@ -115,102 +128,74 @@ export function DashboardPage() {
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
-      {/* Top actionable alerts */}
-      <div className="space-y-2.5">
-        {cp.activated === false && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
-            <span className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-              控制面尚未激活（迁移导入后默认暂停自动调度与解封，以防双活冲突）。
-            </span>
-            <Link to="/migration-backup" className="font-medium text-amber-800 dark:text-amber-200 underline">
-              前往激活
-            </Link>
-          </div>
-        )}
-        {cp.maintenance_barrier && (
-          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
-            当前存在全局维护屏障：{cp.maintenance_barrier}
-          </div>
-        )}
-        {cp.update_available && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-200">
-            <span>发现 NomadDeck 新版本 {cp.latest_version}</span>
-            <Link to="/version" className="inline-flex items-center gap-1 font-medium underline">
-              查看更新 <ArrowUpRight className="h-3.5 w-3.5" />
-            </Link>
-          </div>
-        )}
-        {backupAlerts?.missing_offsite_target && (clusters.total ?? 0) > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-            <span>灾备告警：尚未配置已启用的异地备份目标（SFTP / S3 / SafeKeep）。</span>
-            <Link to="/migration-backup" className="font-medium underline">
-              配置灾备
-            </Link>
-          </div>
-        )}
-        {backupAlerts && backupAlerts.consecutive_failures > 0 && (
-          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200">
-            灾备告警：控制面灾备备份已连续失败 {backupAlerts.consecutive_failures} 次。
-          </div>
-        )}
-      </div>
+      {/* Critical actionable alerts */}
+      {(cp.activated === false || cp.maintenance_barrier || cp.update_available || (backupAlerts && backupAlerts.consecutive_failures > 0)) && (
+        <div className="space-y-2.5">
+          {cp.activated === false && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+              <span className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                控制面尚未激活（迁移导入后默认暂停自动调度与解封，以防双活冲突）。
+              </span>
+              <Link to="/migration-backup" className="font-medium text-amber-800 dark:text-amber-200 underline">
+                前往激活
+              </Link>
+            </div>
+          )}
+          {cp.maintenance_barrier && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+              当前存在全局维护屏障：{cp.maintenance_barrier}
+            </div>
+          )}
+          {cp.update_available && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-200">
+              <span>发现 NomadDeck 新版本 {cp.latest_version}</span>
+              <Link to="/version" className="inline-flex items-center gap-1 font-medium underline">
+                查看更新 <ArrowUpRight className="h-3.5 w-3.5" />
+              </Link>
+            </div>
+          )}
+          {backupAlerts && backupAlerts.consecutive_failures > 0 && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200">
+              灾备告警：控制面灾备备份已连续失败 {backupAlerts.consecutive_failures} 次。
+            </div>
+          )}
+        </div>
+      )}
 
-      {/* Hero + KPI cards */}
-      <div className="space-y-4">
-        <div className="rounded-2xl border border-indigo-100 dark:border-indigo-500/25 bg-gradient-to-r from-indigo-50 via-white to-white dark:from-indigo-950/60 dark:via-slate-900 dark:to-slate-900 p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex gap-4 items-center min-w-0">
-            <div className="hidden sm:grid w-11 h-11 place-items-center rounded-2xl bg-white dark:bg-indigo-500/15 border border-indigo-100 dark:border-indigo-500/30 text-indigo-500 dark:text-indigo-300 shrink-0">
-              <ShieldCheck className="w-6 h-6" />
-            </div>
-            <div className="min-w-0">
-              <div className="text-xs font-medium text-indigo-500 dark:text-indigo-400 mb-1">{hasNomad ? '集群控制面状态' : '开始使用 NomadDeck'}</div>
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-                {hasReadyNomad ? '集群就绪，开始编排工作负载' : hasNomad ? '继续完成集群部署与检查' : '搭建你的第一个集群'}
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                {hasReadyNomad
-                  ? '可直接进入 Nomad Job 中心编排工作负载，或巡检集群状态与 Raft 快照。'
-                  : '先添加 Linux 主机并推送 SSH 公钥，随后即可一键初始化部署 Nomad 或 Vault 集群。'}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="primary-button shrink-0"
-            onClick={() => navigate(hasReadyNomad ? '/jobs' : (nodes.total ?? 0) > 0 ? '/nomad' : '/infra')}
+      {/* Unified onboarding / ready banner */}
+      <GettingStarted
+        hasHosts={hasHosts}
+        hasNomad={hasNomad}
+        hasReadyNomad={hasReadyNomad}
+        hasVault={hasVault}
+        hasReadyVault={hasReadyVault}
+      />
+
+      {/* KPI cards */}
+      <div className="grid grid-cols-1 min-[420px]:grid-cols-2 xl:grid-cols-4 gap-4">
+        {cards.map((c) => (
+          <Link
+            key={c.label}
+            to={c.to}
+            className="group bg-white dark:bg-slate-900 rounded-2xl border border-[#e3e8f1] dark:border-slate-800 shadow-[0_3px_12px_rgba(15,23,42,0.03)] p-5 flex flex-col justify-between hover:border-indigo-300 dark:hover:border-indigo-500/40 transition"
           >
-            <span>{hasReadyNomad ? '前往 Job 中心' : hasNomad ? '继续配置集群' : (nodes.total ?? 0) > 0 ? '创建 Nomad 集群' : '接入第一台主机'}</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        <GettingStarted hasHosts={(nodes.total ?? 0) > 0} hasNomad={hasNomad} hasVault={(clusters.vault ?? 0) > 0} />
-
-        <div className="grid grid-cols-1 min-[420px]:grid-cols-2 xl:grid-cols-4 gap-4">
-          {cards.map((c) => (
-            <Link
-              key={c.label}
-              to={c.to}
-              className="group bg-white dark:bg-slate-900 rounded-2xl border border-[#e3e8f1] dark:border-slate-800 shadow-[0_3px_12px_rgba(15,23,42,0.03)] p-5 flex flex-col justify-between hover:border-indigo-300 dark:hover:border-indigo-500/40 transition"
-            >
-              <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-                <span className="font-medium group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                  {c.label}
-                </span>
-                <span className="text-indigo-500 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/15 p-2 rounded-lg shrink-0">
-                  {c.icon}
-                </span>
+            <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span className="font-medium group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                {c.label}
+              </span>
+              <span className="text-indigo-500 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/15 p-2 rounded-lg shrink-0">
+                {c.icon}
+              </span>
+            </div>
+            <div className="mt-3">
+              <div className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 tabular-nums">
+                {c.value}
               </div>
-              <div className="mt-3">
-                <div className="text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 tabular-nums">
-                  {c.value}
-                </div>
-                <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">{c.sub}</div>
-              </div>
-            </Link>
-          ))}
-        </div>
+              <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">{c.sub}</div>
+            </div>
+          </Link>
+        ))}
       </div>
 
       {/* Clusters + Alerts */}
@@ -228,47 +213,61 @@ export function DashboardPage() {
             </div>
           }
         >
-          {(clusters.items || []).length === 0 ? (
+          {clusterItems.length === 0 ? (
             <EmptyState
               icon={<Boxes className="w-6 h-6" />}
               title="暂无纳管集群"
-              description="前往 Nomad 或 Vault 页面创建并部署第一个集群。"
+              description="先接入 Linux 主机，再前往 Nomad 或 Vault 页面创建第一个集群。"
               action={
-                <Link to="/nomad" className="text-xs text-indigo-600 dark:text-indigo-400 font-medium inline-flex items-center gap-1">
-                  创建集群 <ArrowRight className="w-3 h-3" />
+                <Link to={hasHosts ? '/nomad' : '/infra'} className="text-xs text-indigo-600 dark:text-indigo-400 font-medium inline-flex items-center gap-1">
+                  {hasHosts ? '去创建 Nomad 集群' : '先去接入主机'} <ArrowRight className="w-3 h-3" />
                 </Link>
               }
             />
           ) : (
             <div className="space-y-2.5">
-              {clusters.items.map((c: any) => (
-                <div
-                  key={c.id}
-                  className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800"
-                >
-                  <div className="min-w-0">
-                    <Link
-                      to={c.type === 'vault' ? `/vault?id=${c.id}` : `/nomad?id=${c.id}`}
-                      className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400 truncate"
-                    >
-                      {c.name}
-                    </Link>
-                    <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      {c.type.toUpperCase()} · {c.mode === 'single' ? '单机' : '高可用集群'} · {c.init_state === 'initialized' ? '已初始化' : '待完成初始化'}
+              {clusterItems.map((c: any) => {
+                const detailHref = c.type === 'vault' ? `/vault?id=${c.id}` : `/nomad?id=${c.id}`;
+                return (
+                  <div
+                    key={c.id}
+                    className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-50/80 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Link
+                          to={detailHref}
+                          className="text-sm font-semibold text-slate-900 hover:text-indigo-600 dark:text-slate-100 dark:hover:text-indigo-400 truncate"
+                        >
+                          {c.name}
+                        </Link>
+                        <Badge tone="blue">{c.type === 'vault' ? 'Vault' : 'Nomad'}</Badge>
+                        <Badge>{c.mode === 'single' ? '单机' : '高可用'}</Badge>
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                        {c.init_state === 'initialized' ? '已完成初始化' : '等待部署或初始化'}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {c.maintenance_mode && <Badge tone="amber">维护中</Badge>}
+                      <StatusBadge value={c.init_state === 'uninitialized' && c.health_status === 'unreachable' ? 'uninitialized' : c.health_status} />
+                      <Link
+                        to={c.type === 'nomad' && c.init_state === 'initialized' ? '/jobs' : detailHref}
+                        className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400 inline-flex items-center gap-0.5 ml-1"
+                      >
+                        {c.type === 'nomad' && c.init_state === 'initialized' ? '运行 Job' : '管理'}
+                        <ArrowUpRight className="h-3 w-3" />
+                      </Link>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {c.maintenance_mode && <Badge tone="amber">维护中</Badge>}
-                    <StatusBadge value={c.health_status} />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </Card>
 
         <Card
-          title="Vault、证书与时钟告警"
+          title="健康巡检与待办建议"
           actions={
             <div className="flex items-center gap-3 text-xs">
               <Link to="/infra" className="inline-flex items-center gap-0.5 text-indigo-600 hover:underline dark:text-indigo-400">
@@ -283,7 +282,7 @@ export function DashboardPage() {
             </div>
           }
         >
-          {vaultAlerts.length === 0 && clockAlerts.length === 0 && certAlerts.length === 0 ? (
+          {!hasAlertsOrTips ? (
             <EmptyState
               icon={<ShieldCheck className="w-6 h-6" />}
               title="一切运行正常"
@@ -316,7 +315,7 @@ export function DashboardPage() {
                 </Link>
               ))}
               {certAlerts.map((ca: any, i: number) => {
-                const targetCluster = (clusters.items || []).find((c: any) => c.id === ca.cluster_id);
+                const targetCluster = clusterItems.find((c: any) => c.id === ca.cluster_id);
                 const certHref =
                   targetCluster?.type === 'nomad' ? `/nomad?id=${ca.cluster_id}` : `/vault?id=${ca.cluster_id || ''}`;
                 return (
@@ -332,6 +331,18 @@ export function DashboardPage() {
                   </Link>
                 );
               })}
+              {backupAlerts?.missing_offsite_target && (clusters.total ?? 0) > 0 && (
+                <Link
+                  to="/migration-backup"
+                  className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-200 dark:hover:border-indigo-500/40"
+                >
+                  <span className="flex items-center gap-2">
+                    <Info className="h-4 w-4 shrink-0 text-indigo-500" />
+                    <span>尚未配置异地备份目标（SFTP / S3 / SafeKeep），生产环境建议开启定时灾备。</span>
+                  </span>
+                  <Badge tone="blue">建议配置</Badge>
+                </Link>
+              )}
             </div>
           )}
         </Card>
@@ -347,7 +358,7 @@ export function DashboardPage() {
             </Link>
           }
         >
-          {(data?.recent_operations || []).length === 0 ? (
+          {recentOps.length === 0 ? (
             <EmptyState
               icon={<Clock className="w-6 h-6" />}
               title="暂无运维任务"
@@ -355,13 +366,13 @@ export function DashboardPage() {
             />
           ) : (
             <div className="divide-y divide-slate-100 text-xs dark:divide-slate-800">
-              {data.recent_operations.map((t: any) => (
+              {recentOps.map((t: any) => (
                 <div key={t.id} className="flex items-center justify-between gap-2 py-2.5">
                   <div className="min-w-0">
                     <button
                       type="button"
-                      onClick={() => openTask(t.id, `${t.action} (${t.id})`)}
-                      className="font-mono font-medium text-indigo-600 hover:underline dark:text-indigo-400 truncate"
+                      onClick={() => openTask(t.id, formatActionLabel(t.action))}
+                      className="font-medium text-indigo-600 hover:underline dark:text-indigo-400 truncate"
                     >
                       {formatActionLabel(t.action)}
                     </button>
@@ -384,15 +395,19 @@ export function DashboardPage() {
             </Link>
           }
         >
-          {(data?.recent_audit_logs || []).length === 0 ? (
+          {recentAudit.length === 0 ? (
             <EmptyState title="暂无审计日志" description="控制面操作与登录记录将自动写入审计日志。" />
           ) : (
             <div className="divide-y divide-slate-100 text-xs dark:divide-slate-800">
-              {data.recent_audit_logs.map((l: any) => (
+              {recentAudit.map((l: any) => (
                 <div key={l.id} className="flex items-center justify-between gap-2 py-2.5">
                   <div className="min-w-0">
                     <div className="truncate font-medium text-slate-800 dark:text-slate-100">
-                      <span className="font-mono">{l.action}</span> · {l.resource_name || l.resource_type}
+                      <span>{formatActionLabel(l.action)}</span>
+                      <span className="mx-1.5 text-slate-400">·</span>
+                      <span className="text-slate-500 dark:text-slate-400 font-normal">
+                        {l.resource_name || RESOURCE_LABELS[l.resource_type] || l.resource_type}
+                      </span>
                     </div>
                     <div className="text-slate-500 dark:text-slate-400 mt-0.5">
                       {l.actor_name || '-'} · {fmtTime(l.created_at)}

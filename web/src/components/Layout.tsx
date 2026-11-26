@@ -277,7 +277,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div className="page-content max-w-[1440px] w-full mx-auto px-4 py-6 sm:p-8 flex-1">{children}</div>
           <footer className="max-w-[1440px] w-full mx-auto px-5 sm:px-8 py-5 text-[11px] text-slate-400 dark:text-slate-500 flex flex-wrap gap-2 justify-between border-t border-slate-200/50 dark:border-slate-800/60">
             <span>NomadDeck · {versionLabel}</span>
-            <span>SSH/SFTP + HTTP API 双通道集群运维控制面</span>
+            <span>Nomad & Vault 统一集群运维控制面</span>
           </footer>
         </main>
       </div>

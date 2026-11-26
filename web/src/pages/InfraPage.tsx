@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Activity, Copy, KeyRound, Plus, RefreshCw, Server as ServerIcon, Trash2 } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Activity, Copy, KeyRound, MoreHorizontal, Plus, RefreshCw, Server as ServerIcon, Trash2 } from 'lucide-react';
 import { apiDelete, apiGet, apiPost, apiPut, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { copyText as copyToClipboard } from '../lib/clipboard';
@@ -59,6 +60,8 @@ export function InfraPage() {
   const [pushPassword, setPushPassword] = useState('');
   const [pwResetNode, setPwResetNode] = useState<any>(null);
   const [probeWarnings, setProbeWarnings] = useState<{ node: string; warnings: string[] } | null>(null);
+  const [openMenu, setOpenMenu] = useState<{ id: string; top: number; right: number } | null>(null);
+  const [saveAndTest, setSaveAndTest] = useState(true);
   const [dockerNode, setDockerNode] = useState<any>(null);
   const [dockerInfo, setDockerInfo] = useState<any>(null);
   const [dockerVer, setDockerVer] = useState('');
@@ -86,6 +89,22 @@ export function InfraPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!openMenu) return;
+    const close = () => setOpenMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('click', close);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [openMenu]);
 
   const generateKey = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,12 +172,26 @@ export function InfraPage() {
     setFormBusy(true);
     setErr('');
     try {
+      let savedNode: any = editingNode;
       if (editingNode) {
-        await apiPut(`/api/v1/nodes/${editingNode.id}`, nodeForm);
+        const res = await apiPut(`/api/v1/nodes/${editingNode.id}`, nodeForm);
+        savedNode = res.node || editingNode;
       } else {
-        await apiPost('/api/v1/nodes', nodeForm);
+        const res = await apiPost('/api/v1/nodes', nodeForm);
+        savedNode = res.node;
       }
       setShowNodeModal(false);
+      if (saveAndTest && savedNode?.id) {
+        try {
+          const testRes = await apiPost(`/api/v1/nodes/${savedNode.id}/test`);
+          setProbeWarnings({ node: savedNode.name || nodeForm.name, warnings: testRes.warnings || [] });
+          toast.success(`主机 ${savedNode.name || nodeForm.name} 已保存并连接成功`);
+        } catch (testEx: any) {
+          toast.info(`主机已保存，暂未连通：${testEx?.message || '请先完成公钥授权或使用推送公钥'}`);
+        }
+      } else {
+        toast.success(`主机 ${nodeForm.name} 已保存`);
+      }
       await load();
     } catch (ex: any) {
       setErr(ex?.message || '保存主机失败');
@@ -314,7 +347,7 @@ export function InfraPage() {
             </Button>
             {isAdmin && tab === 'nodes' && (
               <>
-                <Button disabled={metricsBusy} onClick={() => void refreshAllMetrics()}>
+                <Button disabled={metricsBusy || nodes.length === 0} onClick={() => void refreshAllMetrics()}>
                   <Activity className="h-4 w-4" />
                   <span>{metricsBusy ? '采集中...' : '采集实时负载'}</span>
                 </Button>
@@ -353,16 +386,6 @@ export function InfraPage() {
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
-      {nodes.length === 0 && (
-        <Card title="从第一台主机开始">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 text-sm">
-            <div><span className="font-semibold text-indigo-600 dark:text-indigo-300">1. 准备 SSH 密钥</span><p className="mt-1 text-xs leading-6 text-slate-500">生成新密钥，或导入已能登录目标主机的私钥。</p></div>
-            <div><span className="font-semibold text-indigo-600 dark:text-indigo-300">2. 添加主机与授权</span><p className="mt-1 text-xs leading-6 text-slate-500">填写地址，选择密钥；主机尚未授权时，使用「推送公钥」。</p></div>
-            <div><span className="font-semibold text-indigo-600 dark:text-indigo-300">3. 测试连接</span><p className="mt-1 text-xs leading-6 text-slate-500">点击「测试连接」，确认在线后再创建 Nomad 或 Vault 集群。</p></div>
-          </div>
-        </Card>
-      )}
-
       {probeWarnings && (
         <Card
           title={`主机 ${probeWarnings.node} 环境探测结果`}
@@ -383,32 +406,91 @@ export function InfraPage() {
       {tab === 'nodes' && (
         <Card>
           {nodes.length === 0 ? (
-            <EmptyState icon={<ServerIcon className="h-6 w-6" />} title="接入你的第一台 Linux 主机" description="控制面通过 SSH 安装和管理集群服务。推荐准备 3 台主机体验高可用集群。" action={isAdmin && <Button variant="primary" onClick={openAddNode}>新增主机</Button>} />
+            (() => {
+              const defKey = keys.find((k) => k.is_default) || keys[0];
+              const authCmd = defKey
+                ? `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '${defKey.public_key}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`
+                : '';
+              return (
+                <div className="space-y-6 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">接入你的第一台 Linux 主机</h2>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        控制面通过 SSH 管理集群。1 台主机即可单机体验，准备 3 台主机可组建高可用集群。
+                      </p>
+                    </div>
+                    {isAdmin && (
+                      <Button variant="primary" onClick={openAddNode}>
+                        <Plus className="h-4 w-4" />
+                        <span>新增第一台主机</span>
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3 text-xs">
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-4 space-y-2">
+                      <div className="font-semibold text-indigo-600 dark:text-indigo-300">1. 准备 SSH 授权</div>
+                      <p className="leading-5 text-slate-500 dark:text-slate-400">
+                        {defKey
+                          ? `已就绪默认密钥「${defKey.name}」，可直接复制下方授权命令到目标主机执行，或添加后再用密码推送公钥。`
+                          : '前往「SSH 密钥库」生成或导入私钥。'}
+                      </p>
+                      {defKey && (
+                        <Button size="sm" onClick={() => copyText(authCmd, '已复制目标主机授权命令')}>
+                          <Copy className="h-3 w-3" /> 复制授权命令
+                        </Button>
+                      )}
+                    </div>
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-4 space-y-1.5">
+                      <div className="font-semibold text-indigo-600 dark:text-indigo-300">2. 登记主机地址</div>
+                      <p className="leading-5 text-slate-500 dark:text-slate-400">
+                        点击右上角「新增第一台主机」，填入主机名称、IP 或域名及 SSH 用户名（如 root）。
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-4 space-y-1.5">
+                      <div className="font-semibold text-indigo-600 dark:text-indigo-300">3. 自动探测与建群</div>
+                      <p className="leading-5 text-slate-500 dark:text-slate-400">
+                        保存后将自动探测系统、内存与时间同步；确认「在线」后即可前往创建 Nomad 或 Vault 集群。
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1050px] text-left text-xs">
+              <table className="w-full min-w-[920px] text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
-                    <th className="py-2 pr-3">名称 / 地址</th>
-                    <th className="py-2 pr-3">状态</th>
-                    <th className="py-2 pr-3">CPU / 内存利用率</th>
-                    <th className="py-2 pr-3">系统 / 架构</th>
-                    <th className="py-2 pr-3">Docker</th>
-                    <th className="py-2 pr-3"><TermLabel term="时间同步" tip="Raft 一致性依赖各节点系统时间同步（chrony / systemd-timesyncd），偏差过大会导致选举抖动或 TLS 校验异常。" /></th>
-                    <th className="py-2 pr-3"><TermLabel term="Machine ID" tip="/etc/machine-id，用于探测克隆虚拟机导致的节点身份冲突。" /></th>
-                    {isAdmin && <th className="py-2 text-right">操作</th>}
+                    <th className="py-2.5 pr-3">名称 / 地址</th>
+                    <th className="py-2.5 pr-3">状态</th>
+                    <th className="py-2.5 pr-3">CPU / 内存利用率</th>
+                    <th className="py-2.5 pr-3">系统 / 架构</th>
+                    <th className="py-2.5 pr-3">Docker</th>
+                    <th className="py-2.5 pr-3"><TermLabel term="时间同步" tip="Raft 一致性依赖各节点系统时间同步（chrony / systemd-timesyncd），偏差过大会导致选举抖动或 TLS 校验异常。" /></th>
+                    <th className="py-2.5 pr-3"><TermLabel term="节点 ID" tip="/etc/machine-id，用于探测克隆虚拟机导致的节点身份冲突。" /></th>
+                    {isAdmin && <th className="py-2.5 text-right">操作</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {nodes.map((n) => {
                     const cpuPct = typeof n.cpu_percent === 'number' && n.cpu_percent >= 0 ? n.cpu_percent : null;
                     const memPct = typeof n.mem_percent === 'number' && n.mem_percent >= 0 ? n.mem_percent : null;
+                    const dockerModeLabel =
+                      n.docker_mode === 'managed' ? '托管' : n.docker_mode === 'external' ? '外部' : n.docker_mode === 'absent' ? '未安装' : n.docker_mode || '-';
+                    const dockerStatusLabel =
+                      n.docker_status === 'running' || n.docker_status === 'active'
+                        ? '运行中'
+                        : n.docker_status === 'absent'
+                          ? ''
+                          : n.docker_status || '';
+                    const timeSyncLabel = n.time_sync === 'synced' ? '已同步' : n.time_sync === 'unsynced' || n.time_sync === 'skewed' ? '待校时' : n.time_sync || '-';
                     return (
                     <tr key={n.id}>
-                      <td className="py-2.5 pr-3">
+                      <td className="py-3 pr-3">
                         <div className="flex flex-wrap items-center gap-1.5 font-medium">
                           <ServerIcon className="h-3.5 w-3.5 text-slate-400" />
-                          <span>{n.name}</span>
+                          <span className="text-slate-900 dark:text-slate-100">{n.name}</span>
                           {n.is_control_plane_host && (
                             <span className="inline-flex items-center gap-0.5">
                               <Badge tone="amber">控制面同机</Badge>
@@ -416,14 +498,14 @@ export function InfraPage() {
                             </span>
                           )}
                         </div>
-                        <div className="font-mono text-slate-500">
+                        <div className="font-mono text-slate-500 mt-0.5">
                           {n.ssh_user}@{n.host}:{n.ssh_port}
                         </div>
                       </td>
-                      <td className="py-2.5 pr-3">
+                      <td className="py-3 pr-3">
                         <StatusBadge value={n.status || 'unknown'} />
                       </td>
-                      <td className="py-2.5 pr-3 min-w-[160px]">
+                      <td className="py-3 pr-3 min-w-[160px]">
                         <div className="space-y-1.5 text-[11px]">
                           <div>
                             <div className="flex justify-between">
@@ -453,32 +535,31 @@ export function InfraPage() {
                           </div>
                         </div>
                       </td>
-                      <td className="py-2.5 pr-3">
-                        <div>{n.os_info || '-'}</div>
+                      <td className="py-3 pr-3">
+                        <div className="text-slate-800 dark:text-slate-200">{n.os_info || '-'}</div>
                         <div className="font-mono text-slate-500">{n.arch || '-'}</div>
                       </td>
-                      <td className="py-2.5 pr-3">
-                        <div>{n.docker_mode || '-'} {n.docker_version}</div>
-                        <div className="text-slate-500">{n.docker_status || '-'}</div>
+                      <td className="py-3 pr-3">
+                        <div className="flex items-center gap-1.5">
+                          <Badge tone={n.docker_mode === 'absent' ? 'neutral' : 'blue'}>{dockerModeLabel}</Badge>
+                          {n.docker_version && <span className="font-mono text-[11px] text-slate-500">{n.docker_version}</span>}
+                        </div>
+                        {dockerStatusLabel && <div className="text-slate-500 mt-0.5">{dockerStatusLabel}</div>}
                       </td>
-                      <td className="py-2.5 pr-3">
-                        <div>{n.time_sync || '-'}</div>
-                        <div className="text-slate-500">{n.clock_skew_ms ?? 0} ms</div>
+                      <td className="py-3 pr-3">
+                        <div className={n.time_sync === 'synced' ? 'text-emerald-600 dark:text-emerald-400 font-medium' : 'text-amber-600 dark:text-amber-400 font-medium'}>
+                          {timeSyncLabel}
+                        </div>
+                        <div className="text-slate-500 font-mono">{n.clock_skew_ms ?? 0} ms</div>
                       </td>
-                      <td className="py-2.5 pr-3 font-mono text-[11px] text-slate-500">
-                        {n.machine_id ? n.machine_id.slice(0, 12) + '…' : '-'}
+                      <td className="py-3 pr-3 font-mono text-[11px] text-slate-500" title={n.machine_id || ''}>
+                        {n.machine_id ? n.machine_id.slice(0, 10) + '…' : '-'}
                       </td>
                       {isAdmin && (
-                        <td className="py-2.5 text-right">
-                          <div className="flex flex-wrap justify-end gap-1">
-                            <Button size="sm" onClick={() => void refreshNodeMetrics(n)}>
-                              负载
-                            </Button>
+                        <td className="py-3 text-right">
+                          <div className="relative inline-flex items-center justify-end gap-1.5 whitespace-nowrap">
                             <Button size="sm" onClick={() => void testNode(n)}>
                               测试连接
-                            </Button>
-                            <Button size="sm" onClick={() => { setErr(''); setPushNode(n); }}>
-                              推公钥
                             </Button>
                             <Button size="sm" onClick={() => void openDocker(n)}>
                               Docker
@@ -488,33 +569,79 @@ export function InfraPage() {
                             </Button>
                             <Button
                               size="sm"
-                              onClick={() => setPwResetNode(n)}
-                            >
-                              重置指纹
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="danger"
-                              onClick={async () => {
-                                if (
-                                  !(await askConfirm(`确定要删除主机「${n.name}」(${n.host}) 吗？`, {
-                                    title: '删除主机节点',
-                                    confirmText: '确认删除',
-                                    danger: true,
-                                  }))
-                                ) {
-                                  return;
-                                }
-                                void apiDelete(`/api/v1/nodes/${n.id}`)
-                                  .then(() => {
-                                    toast.success(`已删除主机 ${n.name}`);
-                                    return load();
-                                  })
-                                  .catch((ex) => toast.error(ex.message));
+                              aria-label={`更多操作：${n.name}`}
+                              aria-expanded={openMenu?.id === n.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const flipUp = rect.bottom + 180 > window.innerHeight;
+                                const top = flipUp ? Math.max(8, rect.top - 168) : rect.bottom + 6;
+                                const right = Math.max(8, window.innerWidth - rect.right);
+                                setOpenMenu((cur) => (cur?.id === n.id ? null : { id: n.id, top, right }));
                               }}
                             >
-                              <Trash2 className="h-3 w-3" />
+                              <MoreHorizontal className="h-3.5 w-3.5" />
                             </Button>
+                            {openMenu && openMenu.id === n.id && createPortal(
+                              <div
+                                role="menu"
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ top: openMenu.top, right: openMenu.right }}
+                                className="fixed z-50 flex w-44 flex-col gap-0.5 rounded-xl border border-slate-200 bg-white p-1.5 text-left shadow-xl dark:border-slate-700 dark:bg-slate-900"
+                              >
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => { setOpenMenu(null); void refreshNodeMetrics(n); }}
+                                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+                                >
+                                  采集实时负载
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => { setOpenMenu(null); setErr(''); setPushNode(n); }}
+                                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+                                >
+                                  推送 SSH 公钥
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => { setOpenMenu(null); setPwResetNode(n); }}
+                                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+                                >
+                                  重置主机指纹
+                                </button>
+                                <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={async () => {
+                                    setOpenMenu(null);
+                                    if (
+                                      !(await askConfirm(`确定要删除主机「${n.name}」(${n.host}) 吗？`, {
+                                        title: '删除主机节点',
+                                        confirmText: '确认删除',
+                                        danger: true,
+                                      }))
+                                    ) {
+                                      return;
+                                    }
+                                    void apiDelete(`/api/v1/nodes/${n.id}`)
+                                      .then(() => {
+                                        toast.success(`已删除主机 ${n.name}`);
+                                        return load();
+                                      })
+                                      .catch((ex) => toast.error(ex.message));
+                                  }}
+                                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
+                                >
+                                  删除主机
+                                </button>
+                              </div>,
+                              document.body
+                            )}
                           </div>
                         </td>
                       )}
@@ -650,12 +777,12 @@ export function InfraPage() {
 
       {/* Create/Edit Node modal */}
       <Modal open={showNodeModal} title={editingNode ? '编辑主机' : '新增 Linux 主机'} busy={formBusy} onClose={() => setShowNodeModal(false)}>
-        <form onSubmit={saveNode} className="space-y-3">
+        <form onSubmit={saveNode} className="space-y-3.5">
           <ErrorAlert message={err} onClose={() => setErr('')} />
-          <Input label="主机名称" required value={nodeForm.name} onChange={(e) => setNodeForm({ ...nodeForm, name: e.target.value })} />
-          <div className="grid grid-cols-3 gap-2">
+          <Input label="主机名称" required placeholder="例如 node-1" value={nodeForm.name} onChange={(e) => setNodeForm({ ...nodeForm, name: e.target.value })} />
+          <div className="grid grid-cols-3 gap-2.5">
             <div className="col-span-2">
-              <Input label="主机地址 (IP/域名)" required value={nodeForm.host} onChange={(e) => setNodeForm({ ...nodeForm, host: e.target.value })} />
+              <Input label="主机地址 (IP/域名)" required placeholder="例如 10.0.1.10" value={nodeForm.host} onChange={(e) => setNodeForm({ ...nodeForm, host: e.target.value })} />
             </div>
             <Input
               label="SSH 端口"
@@ -668,7 +795,7 @@ export function InfraPage() {
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input label="SSH 用户" autoComplete="off" required value={nodeForm.ssh_user} onChange={(e) => setNodeForm({ ...nodeForm, ssh_user: e.target.value })} />
+            <Input label="SSH 用户" autoComplete="off" required placeholder="root" value={nodeForm.ssh_user} onChange={(e) => setNodeForm({ ...nodeForm, ssh_user: e.target.value })} />
             <Select label="SSH 密钥" value={nodeForm.ssh_key_id} onChange={(e) => setNodeForm({ ...nodeForm, ssh_key_id: e.target.value })}>
               {keys.map((k) => (
                 <option key={k.id} value={k.id}>
@@ -677,18 +804,32 @@ export function InfraPage() {
               ))}
             </Select>
           </div>
-          <label className="flex items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              checked={nodeForm.use_sudo}
-              onChange={(e) => setNodeForm({ ...nodeForm, use_sudo: e.target.checked })}
-            />
-            <span>使用免密 sudo</span>
-          </label>
-          <Input label="备注" value={nodeForm.notes} onChange={(e) => setNodeForm({ ...nodeForm, notes: e.target.value })} />
+          <div className="space-y-2 pt-0.5">
+            {nodeForm.ssh_user.trim() !== 'root' ? (
+              <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={nodeForm.use_sudo}
+                  onChange={(e) => setNodeForm({ ...nodeForm, use_sudo: e.target.checked })}
+                />
+                <span>使用免密 sudo（非 root 用户安装服务时需要）</span>
+              </label>
+            ) : (
+              <p className="text-xs text-slate-500 dark:text-slate-400">当前使用 root 登录，将直接管理服务，无需 sudo 提权。</p>
+            )}
+            <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300">
+              <input
+                type="checkbox"
+                checked={saveAndTest}
+                onChange={(e) => setSaveAndTest(e.target.checked)}
+              />
+              <span>保存后立即测试 SSH 连接并探测环境</span>
+            </label>
+          </div>
+          <Input label="备注（可选）" placeholder="用途说明或机房位置" value={nodeForm.notes} onChange={(e) => setNodeForm({ ...nodeForm, notes: e.target.value })} />
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" disabled={formBusy} onClick={() => setShowNodeModal(false)}>取消</Button>
-            <Button type="submit" variant="primary" loading={formBusy}>保存</Button>
+            <Button type="submit" variant="primary" loading={formBusy}>{saveAndTest ? '保存并测试连接' : '保存'}</Button>
           </div>
         </form>
       </Modal>

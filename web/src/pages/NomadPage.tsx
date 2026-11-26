@@ -204,7 +204,6 @@ export function NomadPage() {
       run: async (pw) => {
         const res = await apiPost(`/api/v1/nomad/${selectedId}/management-token/reveal`, { current_password: pw });
         setMgmtToken(res.management_token || '');
-        toast.info('已解密 Nomad Management (Root) Token，请妥善保管');
       },
     });
   };
@@ -282,14 +281,6 @@ export function NomadPage() {
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
       {newToken && <MaskedSecret value={newToken} label="新签发 ACL Token Secret（仅展示一次）：" />}
-      {mgmtToken && (
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex-1 min-w-0">
-            <MaskedSecret value={mgmtToken} label="Nomad Management (Root) Token（最高权限密钥）：" />
-          </div>
-          <Button size="sm" onClick={() => setMgmtToken('')}>隐藏 Token</Button>
-        </div>
-      )}
 
       {!cluster ? (
         <Card>
@@ -691,6 +682,24 @@ export function NomadPage() {
           if (pwAction) await pwAction.run(pw);
         }}
       />
+
+      <Modal
+        open={Boolean(mgmtToken)}
+        title="Nomad Management (Root) Token"
+        onClose={() => setMgmtToken('')}
+        footer={
+          <div className="flex justify-end">
+            <Button variant="primary" onClick={() => setMgmtToken('')}>关闭</Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-xs leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+            这是 Nomad 集群的最高权限管理密钥（Root Token），可用于登录 Nomad 原生 Web UI 或通过 CLI 管理集群。关闭弹窗后将清除页面内存中的明文，下次查看需重新验证密码。
+          </div>
+          <MaskedSecret value={mgmtToken} label="Management (Root) Token：" />
+        </div>
+      </Modal>
 
       <Modal open={Boolean(dlModal)} title={dlModal?.title || ''} onClose={() => setDlModal(null)}>
         <form

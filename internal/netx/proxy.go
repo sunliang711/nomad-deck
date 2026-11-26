@@ -115,6 +115,15 @@ func (m *Manager) Load(ctx context.Context) (*ProxyConfig, string, error) {
 	return &cfg, plain, nil
 }
 
+// Configured reports whether a system proxy is configured.
+func (m *Manager) Configured(ctx context.Context) (bool, error) {
+	cfg, _, err := m.Load(ctx)
+	if err != nil {
+		return false, err
+	}
+	return cfg != nil, nil
+}
+
 // PasswordSet reports whether a proxy password is stored.
 func (m *Manager) PasswordSet(ctx context.Context) bool {
 	v, _, err := db.GetSetting(ctx, m.DB.Reader, SettingProxyPassword)

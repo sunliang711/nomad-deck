@@ -4,6 +4,7 @@ import { Activity, AlertTriangle, CheckCircle2, Copy, KeyRound, MoreHorizontal, 
 import { apiDelete, apiGet, apiPost, apiPut, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { copyText as copyToClipboard } from '../lib/clipboard';
+import { canEnableSystemProxy } from '../lib/proxy';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -615,6 +616,18 @@ export function InfraPage() {
     } finally {
       setDockerBusy(false);
     }
+  };
+
+  const toggleDockerUseProxy = async (next: boolean) => {
+    if (!(await canEnableSystemProxy(next, (msg) => { setDockerErr(msg); toast.error(msg); }))) return;
+    setDockerErr('');
+    setDockerUseProxy(next);
+  };
+
+  const toggleDockerPullSystemProxy = async (next: boolean) => {
+    if (!(await canEnableSystemProxy(next, (msg) => { setDockerErr(msg); toast.error(msg); }))) return;
+    setDockerErr('');
+    setDockerCfg((prev) => ({ ...prev, use_system_proxy: next }));
   };
 
   const testDockerProxy = async () => {
@@ -1386,7 +1399,7 @@ export function InfraPage() {
               )}
             </div>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={dockerUseProxy} onChange={(e) => setDockerUseProxy(e.target.checked)} />
+              <input type="checkbox" checked={dockerUseProxy} onChange={(e) => void toggleDockerUseProxy(e.target.checked)} />
               <span>安装/升级使用系统代理</span>
             </label>
             </div>
@@ -1420,7 +1433,7 @@ export function InfraPage() {
                 <input
                   type="checkbox"
                   checked={dockerCfg.use_system_proxy}
-                  onChange={(e) => setDockerCfg({ ...dockerCfg, use_system_proxy: e.target.checked })}
+                  onChange={(e) => void toggleDockerPullSystemProxy(e.target.checked)}
                 />
                 <span>沿用控制面系统代理作为镜像拉取代理</span>
               </label>

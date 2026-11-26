@@ -212,7 +212,6 @@ export function NomadPage() {
   }, [selectedId, clusterProxyPref, defaultUseProxy]);
 
   const handleToggleProxy = async (next: boolean) => {
-    setUseProxy(next);
     if (!isAdmin) return;
     try {
       if (selectedId) {
@@ -223,9 +222,13 @@ export function NomadPage() {
       }
       await apiPut('/api/v1/settings', { 'proxy.use_for_releases': next });
       setDefaultUseProxy(next);
+      setUseProxy(next);
+      setErr('');
       toast.success(next ? '已开启并保存代理设置' : '已关闭并保存代理设置');
     } catch (ex: any) {
-      toast.error(ex?.message || '保存代理勾选状态失败');
+      const msg = ex?.message || '保存代理勾选状态失败';
+      setErr(msg);
+      toast.error(msg);
     }
   };
 

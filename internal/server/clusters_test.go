@@ -337,6 +337,15 @@ func TestJobRoutes(t *testing.T) {
 	if code, _ := viewer.do("PUT", "/api/v1/clusters/"+cid+"/proxy", map[string]any{"use_proxy": true}, nil); code != 403 {
 		t.Fatalf("viewer cannot update cluster proxy: %d", code)
 	}
+	if code, b := root.do("PUT", "/api/v1/clusters/"+cid+"/proxy", map[string]any{"use_proxy": true}, nil); code != 400 || errCode(b) != "proxy_not_configured" {
+		t.Fatalf("enabling cluster proxy without system proxy must fail: %d %v", code, b)
+	}
+	if code, b := root.do("PUT", "/api/v1/clusters/"+cid, map[string]any{"use_proxy": true}, nil); code != 400 {
+		t.Fatalf("updating cluster settings with use_proxy=true without system proxy must fail: %d %v", code, b)
+	}
+	if code, b := root.do("PUT", "/api/v1/settings/proxy", map[string]any{"enabled": true, "type": "http", "host": "10.0.0.1", "port": 3128}, nil); code != 200 {
+		t.Fatalf("configure proxy: %d %v", code, b)
+	}
 	if code, b := root.do("PUT", "/api/v1/clusters/"+cid+"/proxy", map[string]any{"use_proxy": true}, nil); code != 200 {
 		t.Fatalf("put cluster proxy: %d %v", code, b)
 	}
@@ -347,6 +356,7 @@ func TestJobRoutes(t *testing.T) {
 			t.Fatalf("expected persisted settings.use_proxy=true, got %+v", cl["settings"])
 		}
 	}
+	root.do("PUT", "/api/v1/settings/proxy", map[string]any{"enabled": false}, nil)
 	if code, _ := viewer.do("POST", "/api/v1/nomad/"+cid+"/management-token/reveal", map[string]any{"current_password": adminPass}, nil); code != 403 {
 		t.Fatalf("viewer cannot reveal management token: %d", code)
 	}

@@ -246,6 +246,17 @@ func (a *API) putSettings(w http.ResponseWriter, r *http.Request) {
 		vals[k] = v
 		restart = restart || def.RestartToApply
 	}
+	if vals[netx.SettingUseForReleases] == true || vals[netx.SettingUseForSelfUpdate] == true {
+		configured, err := a.Proxy.Configured(r.Context())
+		if err != nil {
+			a.writeErr(w, r, err)
+			return
+		}
+		if !configured {
+			writeError(w, http.StatusBadRequest, "proxy_not_configured", "尚未配置系统代理，请先配置系统代理")
+			return
+		}
+	}
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		now := a.DB.NowString()
 		for k, v := range vals {
@@ -325,6 +336,14 @@ func (a *API) putProxy(w http.ResponseWriter, r *http.Request) {
 	err := a.DB.WithTx(r.Context(), func(tx *sql.Tx) error {
 		if err := a.Proxy.Save(r.Context(), tx, cfg, in.Password); err != nil {
 			return err
+		}
+		if !in.Enabled {
+			now := a.DB.NowString()
+			for _, k := range []string{netx.SettingUseForReleases, netx.SettingUseForSelfUpdate} {
+				if err := db.PutSettingJSON(r.Context(), tx, k, false, now); err != nil {
+					return err
+				}
+			}
 		}
 		summary := map[string]any{"enabled": in.Enabled}
 		if cfg != nil {

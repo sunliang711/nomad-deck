@@ -564,6 +564,17 @@ func (a *API) setClusterProxy(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
+	if in.UseProxy {
+		configured, err := a.Proxy.Configured(r.Context())
+		if err != nil {
+			a.writeErr(w, r, err)
+			return
+		}
+		if !configured {
+			writeError(w, http.StatusBadRequest, "proxy_not_configured", "尚未配置系统代理，请先配置系统代理")
+			return
+		}
+	}
 	c, err := db.GetCluster(r.Context(), a.DB.Reader, chi.URLParam(r, "id"))
 	if errors.Is(err, db.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "not_found", "集群不存在")

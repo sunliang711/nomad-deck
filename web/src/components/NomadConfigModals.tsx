@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '../lib/api';
+import { canEnableSystemProxy } from '../lib/proxy';
 import { useConfirm } from './ConfirmDialog';
 import { useToast } from './Toast';
 import { Badge, Button, ErrorAlert, Input, Modal, Select, TermLabel } from './UI';
@@ -508,6 +509,7 @@ export function NomadClusterSettingsModal({
   onClose: () => void;
   onSaved: (taskId?: string) => Promise<void>;
 }) {
+  const toast = useToast();
   const [cniVersions, setCniVersions] = useState<string[]>([]);
   const [cniVersion, setCniVersion] = useState('');
   const [publicURL, setPublicURL] = useState('');
@@ -548,6 +550,12 @@ export function NomadClusterSettingsModal({
       .then((r) => setCniVersions((r.versions || []) as string[]))
       .catch(() => setCniVersions([]));
   }, [open, cluster]);
+
+  const handleToggleProxy = async (next: boolean) => {
+    if (!(await canEnableSystemProxy(next, (msg) => { setErr(msg); toast.error(msg); }))) return;
+    setErr('');
+    setUseProxy(next);
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -622,7 +630,7 @@ export function NomadClusterSettingsModal({
               <span>允许交互式终端与 Job Action（Exec）</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} />
+              <input type="checkbox" checked={useProxy} onChange={(e) => void handleToggleProxy(e.target.checked)} />
               <span>下载 CNI 更新时通过系统代理</span>
             </label>
           </div>
@@ -691,6 +699,8 @@ export function NomadNodeConfigModal({
   const isInstalled = member?.install_state === 'installed';
   const isSingleServer = cluster?.mode === 'single' && member?.role !== 'client';
   const gen = Number(member?.config?.config_generation || 0);
+  const clusterCNI = cluster?.settings?.cni_version || '';
+  const showCNIProxyOption = isInstalled && isClient && draft.cni && (!member?.config?.cni || reinstallCNI || cniVersion !== clusterCNI);
 
   useEffect(() => {
     if (!open || !cluster || !member) return;
@@ -709,13 +719,18 @@ export function NomadNodeConfigModal({
     }
   }, [open, cluster, member, isClient]);
 
+  const handleToggleProxy = async (next: boolean) => {
+    if (!(await canEnableSystemProxy(next, (msg) => { setErr(msg); toast.error(msg); }))) return;
+    setErr('');
+    setUseProxy(next);
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cluster || !member) return;
     setBusy(true);
     setErr('');
     try {
-      const clusterCNI = cluster.settings?.cni_version || '';
       if (isClient && draft.cni) {
         if (!cniVersion) {
           setErr('启用 CNI 时请先选择集群 CNI 插件版本');
@@ -726,7 +741,7 @@ export function NomadNodeConfigModal({
           await apiPut(`/api/v1/clusters/${cluster.id}`, {
             cni_version: cniVersion,
             confirm_single_node: confirmSingle,
-            use_proxy: useProxy,
+            use_proxy: showCNIProxyOption ? useProxy : undefined,
           });
         }
       }
@@ -739,7 +754,7 @@ export function NomadNodeConfigModal({
         ...clientPayload,
         extra_sans: sans.length > 0 ? sans : undefined,
         reinstall_cni: reinstallCNI,
-        use_proxy: useProxy,
+        use_proxy: showCNIProxyOption ? useProxy : undefined,
         confirm_single_node: confirmSingle,
       });
       await onSubmitted(res?.task?.id, `更新节点配置: ${member.name}`);
@@ -824,9 +839,9 @@ export function NomadNodeConfigModal({
           />
         )}
 
-        {isInstalled && isClient && draft.cni && (!member?.config?.cni || reinstallCNI) && (
+        {showCNIProxyOption && (
           <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-200">
-            <input type="checkbox" checked={useProxy} onChange={(e) => setUseProxy(e.target.checked)} />
+            <input type="checkbox" checked={useProxy} onChange={(e) => void handleToggleProxy(e.target.checked)} />
             <span>下载 CNI 插件包时通过系统代理</span>
           </label>
         )}

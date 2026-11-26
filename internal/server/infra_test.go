@@ -107,20 +107,23 @@ func TestSettingsAndProxyAPI(t *testing.T) {
 	if code, _ := root.do("PUT", "/api/v1/settings", map[string]any{"unknown.key": 1}, nil); code != 400 {
 		t.Fatal("unknown key accepted")
 	}
-	code, b := root.do("PUT", "/api/v1/settings", map[string]any{"ssh.max_concurrency": 4, "proxy.use_for_releases": true,
+	if code, b := root.do("PUT", "/api/v1/settings", map[string]any{"proxy.use_for_releases": true}, nil); code != 400 || errCode(b) != "proxy_not_configured" {
+		t.Fatalf("enabling proxy.use_for_releases without proxy must fail: %d %v", code, b)
+	}
+	if code, b := root.do("PUT", "/api/v1/settings", map[string]any{"proxy.use_for_self_update": true}, nil); code != 400 || errCode(b) != "proxy_not_configured" {
+		t.Fatalf("enabling proxy.use_for_self_update without proxy must fail: %d %v", code, b)
+	}
+	code, b := root.do("PUT", "/api/v1/settings", map[string]any{"ssh.max_concurrency": 4,
 		"release.cni_checksums": map[string]any{"v1.99.0": map[string]any{"amd64": strings.Repeat("ab", 32)}}}, nil)
 	if code != 200 || b["restart_required"] != true {
 		t.Fatalf("put settings: %d %v", code, b)
-	}
-	if b["settings"].(map[string]any)["proxy.use_for_releases"] != true {
-		t.Fatalf("settings not saved: %v", b)
 	}
 	_, rel := root.do("GET", "/api/v1/releases/cni", nil, nil)
 	if rel["versions"].([]any)[0] != "v1.99.0" {
 		t.Fatalf("registered CNI version must be listed first: %v", rel)
 	}
-	// Proxy requested by default but not configured.
-	if code, b := root.do("GET", "/api/v1/releases/nomad", nil, nil); code != 400 || errCode(b) != "proxy_not_configured" {
+	// Proxy explicitly requested without proxy configured.
+	if code, b := root.do("GET", "/api/v1/releases/nomad?use_proxy=true", nil, nil); code != 400 || errCode(b) != "proxy_not_configured" {
 		t.Fatalf("expected proxy_not_configured: %d %v", code, b)
 	}
 
@@ -132,6 +135,11 @@ func TestSettingsAndProxyAPI(t *testing.T) {
 	p := b["proxy"].(map[string]any)
 	if p["configured"] != true || p["password_set"] != true || p["type"] != "socks5" {
 		t.Fatalf("proxy view: %v", p)
+	}
+	if code, b := root.do("PUT", "/api/v1/settings", map[string]any{"proxy.use_for_releases": true, "proxy.use_for_self_update": true}, nil); code != 200 {
+		t.Fatalf("enable proxy defaults when configured: %d %v", code, b)
+	} else if st := b["settings"].(map[string]any); st["proxy.use_for_releases"] != true || st["proxy.use_for_self_update"] != true {
+		t.Fatalf("proxy defaults not saved: %v", st)
 	}
 	var raw string
 	e.app.DB.Reader.QueryRow(`SELECT value FROM system_settings WHERE key = 'proxy.password'`).Scan(&raw)
@@ -151,6 +159,10 @@ func TestSettingsAndProxyAPI(t *testing.T) {
 	_, b = root.do("GET", "/api/v1/settings/proxy", nil, nil)
 	if b["proxy"].(map[string]any)["configured"] != false {
 		t.Fatal("proxy must be removable")
+	}
+	_, stRes := root.do("GET", "/api/v1/settings", nil, nil)
+	if st := stRes["settings"].(map[string]any); st["proxy.use_for_releases"] != false || st["proxy.use_for_self_update"] != false {
+		t.Fatalf("disabling proxy must clear default proxy switches: %v", st)
 	}
 	logs, _ := root.do("GET", "/api/v1/audit-logs?action=settings.proxy_update", nil, nil)
 	_ = logs

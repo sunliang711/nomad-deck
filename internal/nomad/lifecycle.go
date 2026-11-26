@@ -795,6 +795,15 @@ func (s *Service) UpdateNodeConfig(ctx context.Context, actor audit.Actor, clust
 	if in.CNI && cl.Settings.CNIVersion == "" {
 		return nil, badRequest("集群未选择 CNI 版本，不能启用 CNI")
 	}
+	if in.UseProxy != nil && *in.UseProxy {
+		configured, err := s.Proxy.Configured(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !configured {
+			return nil, badRequest("已选择使用系统代理，但尚未配置系统代理")
+		}
+	}
 	old := memberConfig(m)
 	next := old
 	next.ClientSettings, next.ExtraSANs = in.ClientSettings, in.ExtraSANs
@@ -951,6 +960,15 @@ func (s *Service) UpdateSettings(ctx context.Context, actor audit.Actor, cluster
 		cl.Settings.CNIVersion = *in.CNIVersion
 		if *in.CNIVersion != "" && needsCNI(members) {
 			cniChanged, rollout = true, true
+		}
+	}
+	if in.UseProxy != nil && *in.UseProxy {
+		configured, err := s.Proxy.Configured(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !configured {
+			return nil, badRequest("已选择使用系统代理，但尚未配置系统代理")
 		}
 	}
 	deployed := cl.InitState == db.InitInitialized

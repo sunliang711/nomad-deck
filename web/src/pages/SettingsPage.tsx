@@ -290,22 +290,18 @@ export function SettingsPage() {
     setSavingProxy(true);
     try {
       if (proxy.mode === 'direct') {
-        await Promise.all([
-          apiPut('/api/v1/settings/proxy', { enabled: false }),
-          apiPut('/api/v1/settings', {
-            'proxy.use_for_releases': false,
-            'proxy.use_for_self_update': false,
-          }),
-        ]);
+        await apiPut('/api/v1/settings/proxy', { enabled: false });
+        await apiPut('/api/v1/settings', {
+          'proxy.use_for_releases': false,
+          'proxy.use_for_self_update': false,
+        });
         toast.success('已切换为直连模式（已关闭下载代理）');
       } else {
-        await Promise.all([
-          apiPut('/api/v1/settings/proxy', proxyPayload(true)),
-          apiPut('/api/v1/settings', {
-            'proxy.use_for_releases': Boolean(proxy.use_for_releases),
-            'proxy.use_for_self_update': Boolean(proxy.use_for_self_update),
-          }),
-        ]);
+        await apiPut('/api/v1/settings/proxy', proxyPayload(true));
+        await apiPut('/api/v1/settings', {
+          'proxy.use_for_releases': Boolean(proxy.use_for_releases),
+          'proxy.use_for_self_update': Boolean(proxy.use_for_self_update),
+        });
         toast.success('下载代理与默认使用策略已保存');
       }
       await load();
@@ -329,13 +325,11 @@ export function SettingsPage() {
     setErr('');
     setClearingProxy(true);
     try {
-      await Promise.all([
-        apiPut('/api/v1/settings/proxy', { enabled: false }),
-        apiPut('/api/v1/settings', {
-          'proxy.use_for_releases': false,
-          'proxy.use_for_self_update': false,
-        }),
-      ]);
+      await apiPut('/api/v1/settings/proxy', { enabled: false });
+      await apiPut('/api/v1/settings', {
+        'proxy.use_for_releases': false,
+        'proxy.use_for_self_update': false,
+      });
       toast.success('已清空下载代理配置');
       await load();
     } catch (ex: any) {

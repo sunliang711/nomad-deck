@@ -302,13 +302,16 @@ export function VersionPage() {
   }[updatePhase];
 
   const handleToggleProxy = async (next: boolean) => {
-    setUseProxy(next);
     if (!isAdmin) return;
     try {
       await apiPut('/api/v1/settings', { 'proxy.use_for_self_update': next });
+      setUseProxy(next);
+      setCheckError('');
       toast.success(next ? '已保存：版本检查与自更新走系统代理' : '已保存：版本检查与自更新直连');
     } catch (ex: any) {
-      toast.error(ex?.message || '保存代理设置失败');
+      const msg = ex?.message || '保存代理设置失败';
+      setCheckError(msg);
+      toast.error(msg);
     }
   };
 

@@ -177,7 +177,6 @@ export function CronPage() {
 
   // SafeKeep DR modal
   const [showDrModal, setShowDrModal] = useState(false);
-  const [bkEnabled, setBkEnabled] = useState(false);
   const [bkPass, setBkPass] = useState('');
   const [bkPassTouched, setBkPassTouched] = useState(false);
   const [drTargets, setDrTargets] = useState<any[]>([]);
@@ -200,7 +199,6 @@ export function CronPage() {
       setIntegrations(intRes.integrations || []);
       if (bRes?.backup) {
         setBackupCfg(bRes.backup);
-        setBkEnabled(Boolean(bRes.backup.enabled));
         setDrTargets(bRes.backup.targets || []);
       }
     } catch (ex: any) {
@@ -529,7 +527,6 @@ export function CronPage() {
   };
 
   const openDrConfig = () => {
-    setBkEnabled(Boolean(backupCfg?.enabled));
     setBkPass('');
     setBkPassTouched(false);
     setDrTargets(backupCfg?.targets || []);
@@ -544,7 +541,7 @@ export function CronPage() {
       id: t.id,
       name: t.name,
       type: 'safekeep',
-      enabled: Boolean(t.enabled),
+      enabled: true,
       retention_count: Number(t.retention_count || 14),
       snapshot_retention_count: Number(t.snapshot_retention_count || 7),
       safekeep_url: t.safekeep_url || '',
@@ -564,6 +561,7 @@ export function CronPage() {
       id: skForm.id || 'tgt_' + Math.random().toString(36).slice(2, 10),
       name: skForm.name?.trim() || 'SafeKeep-DR',
       type: 'safekeep',
+      enabled: true,
     };
     const skOnly = drTargets.filter((t) => t.type === 'safekeep');
     const idx = skOnly.findIndex((x) => x.id === item.id);
@@ -598,7 +596,7 @@ export function CronPage() {
       run: async (pw) => {
         const payload: any = {
           current_password: pw,
-          enabled: bkEnabled,
+          enabled: updatedTargets.length > 0,
           include_history: backupCfg?.include_history || [],
           targets: updatedTargets.map(buildBackupTargetPayload),
         };
@@ -959,8 +957,6 @@ export function CronPage() {
                     统一使用定时任务中的 SafeKeep 网关与加密口令配置。
                   </p>
                   <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-xs">
-                    <dt className="text-slate-500">灾备总开关</dt>
-                    <dd className="text-right font-medium">{backupCfg?.enabled ? '已启用' : '未启用'}</dd>
                     <dt className="text-slate-500">SafeKeep 目标</dt>
                     <dd className="text-right break-all">
                       {safekeepTargets[0]?.safekeep_url || '未配置'}
@@ -1200,31 +1196,25 @@ export function CronPage() {
       <Modal open={showDrModal} title="SafeKeep 灾备目标与加密配置" onClose={() => setShowDrModal(false)} wide>
         <div className="space-y-4 text-xs">
           <div className="flex items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
-            <span>配置控制面与 Raft 快照异地灾备的 SafeKeep 网关。</span>
+            <span>配置控制面与 Raft 快照异地灾备的 SafeKeep 网关（是否定时执行由对应定时任务开关控制）。</span>
             <Link to="/migration-backup" className="text-indigo-600 hover:underline dark:text-indigo-400 shrink-0">
               前往环境迁移页
             </Link>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="flex items-center gap-2 font-medium pt-2">
-              <input type="checkbox" checked={bkEnabled} onChange={(e) => setBkEnabled(e.target.checked)} />
-              <span>启用控制面定时灾备（control_plane_backup）</span>
-            </label>
-            <SecretInput
-              label="灾备加密口令（可选，填写则至少 6 位）"
-              value={bkPass}
-              hasStoredValue={Boolean(backupCfg?.passphrase_set)}
-              resetKey={showDrModal ? 'open' : 'closed'}
-              onChangeValue={(v) => {
-                setBkPass(v);
-                setBkPassTouched(true);
-              }}
-              onRevealStored={async () => {
-                const r = await apiPost('/api/v1/backup/secrets/reveal', { kind: 'passphrase' });
-                return r.secret || '';
-              }}
-            />
-          </div>
+          <SecretInput
+            label="灾备加密口令（可选，填写则至少 6 位）"
+            value={bkPass}
+            hasStoredValue={Boolean(backupCfg?.passphrase_set)}
+            resetKey={showDrModal ? 'open' : 'closed'}
+            onChangeValue={(v) => {
+              setBkPass(v);
+              setBkPassTouched(true);
+            }}
+            onRevealStored={async () => {
+              const r = await apiPost('/api/v1/backup/secrets/reveal', { kind: 'passphrase' });
+              return r.secret || '';
+            }}
+          />
 
           {safekeepTargets.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
@@ -1308,14 +1298,6 @@ export function CronPage() {
                 <span>跳过 TLS 校验</span>
               </label>
             </div>
-            <label className="flex items-center gap-1.5">
-              <input
-                type="checkbox"
-                checked={Boolean(skForm.enabled)}
-                onChange={(e) => setSkForm({ ...skForm, enabled: e.target.checked })}
-              />
-              <span>启用该 SafeKeep 目标</span>
-            </label>
             {skTest && (
               <div className="rounded-lg bg-slate-100 p-2.5 dark:bg-slate-950">
                 测试结果：<b>{skTest.ok ? '连通正常' : '失败'}</b>（{skTest.latency_ms} ms）

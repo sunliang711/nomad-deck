@@ -311,4 +311,10 @@ func TestSaveConfigEmptyPassphrasePassesKeyCheck(t *testing.T) {
 	if !view.Enabled || view.PassphraseSet {
 		t.Fatalf("unexpected view: %+v", view)
 	}
+
+	// CronBackup skips when no targets are configured.
+	emptySvc, _ := newTestService(t, 5)
+	if _, err := emptySvc.CronBackup(ctx, nil); err == nil {
+		t.Fatal("expected CronBackup to skip when no SafeKeep targets are configured")
+	}
 }

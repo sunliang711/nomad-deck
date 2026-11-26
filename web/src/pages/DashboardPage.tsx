@@ -356,7 +356,7 @@ export function DashboardPage() {
                 >
                   <span className="flex items-start gap-2 min-w-0 leading-5">
                     <Info className="mt-0.5 h-4 w-4 shrink-0 text-indigo-500" />
-                    <span>尚未配置 SafeKeep 异地灾备目标，生产环境建议在定时任务中开启定时灾备。</span>
+                    <span>尚未配置 SafeKeep 异地灾备目标，生产环境建议在定时任务中配置 SafeKeep。</span>
                   </span>
                   <Badge tone="blue">建议配置</Badge>
                 </Link>

@@ -116,10 +116,16 @@ func (s *Service) CronBackup(ctx context.Context, r *cron.Run) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !cfg.Enabled {
-		return "", cron.Skip("控制面灾备备份未启用")
+	var targets []Target
+	for _, t := range cfg.Targets {
+		if t.Enabled {
+			targets = append(targets, t)
+		}
 	}
-	rv, err := s.runBackup(ctx, "scheduled", audit.ActorCron.Name, r)
+	if len(targets) == 0 {
+		return "", cron.Skip("尚未配置可用的 SafeKeep 灾备目标")
+	}
+	rv, err := s.runBackupForTargets(ctx, cfg, targets, "scheduled", audit.ActorCron.Name, r)
 	if rv != nil && rv.Status == "success" {
 		return fmt.Sprintf("灾备包 %s（%d 字节）已写入 %d 个目标并校验通过", rv.ObjectName, rv.SizeBytes, len(rv.Targets)), nil
 	}
@@ -259,15 +265,12 @@ func (s *Service) runBackupForTargets(ctx context.Context, cfg *storedConfig, ta
 	return rv, uploadErr
 }
 
-// OffsiteSnapshot exports a portable passphrase-encrypted archive of snap and
-// uploads, verifies and rotates it across all enabled backup targets.
+// OffsiteSnapshot exports a portable archive of snap and uploads, verifies
+// and rotates it across all enabled backup targets.
 func (s *Service) OffsiteSnapshot(ctx context.Context, r *cron.Run, snap *db.Snapshot, clusterName string) error {
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
 		return err
-	}
-	if !cfg.Enabled {
-		return nil
 	}
 	var enabledTargets []Target
 	for _, t := range cfg.Targets {

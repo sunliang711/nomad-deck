@@ -64,6 +64,9 @@ export function VaultPage() {
   const [showAuth, setShowAuth] = useState(false);
   const [authForm, setAuthForm] = useState({ path: '', type: 'userpass', description: '' });
   const [policies, setPolicies] = useState<any[]>([]);
+  const [selectedPolicy, setSelectedPolicy] = useState('');
+  const [policyIsNew, setPolicyIsNew] = useState(false);
+  const [policyLoading, setPolicyLoading] = useState(false);
   const [policyEdit, setPolicyEdit] = useState({ name: '', rules: '' });
   const [mounts, setMounts] = useState<any[]>([]);
   const [kvMount, setKvMount] = useState('');
@@ -143,6 +146,30 @@ export function VaultPage() {
     }
   }, [selectedId]);
 
+  const selectPolicy = useCallback(async (name: string) => {
+    if (!selectedId || !name) return;
+    setPolicyIsNew(false);
+    setSelectedPolicy(name);
+    setPolicyLoading(true);
+    try {
+      const r = await apiGet(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(name)}`);
+      setPolicyEdit({ name, rules: r.policy?.rules || r.policy || '' });
+    } catch (ex: any) {
+      setErr(ex?.message || '读取 Policy 内容失败');
+    } finally {
+      setPolicyLoading(false);
+    }
+  }, [selectedId]);
+
+  const startNewPolicy = () => {
+    setPolicyIsNew(true);
+    setSelectedPolicy('');
+    setPolicyEdit({
+      name: '',
+      rules: `# 示例：允许只读指定 KV v2 密钥（请按需修改路径）\npath "secret/data/apps/demo" {\n  capabilities = ["read"]\n}\n`,
+    });
+  };
+
   const loadManage = useCallback(async () => {
     if (!selectedId) return;
     try {
@@ -152,14 +179,19 @@ export function VaultPage() {
         apiGet(`/api/v1/vault/${selectedId}/kv/mounts`),
       ]);
       setAuths(aRes.auth || []);
-      setPolicies(pRes.policies || []);
+      const pList: string[] = pRes.policies || [];
+      setPolicies(pList);
       const ms = mRes.mounts || [];
       setMounts(ms);
       setKvMount((prev) => prev || ms[0]?.path || ms[0] || '');
+      if (!policyIsNew && pList.length > 0 && (!selectedPolicy || !pList.includes(selectedPolicy))) {
+        const first = pList.find((p) => p !== 'root') || pList[0];
+        void selectPolicy(first);
+      }
     } catch (ex: any) {
       setErr(ex?.message || '加载 Vault 管理数据失败');
     }
-  }, [selectedId]);
+  }, [selectedId, policyIsNew, selectedPolicy, selectPolicy]);
 
   useEffect(() => {
     void loadList();
@@ -215,6 +247,8 @@ export function VaultPage() {
     setRootToken('');
     setUninstallPlan(null);
     setPolicyEdit({ name: '', rules: '' });
+    setSelectedPolicy('');
+    setPolicyIsNew(false);
     setKvItem(null);
     setKvKeys([]);
     setKvMount('');
@@ -406,7 +440,6 @@ export function VaultPage() {
                     .then((r) => { toast.success(r.report?.message || '已核对'); return loadDetail(); })
                     .catch((ex) => setErr(ex.message))
                 }
-                onRevealRootToken={handleIssueRootToken}
                 onUninstall={handleUninstall}
                 onOpenJoin={() => { setJoinNodeId(''); setConfirmSwap(false); setShowJoin(true); }}
                 onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Vault 日志: ${n.name}`)}
@@ -738,63 +771,130 @@ export function VaultPage() {
                     ))}
                     {isAdmin && <Button size="sm" onClick={() => setShowAuth(true)}>启用 Auth 方法</Button>}
                   </div>
-                  <div className="border-t border-slate-200 pt-2 font-semibold dark:border-slate-800">ACL Policies</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {policies.map((p) => (
-                      <Button
-                        key={p}
-                        size="sm"
-                        onClick={() =>
-                          void apiGet(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(p)}`)
-                            .then((r) => setPolicyEdit({ name: p, rules: r.policy?.rules || r.policy || '' }))
-                            .catch((ex) => setErr(ex.message))
-                        }
-                      >
-                        {p}
-                      </Button>
-                    ))}
-                  </div>
-                  <Input label="Policy 名称" value={policyEdit.name} onChange={(e) => setPolicyEdit({ ...policyEdit, name: e.target.value })} />
-                  <CodeEditor value={policyEdit.rules} onChange={(v) => setPolicyEdit({ ...policyEdit, rules: v })} readOnly={!isAdmin} height="180px" />
-                  {isAdmin && (
-                    <div className="flex flex-wrap gap-2">
-                      {policyEdit.name && (
-                        <Button
-                          variant="primary"
-                          onClick={() =>
-                            void apiPut(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(policyEdit.name)}`, { policy: policyEdit.rules })
-                              .then(() => { toast.success('Policy 已保存'); return loadManage(); })
-                              .catch((ex) => setErr(ex.message))
-                          }
-                        >
-                          保存 Policy
+                  <div className="border-t border-slate-200 pt-3 dark:border-slate-800 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="font-semibold">ACL Policies（权限规则）</div>
+                        <p className="text-[11px] text-slate-500">点击下方策略名即可查看或修改规则；需要新建自定义权限时点右侧「新建 Policy」。</p>
+                      </div>
+                      {isAdmin && (
+                        <Button size="sm" variant={policyIsNew ? 'primary' : 'secondary'} onClick={startNewPolicy}>
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>新建 Policy</span>
                         </Button>
                       )}
-                      {policyEdit.name && !['root', 'default', 'nomad-deck-admin'].includes(policyEdit.name) && (
+                    </div>
+
+                    {policies.length === 0 ? (
+                      <p className="text-[11px] text-slate-500">暂无 Policy，可点击「新建 Policy」创建。</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {policies.map((p) => {
+                          const active = !policyIsNew && selectedPolicy === p;
+                          const isBuiltin = ['root', 'default', 'nomad-deck-admin'].includes(p);
+                          const isManaged = p.startsWith('nomad-') && !isBuiltin;
+                          return (
+                            <button
+                              key={p}
+                              type="button"
+                              onClick={() => void selectPolicy(p)}
+                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
+                                active
+                                  ? 'border-indigo-500 bg-indigo-50 text-indigo-800 shadow-xs dark:border-indigo-400 dark:bg-indigo-950/60 dark:text-indigo-100'
+                                  : 'border-slate-200 bg-white text-slate-700 hover:border-indigo-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+                              }`}
+                            >
+                              <span className="font-mono">{p}</span>
+                              {isBuiltin && (
+                                <span className="rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-500 dark:bg-slate-700 dark:text-slate-300">
+                                  内置
+                                </span>
+                              )}
+                              {isManaged && (
+                                <span className="rounded bg-indigo-100/80 px-1 py-0.5 text-[10px] text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">
+                                  联动
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {!policyIsNew && selectedPolicy.startsWith('nomad-') && selectedPolicy !== 'nomad-deck-admin' && (
+                      <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 px-3 py-2 text-[11px] text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-200">
+                        该策略由「集群联动」自动生成并维护，建议前往 <Link to="/integrations" className="font-semibold underline">集群联动</Link> 修改对应的 Role；在此手动改动会在下次「应用联动」时被覆盖。
+                      </div>
+                    )}
+                    {!policyIsNew && selectedPolicy === 'root' && (
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                        <code className="font-mono">root</code> 为 Vault 内置最高权限策略，不可修改或删除。
+                      </div>
+                    )}
+
+                    <Input
+                      label={policyIsNew ? '新建 Policy 名称' : 'Policy 名称'}
+                      placeholder="例如 app-readonly"
+                      disabled={!policyIsNew && Boolean(selectedPolicy)}
+                      hint={
+                        policyIsNew
+                          ? '填写英文名称后，在下方编写 HCL 权限规则并点击「保存 Policy」。'
+                          : selectedPolicy
+                            ? '当前正在编辑上方选中的 Policy；如需新增，请点「新建 Policy」。'
+                            : '请先在上方点击任意 Policy，或点「新建 Policy」输入名称。'
+                      }
+                      value={policyEdit.name}
+                      onChange={(e) => setPolicyEdit({ ...policyEdit, name: e.target.value })}
+                    />
+                    <CodeEditor
+                      label={policyLoading ? '正在加载规则内容…' : 'Policy 规则（HCL）'}
+                      value={policyEdit.rules}
+                      onChange={(v) => setPolicyEdit({ ...policyEdit, rules: v })}
+                      readOnly={!isAdmin || (!policyIsNew && selectedPolicy === 'root')}
+                      height="190px"
+                    />
+                    {isAdmin && (
+                      <div className="flex flex-wrap items-center gap-2">
                         <Button
-                          variant="danger"
-                          onClick={async () => {
-                            if (!(await askConfirm(`确认删除 Policy「${policyEdit.name}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
-                            void apiDelete(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(policyEdit.name)}`)
-                              .then(() => {
-                                setPolicyEdit({ name: '', rules: '' });
-                                toast.success('Policy 已删除');
-                                return loadManage();
+                          variant="primary"
+                          disabled={!policyEdit.name.trim() || (!policyIsNew && selectedPolicy === 'root') || policyLoading}
+                          title={!policyEdit.name.trim() ? '请先选择已有 Policy 或点击「新建 Policy」输入名称' : undefined}
+                          onClick={() => {
+                            const targetName = policyEdit.name.trim();
+                            if (!targetName) return;
+                            void apiPut(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(targetName)}`, { policy: policyEdit.rules })
+                              .then(async () => {
+                                toast.success(`Policy「${targetName}」已保存`);
+                                setPolicyIsNew(false);
+                                setSelectedPolicy(targetName);
+                                await loadManage();
                               })
                               .catch((ex) => setErr(ex.message));
                           }}
                         >
-                          删除 Policy
+                          保存 Policy
                         </Button>
-                      )}
-                      <Button
-                        disabled={(status?.init_state || cluster.init_state) !== 'initialized'}
-                        onClick={handleIssueRootToken}
-                      >
-                        签发临时 Root Token
-                      </Button>
-                    </div>
-                  )}
+                        {!policyIsNew && selectedPolicy && !['root', 'default', 'nomad-deck-admin'].includes(selectedPolicy) && (
+                          <Button
+                            variant="danger"
+                            onClick={async () => {
+                              if (!(await askConfirm(`确认删除 Policy「${selectedPolicy}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
+                              void apiDelete(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(selectedPolicy)}`)
+                                .then(() => {
+                                  setPolicyEdit({ name: '', rules: '' });
+                                  setSelectedPolicy('');
+                                  toast.success('Policy 已删除');
+                                  return loadManage();
+                                })
+                                .catch((ex) => setErr(ex.message));
+                            }}
+                          >
+                            删除 Policy
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </Card>
 

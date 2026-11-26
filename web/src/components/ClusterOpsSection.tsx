@@ -635,6 +635,11 @@ export function ClusterOpsSection({
                           {isVault ? '签发临时 Root Token' : '查看 Root Token'}
                         </Button>
                       )}
+                      {isVault && initialized && !onRevealRootToken && (
+                        <span className="self-center text-[11px] text-slate-500">
+                          如需签发临时 Root Token，请前往「初始化与密钥托管」页签。
+                        </span>
+                      )}
                     </div>
                   </div>
                 </details>

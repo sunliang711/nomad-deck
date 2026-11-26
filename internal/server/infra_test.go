@@ -74,6 +74,12 @@ func TestSSHKeysAndNodesAPI(t *testing.T) {
 	if code, _ := viewer.do("POST", "/api/v1/nodes/"+nodeID+"/test", nil, nil); code != 403 {
 		t.Fatal("viewer cannot test nodes")
 	}
+	if code, _ := viewer.do("POST", "/api/v1/nodes/"+nodeID+"/reset-machine-id", nil, nil); code != 403 {
+		t.Fatal("viewer cannot reset node machine-id")
+	}
+	if code, _ := root.do("POST", "/api/v1/nodes/nonexistent/reset-machine-id", nil, nil); code != 404 {
+		t.Fatalf("reset missing node machine-id: %d", code)
+	}
 	if code, _ := viewer.do("POST", "/api/v1/ssh-keys/generate", map[string]any{"name": "x"}, nil); code != 403 {
 		t.Fatal("viewer cannot generate keys")
 	}

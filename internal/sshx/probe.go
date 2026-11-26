@@ -3,6 +3,7 @@ package sshx
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -257,6 +258,36 @@ func Probe(ctx context.Context, c *Client) (*ProbeResult, error) {
 		return nil, err
 	}
 	return ParseProbe(string(res.Stdout), t0.Add(t1.Sub(t0)/2)), nil
+}
+
+const resetMachineIDScript = `set -e
+rm -f /etc/machine-id /var/lib/dbus/machine-id
+if command -v systemd-machine-id-setup >/dev/null 2>&1; then
+  systemd-machine-id-setup >/dev/null
+elif command -v dbus-uuidgen >/dev/null 2>&1; then
+  dbus-uuidgen --ensure=/etc/machine-id
+else
+  cat /proc/sys/kernel/random/uuid | tr -d '-' > /etc/machine-id
+  chmod 0444 /etc/machine-id
+fi
+if [ -e /etc/machine-id ] && [ ! -e /var/lib/dbus/machine-id ] && command -v dbus-uuidgen >/dev/null 2>&1; then
+  ln -sf /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
+fi
+cat /etc/machine-id
+`
+
+// ResetMachineID regenerates /etc/machine-id on the remote host (requires root
+// or passwordless sudo) and returns the newly generated machine-id.
+func ResetMachineID(ctx context.Context, c *Client) (string, error) {
+	res, err := c.Run(ctx, resetMachineIDScript, RunOptions{Sudo: true})
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(string(res.Stdout))
+	if id == "" {
+		return "", fmt.Errorf("machine-id regenerated but empty")
+	}
+	return id, nil
 }
 
 // ParseProbe converts probe output into a ProbeResult.

@@ -8,7 +8,7 @@ import { ACTION_LABELS, RESOURCE_LABELS } from '../lib/actionLabels';
 
 const ACTION_GROUPS: Array<{ group: string; actions: string[] }> = [
   { group: '认证与账号', actions: ['auth.setup', 'auth.login', 'auth.logout', 'auth.password_change', 'auth.session_revoke', 'admin.create', 'admin.role_change', 'admin.reset_password', 'admin.disable', 'admin.enable'] },
-  { group: '主机与 Docker', actions: ['ssh_key.generate', 'ssh_key.import', 'ssh_key.delete', 'node.create', 'node.update', 'node.delete', 'node.test', 'node.push_key', 'node.reset_fingerprint', 'docker.install', 'docker.upgrade', 'docker.config'] },
+  { group: '主机与 Docker', actions: ['ssh_key.generate', 'ssh_key.import', 'ssh_key.delete', 'node.create', 'node.update', 'node.delete', 'node.test', 'node.push_key', 'node.reset_fingerprint', 'node.reset_machine_id', 'docker.install', 'docker.upgrade', 'docker.config'] },
   { group: '集群与证书', actions: ['cluster.create', 'cluster.deploy', 'cluster.upgrade', 'cluster.join_node', 'cluster.remove_node', 'cluster.certs_renew', 'cluster.ca_rotate', 'cluster.gossip_rotate', 'cluster.maintenance', 'cluster.uninstall'] },
   { group: 'Vault 与联动', actions: ['vault.init', 'vault.unseal', 'vault.seal', 'vault.rekey', 'vault.root_token', 'vault.root_token_revoke', 'integration.create', 'integration.apply', 'integration.delete'] },
   { group: 'Job 与定时', actions: ['nomad.job_apply', 'nomad.job_stop', 'nomad.job_purge', 'cron.create', 'cron.update', 'cron.delete', 'cron.run'] },

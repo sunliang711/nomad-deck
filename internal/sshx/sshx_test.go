@@ -102,3 +102,9 @@ func TestParseProbeScriptRunsLocally(t *testing.T) {
 		t.Fatalf("unexpected output: %s", out)
 	}
 }
+
+func TestResetMachineIDScriptSyntax(t *testing.T) {
+	if out, err := exec.Command("/bin/sh", "-n", "-c", resetMachineIDScript).CombinedOutput(); err != nil {
+		t.Fatalf("resetMachineIDScript syntax error: %v (%s)", err, out)
+	}
+}

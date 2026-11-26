@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"nomad-deck/internal/audit"
 	"nomad-deck/internal/auth"
 	"nomad-deck/internal/db"
 	"nomad-deck/internal/sshx"
@@ -192,5 +193,36 @@ func TestClassifyExistingPeersAndWarningsForNode(t *testing.T) {
 	}
 	if dup != "deck-node-1" {
 		t.Fatalf("expected duplicate peer deck-node-1, got %q", dup)
+	}
+}
+
+func TestResetMachineIDGuards(t *testing.T) {
+	ctx := context.Background()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "reset_mid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	now := d.Now()
+	_ = db.InsertSSHKey(ctx, d.Writer, &db.SSHKey{
+		ID: "k1", Name: "default", Algorithm: "ed25519", PublicKey: "ssh-ed25519 AAAA",
+		PrivateKeyEncrypted: "ct", Fingerprint: "SHA256:abc", IsDefault: true, CreatedAt: now, UpdatedAt: now,
+	})
+	cpNode := &db.Node{
+		ID: "cp1", Name: "cp-host", Host: "127.0.0.1", SSHPort: 22, SSHUser: "root", SSHKeyID: "k1",
+		MachineID: "cp-mid", CreatedAt: now, UpdatedAt: now,
+	}
+	_ = db.InsertNode(ctx, d.Writer, cpNode)
+	_ = db.UpdateNodeProbe(ctx, d.Writer, cpNode, now)
+
+	svc := &Service{DB: d, LocalIdentity: HostIdentity{MachineID: "cp-mid"}}
+	var ae *auth.Error
+	actor := audit.Actor{ID: "a1", Name: "admin", ClientIP: "127.0.0.1"}
+	if _, err := svc.ResetMachineID(ctx, actor, "missing"); !errors.As(err, &ae) || ae.Status != 404 {
+		t.Fatalf("expected 404 for missing node, got %v", err)
+	}
+	if _, err := svc.ResetMachineID(ctx, actor, "cp1"); !errors.As(err, &ae) || ae.Code != "control_plane_host" {
+		t.Fatalf("expected control_plane_host guard, got %v", err)
 	}
 }

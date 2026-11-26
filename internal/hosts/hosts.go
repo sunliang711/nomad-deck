@@ -583,9 +583,49 @@ func formatPushKeyError(err error) error {
 
 // TestResult is returned by Test.
 type TestResult struct {
-	Node     *db.Node          `json:"-"`
-	Probe    *sshx.ProbeResult `json:"probe"`
-	Warnings []string          `json:"warnings"`
+	Node       *db.Node          `json:"-"`
+	Probe      *sshx.ProbeResult `json:"probe"`
+	Warnings   []string          `json:"warnings"`
+	ClonePeers []string          `json:"clone_peers,omitempty"`
+}
+
+// ResetMachineID regenerates /etc/machine-id on a cloned host and re-probes it.
+func (s *Service) ResetMachineID(ctx context.Context, actor audit.Actor, id string) (*TestResult, error) {
+	n, err := db.GetNode(ctx, s.DB.Reader, id)
+	if errors.Is(err, db.ErrNotFound) {
+		return nil, errNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if s.IsControlPlaneHost(n) {
+		return nil, conflict("control_plane_host", "当前主机与 NomadDeck 控制面同机，不支持在控制面内自动重置 /etc/machine-id")
+	}
+	if n.SSHUser != "root" && !n.UseSudo {
+		return nil, badRequest("非 root 用户需启用免密 sudo 才能重置 /etc/machine-id")
+	}
+	rctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	c, err := s.Connect(rctx, n)
+	if err != nil {
+		var ae *auth.Error
+		if errors.As(err, &ae) {
+			return nil, err
+		}
+		return nil, &auth.Error{Status: 502, Code: "ssh_failed", Message: "SSH 连接失败：" + err.Error()}
+	}
+	prevID := n.MachineID
+	newID, err := sshx.ResetMachineID(rctx, c)
+	_ = s.Audit.Record(ctx, nil, audit.Event{
+		Actor: actor, Action: "node.reset_machine_id", ResourceType: "node", ResourceID: id,
+		ResourceName: n.Name,
+		Summary:      map[string]any{"previous_machine_id": prevID, "new_machine_id": newID},
+		Err:          err,
+	})
+	if err != nil {
+		return nil, &auth.Error{Status: 502, Code: "reset_machine_id_failed", Message: "重新生成 /etc/machine-id 失败：" + err.Error()}
+	}
+	return s.probe(ctx, n)
 }
 
 // Test connects to a host, probes its environment and stores the results.
@@ -632,7 +672,12 @@ func (s *Service) probe(ctx context.Context, n *db.Node) (*TestResult, error) {
 	if err := db.UpdateNodeProbe(ctx, s.DB.Writer, n, s.DB.Now()); err != nil {
 		return nil, err
 	}
-	return &TestResult{Node: n, Probe: p, Warnings: WarningsForHostWithClones(n, p, s.IsControlPlaneHost(n), clonePeers)}, nil
+	return &TestResult{
+		Node:       n,
+		Probe:      p,
+		Warnings:   WarningsForHostWithClones(n, p, s.IsControlPlaneHost(n), clonePeers),
+		ClonePeers: clonePeers,
+	}, nil
 }
 
 func (s *Service) classifyExistingPeers(ctx context.Context, n *db.Node, p *sshx.ProbeResult) (clonePeers []string, dupPeer string, err error) {
@@ -663,11 +708,17 @@ func (s *Service) classifyExistingPeers(ctx context.Context, n *db.Node, p *sshx
 
 // WarningsForNode computes preflight warnings for a node, including clone machine-id notices.
 func (s *Service) WarningsForNode(ctx context.Context, n *db.Node, p *sshx.ProbeResult) []string {
+	warnings, _ := s.WarningsForNodeWithClones(ctx, n, p)
+	return warnings
+}
+
+// WarningsForNodeWithClones computes preflight warnings and clone peer names for a node.
+func (s *Service) WarningsForNodeWithClones(ctx context.Context, n *db.Node, p *sshx.ProbeResult) ([]string, []string) {
 	clonePeers, _, err := s.classifyExistingPeers(ctx, n, p)
 	if err != nil {
 		clonePeers = nil
 	}
-	return WarningsForHostWithClones(n, p, s.IsControlPlaneHost(n), clonePeers)
+	return WarningsForHostWithClones(n, p, s.IsControlPlaneHost(n), clonePeers), clonePeers
 }
 
 // IsControlPlaneHost reports whether n refers to the same host as the

@@ -93,8 +93,10 @@ export function InfraPage() {
   const [detailNode, setDetailNode] = useState<any>(null);
   const [detailProbe, setDetailProbe] = useState<any>(null);
   const [detailWarnings, setDetailWarnings] = useState<string[]>([]);
+  const [detailClonePeers, setDetailClonePeers] = useState<string[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailTesting, setDetailTesting] = useState(false);
+  const [resettingMidId, setResettingMidId] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<{ id: string; top: number; right: number } | null>(null);
   const [saveAndTest, setSaveAndTest] = useState(true);
   const [dockerNode, setDockerNode] = useState<any>(null);
@@ -230,16 +232,18 @@ export function InfraPage() {
     setPushModalErr('');
   };
 
-  const openNodeDetail = useCallback(async (node: any, overrideWarnings?: string[]) => {
+  const openNodeDetail = useCallback(async (node: any, overrideWarnings?: string[], overridePeers?: string[]) => {
     setDetailNode(node);
     setDetailProbe(null);
     setDetailWarnings(overrideWarnings || []);
+    setDetailClonePeers(overridePeers || []);
     setDetailLoading(true);
     try {
       const res = await apiGet(`/api/v1/nodes/${node.id}`);
       if (res.node) setDetailNode(res.node);
       setDetailProbe(res.probe || null);
       setDetailWarnings(Array.isArray(res.warnings) ? res.warnings : (overrideWarnings || []));
+      setDetailClonePeers(Array.isArray(res.clone_peers) ? res.clone_peers : (overridePeers || []));
     } catch (ex: any) {
       toast.error(ex?.message || `加载主机 ${node.name} 详情失败`, { position: 'top-right' });
     } finally {
@@ -251,17 +255,19 @@ export function InfraPage() {
     setDetailNode(null);
     setDetailProbe(null);
     setDetailWarnings([]);
+    setDetailClonePeers([]);
     setDetailLoading(false);
   };
 
-  const notifyProbeResult = (node: any, warnings: string[], options?: { pushed?: boolean; prefix?: string }) => {
+  const notifyProbeResult = (node: any, warnings: string[], options?: { pushed?: boolean; prefix?: string; clonePeers?: string[] }) => {
     const list = Array.isArray(warnings) ? warnings : [];
+    const peers = Array.isArray(options?.clonePeers) ? options.clonePeers : [];
     const name = node?.name || '';
     const viewAction = node?.id
       ? {
           label: '查看详情',
           onClick: () => {
-            void openNodeDetail(node, list);
+            void openNodeDetail(node, list, peers);
           },
         }
       : undefined;
@@ -291,6 +297,53 @@ export function InfraPage() {
       details: preview,
       action: viewAction,
     });
+  };
+
+  const resetNodeMachineID = async (node: any, clonePeers?: string[]) => {
+    if (!node?.id) return;
+    if (node.is_control_plane_host) {
+      toast.error('当前主机与 NomadDeck 控制面同机，不支持通过页面重置 /etc/machine-id', { position: 'top-right' });
+      return;
+    }
+    const peers = Array.isArray(clonePeers) ? clonePeers : [];
+    const msg =
+      peers.length > 0
+        ? `检测到主机「${node.name}」与「${peers.join('、')}」共用相同的 /etc/machine-id（疑似克隆虚拟机）。\n\n是否立即通过 SSH 在目标主机上重新生成新的 /etc/machine-id 并重新探测？\n（提示：可能影响基于 machine-id 的 DHCP 租约与 journald 日志目录）`
+        : `确定要在主机「${node.name}」(${node.host}) 上重新生成 /etc/machine-id 并重新探测吗？\n（提示：可能影响基于 machine-id 的 DHCP 租约与 journald 日志目录，建议在加入集群前操作）`;
+    const ok = await askConfirm(msg, {
+      title: '重新生成节点 ID',
+      confirmText: '立即重新生成',
+    });
+    if (!ok) return;
+
+    setResettingMidId(node.id);
+    if (detailNode?.id === node.id) setDetailTesting(true);
+    try {
+      const res = await apiPost(`/api/v1/nodes/${node.id}/reset-machine-id`, {});
+      const updated = res.node || node;
+      const warnings = Array.isArray(res.warnings) ? res.warnings : [];
+      const nextPeers = Array.isArray(res.clone_peers) ? res.clone_peers : [];
+      setNodes((prev) => prev.map((x) => (x.id === node.id ? updated : x)));
+      if (detailNode?.id === node.id) {
+        setDetailNode(updated);
+        setDetailProbe(res.probe || null);
+        setDetailWarnings(warnings);
+        setDetailClonePeers(nextPeers);
+      }
+      notifyProbeResult(updated, warnings, {
+        prefix: `已为主机 ${updated.name} 重新生成节点 ID 并完成探测`,
+        clonePeers: nextPeers,
+      });
+      await load();
+    } catch (ex: any) {
+      toast.error(ex?.message || `重新生成 ${node.name} 节点 ID 失败`, {
+        position: 'top-right',
+        durationMs: 6000,
+      });
+    } finally {
+      setResettingMidId(null);
+      setDetailTesting(false);
+    }
   };
 
   const saveNode = async (e: React.FormEvent) => {
@@ -327,19 +380,27 @@ export function InfraPage() {
 
       closeNodeModal();
 
+      let detectedClonePeers: string[] = [];
+      let detectedCloneNode: any = null;
       if (saveAndTest && savedNode?.id) {
         try {
           const testRes = await apiPost(`/api/v1/nodes/${savedNode.id}/test`);
           const testedNode = testRes.node || savedNode;
           const warnings = testRes.warnings || [];
+          const clonePeers: string[] = Array.isArray(testRes.clone_peers) ? testRes.clone_peers : [];
           notifyProbeResult(testedNode, warnings, {
             pushed,
             prefix: pushed
               ? `主机 ${testedNode.name || nodeForm.name} 已保存、推送公钥并连接成功`
               : `主机 ${testedNode.name || nodeForm.name} 已保存并连接成功`,
+            clonePeers,
           });
           if (detailNode?.id === testedNode.id) {
-            void openNodeDetail(testedNode, warnings);
+            void openNodeDetail(testedNode, warnings, clonePeers);
+          }
+          if (clonePeers.length > 0 && !testedNode.is_control_plane_host && isAdmin) {
+            detectedClonePeers = clonePeers;
+            detectedCloneNode = testedNode;
           }
         } catch (testEx: any) {
           toast.info(
@@ -361,6 +422,9 @@ export function InfraPage() {
       if (detailNode?.id && detailNode.id === savedNode?.id && !saveAndTest) {
         void openNodeDetail(savedNode);
       }
+      if (detectedCloneNode && detectedClonePeers.length > 0) {
+        void resetNodeMachineID(detectedCloneNode, detectedClonePeers);
+      }
     } catch (ex: any) {
       setNodeModalErr(ex?.message || '保存主机失败');
     } finally {
@@ -375,12 +439,17 @@ export function InfraPage() {
       const res = await apiPost(`/api/v1/nodes/${n.id}/test`);
       const testedNode = res.node || n;
       const warnings = res.warnings || [];
-      notifyProbeResult(testedNode, warnings);
+      const clonePeers: string[] = Array.isArray(res.clone_peers) ? res.clone_peers : [];
+      notifyProbeResult(testedNode, warnings, { clonePeers });
       await load();
       if (detailNode?.id === n.id) {
         setDetailNode(testedNode);
         setDetailProbe(res.probe || null);
         setDetailWarnings(warnings);
+        setDetailClonePeers(clonePeers);
+      }
+      if (clonePeers.length > 0 && !testedNode.is_control_plane_host && isAdmin) {
+        void resetNodeMachineID(testedNode, clonePeers);
       }
     } catch (ex: any) {
       toast.error(`探测主机 ${n.name} 失败：${ex?.message || '连接异常'}`, {
@@ -405,17 +474,25 @@ export function InfraPage() {
     try {
       await apiPost(`/api/v1/nodes/${targetNode.id}/push-key`, { password: pushPassword });
       closePushModal();
+      let detectedClonePeers: string[] = [];
+      let detectedCloneNode: any = null;
       if (pushAndTest) {
         try {
           const testRes = await apiPost(`/api/v1/nodes/${targetNode.id}/test`);
           const testedNode = testRes.node || targetNode;
           const warnings = testRes.warnings || [];
+          const clonePeers: string[] = Array.isArray(testRes.clone_peers) ? testRes.clone_peers : [];
           notifyProbeResult(testedNode, warnings, {
             pushed: true,
             prefix: `已向 ${testedNode.name} 推送公钥并连接成功`,
+            clonePeers,
           });
           if (detailNode?.id === targetNode.id) {
-            void openNodeDetail(testedNode, warnings);
+            void openNodeDetail(testedNode, warnings, clonePeers);
+          }
+          if (clonePeers.length > 0 && !testedNode.is_control_plane_host && isAdmin) {
+            detectedClonePeers = clonePeers;
+            detectedCloneNode = testedNode;
           }
         } catch (testEx: any) {
           toast.info(
@@ -427,6 +504,9 @@ export function InfraPage() {
         toast.success(`已成功推送公钥到主机 ${targetNode.name}`, { position: 'top-right' });
       }
       await load();
+      if (detectedCloneNode && detectedClonePeers.length > 0) {
+        void resetNodeMachineID(detectedCloneNode, detectedClonePeers);
+      }
     } catch (ex: any) {
       setPushModalErr(ex?.message || '推送公钥失败');
     } finally {
@@ -788,8 +868,8 @@ export function InfraPage() {
                               onClick={(e) => {
                                 e.stopPropagation();
                                 const rect = e.currentTarget.getBoundingClientRect();
-                                const flipUp = rect.bottom + 180 > window.innerHeight;
-                                const top = flipUp ? Math.max(8, rect.top - 168) : rect.bottom + 6;
+                                const flipUp = rect.bottom + 210 > window.innerHeight;
+                                const top = flipUp ? Math.max(8, rect.top - 198) : rect.bottom + 6;
                                 const right = Math.max(8, window.innerWidth - rect.right);
                                 setOpenMenu((cur) => (cur?.id === n.id ? null : { id: n.id, top, right }));
                               }}
@@ -826,6 +906,16 @@ export function InfraPage() {
                                   className="w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
                                 >
                                   重置主机指纹
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  disabled={Boolean(n.is_control_plane_host) || resettingMidId === n.id}
+                                  title={n.is_control_plane_host ? '控制面同机不支持通过页面重置' : undefined}
+                                  onClick={() => { setOpenMenu(null); void resetNodeMachineID(n); }}
+                                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-200 dark:hover:bg-slate-800"
+                                >
+                                  重新生成节点 ID
                                 </button>
                                 <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
                                 <button
@@ -1327,10 +1417,22 @@ export function InfraPage() {
               )}
 
               {detailWarnings.length > 0 ? (
-                <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3.5 space-y-2 dark:border-amber-500/30 dark:bg-amber-500/10">
-                  <div className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300">
-                    <AlertTriangle className="h-4 w-4 shrink-0" />
-                    <span>环境预检提醒（{detailWarnings.length} 项）</span>
+                <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3.5 space-y-2.5 dark:border-amber-500/30 dark:bg-amber-500/10">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span>环境预检提醒（{detailWarnings.length} 项）</span>
+                    </div>
+                    {isAdmin && detailClonePeers.length > 0 && !dn.is_control_plane_host && (
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        loading={resettingMidId === dn.id}
+                        onClick={() => void resetNodeMachineID(dn, detailClonePeers)}
+                      >
+                        立即重新生成节点 ID
+                      </Button>
+                    )}
                   </div>
                   <ul className="list-disc space-y-1 pl-5 text-amber-900 dark:text-amber-200 leading-5">
                     {detailWarnings.map((w, i) => (
@@ -1462,13 +1564,24 @@ export function InfraPage() {
                   </div>
                   <div>
                     <dt className="text-slate-500"><TermLabel term="节点 ID（/etc/machine-id）" tip="/etc/machine-id；控制面结合硬件 UUID、网卡 MAC 与主机指纹区分克隆虚拟机与重复登记。" /></dt>
-                    <dd className="mt-0.5 flex items-center justify-between gap-2">
+                    <dd className="mt-0.5 flex flex-wrap items-center justify-between gap-2">
                       <span className="font-mono break-all text-slate-800 dark:text-slate-200">{dn.machine_id || '-'}</span>
-                      {dn.machine_id && (
-                        <Button size="sm" onClick={() => copyText(dn.machine_id, '已复制节点 ID')}>
-                          <Copy className="h-3 w-3" /> 复制
-                        </Button>
-                      )}
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {dn.machine_id && (
+                          <Button size="sm" onClick={() => copyText(dn.machine_id, '已复制节点 ID')}>
+                            <Copy className="h-3 w-3" /> 复制
+                          </Button>
+                        )}
+                        {isAdmin && !dn.is_control_plane_host && (
+                          <Button
+                            size="sm"
+                            loading={resettingMidId === dn.id}
+                            onClick={() => void resetNodeMachineID(dn, detailClonePeers)}
+                          >
+                            重新生成
+                          </Button>
+                        )}
+                      </div>
                     </dd>
                   </div>
                   {(dp?.product_uuid || (Array.isArray(dp?.mac_addrs) && dp.mac_addrs.length > 0)) && (

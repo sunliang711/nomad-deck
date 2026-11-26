@@ -64,6 +64,7 @@ export const ACTION_LABELS: Record<string, string> = {
   'node.test': '探测主机环境',
   'node.push_key': '推送 SSH 公钥',
   'node.reset_fingerprint': '重置主机指纹',
+  'node.reset_machine_id': '重生成节点 ID',
   'node.set_aliases': '设置主机别名',
 
   // 集群与 Vault

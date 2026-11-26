@@ -183,11 +183,12 @@ func (a *API) getNode(w http.ResponseWriter, r *http.Request) {
 		probe = []byte("{}")
 	}
 	warnings := []string{}
+	var clonePeers []string
 	var parsed sshx.ProbeResult
 	if n.ProbeJSON != "" && n.ProbeJSON != "{}" && json.Unmarshal([]byte(n.ProbeJSON), &parsed) == nil && (parsed.Arch != "" || parsed.MachineID != "") {
-		warnings = a.Hosts.WarningsForNode(r.Context(), n, &parsed)
+		warnings, clonePeers = a.Hosts.WarningsForNodeWithClones(r.Context(), n, &parsed)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(n), "probe": probe, "warnings": warnings})
+	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(n), "probe": probe, "warnings": warnings, "clone_peers": clonePeers})
 }
 
 func (a *API) createNode(w http.ResponseWriter, r *http.Request) {
@@ -260,7 +261,16 @@ func (a *API) testNode(w http.ResponseWriter, r *http.Request) {
 		a.writeErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(res.Node), "probe": res.Probe, "warnings": res.Warnings})
+	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(res.Node), "probe": res.Probe, "warnings": res.Warnings, "clone_peers": res.ClonePeers})
+}
+
+func (a *API) resetNodeMachineID(w http.ResponseWriter, r *http.Request) {
+	res, err := a.Hosts.ResetMachineID(r.Context(), a.actor(r), chi.URLParam(r, "id"))
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(res.Node), "probe": res.Probe, "warnings": res.Warnings, "clone_peers": res.ClonePeers})
 }
 
 func (a *API) refreshNodeMetrics(w http.ResponseWriter, r *http.Request) {

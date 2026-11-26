@@ -233,6 +233,7 @@ func (a *API) Handler() http.Handler {
 				r.Post("/nodes/{id}/metrics", a.refreshNodeMetrics)
 				r.Post("/nodes/metrics/refresh", a.refreshAllNodeMetrics)
 				r.Post("/nodes/{id}/reset-fingerprint", a.resetNodeFingerprint)
+				r.Post("/nodes/{id}/reset-machine-id", a.resetNodeMachineID)
 
 				r.Post("/clusters", a.createCluster)
 				r.Delete("/clusters/{id}", a.deleteCluster)

@@ -64,6 +64,7 @@ export function VaultPage() {
   const [gateView, setGateView] = useState<any>(null);
   const [err, setErr] = useState('');
   const [rootToken, setRootToken] = useState('');
+  const [revokingRootToken, setRevokingRootToken] = useState(false);
   const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(null);
 
   // Create wizard
@@ -560,7 +561,6 @@ export function VaultPage() {
                                   run: async (pw) => {
                                     const r = await apiPost(`/api/v1/vault/${selectedId}/root-token`, { current_password: pw });
                                     setRootToken(r.root_token || '');
-                                    toast.info('已签发临时 Root Token，使用完毕后请及时吊销');
                                   },
                                 })
                               }
@@ -585,34 +585,6 @@ export function VaultPage() {
                             </Button>
                           </div>
                         </div>
-                      </div>
-                    )}
-
-                    {rootToken && (
-                      <div className="space-y-2 pt-2">
-                        <MaskedSecret
-                          value={rootToken}
-                          label={<TermLabel term="临时 Root Token（控制面不落盘保存，请用后及时吊销）" tip="通过 Vault sys/generate-root 与托管 Unseal Key 动态重建的 Root Token，可用于登录 Vault 原生 Web UI 或执行高危恢复操作。" />}
-                        />
-                        {isAdmin && (
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              variant="danger"
-                              onClick={() =>
-                                void apiPost(`/api/v1/vault/${selectedId}/root-token/revoke`, { token: rootToken })
-                                  .then(() => {
-                                    setRootToken('');
-                                    toast.success('临时 Root Token 已向 Vault 吊销');
-                                  })
-                                  .catch((ex) => setErr(ex.message))
-                              }
-                            >
-                              吊销 Root Token
-                            </Button>
-                            <Button size="sm" onClick={() => setRootToken('')}>隐藏卡片</Button>
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
@@ -997,6 +969,48 @@ export function VaultPage() {
           if (pwAction) await pwAction.run(pw);
         }}
       />
+
+      <Modal
+        open={Boolean(rootToken)}
+        title="Vault 临时 Root Token"
+        busy={revokingRootToken}
+        onClose={() => setRootToken('')}
+        footer={
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {isAdmin && (
+              <Button
+                type="button"
+                variant="danger"
+                loading={revokingRootToken}
+                onClick={async () => {
+                  setRevokingRootToken(true);
+                  try {
+                    await apiPost(`/api/v1/vault/${selectedId}/root-token/revoke`, { token: rootToken });
+                    setRootToken('');
+                    toast.success('临时 Root Token 已向 Vault 吊销');
+                  } catch (ex: any) {
+                    toast.error(ex?.message || '吊销 Root Token 失败');
+                  } finally {
+                    setRevokingRootToken(false);
+                  }
+                }}
+              >
+                吊销 Root Token
+              </Button>
+            )}
+            <Button type="button" variant="primary" disabled={revokingRootToken} onClick={() => setRootToken('')}>
+              关闭
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-xs leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+            此 Token 通过托管 Unseal Key 动态重建，控制面不落盘保存。可用于登录 Vault 原生 Web UI 或执行高危恢复操作；使用完毕后请及时点击「吊销 Root Token」作废。
+          </div>
+          <MaskedSecret value={rootToken} label="临时 Root Token：" />
+        </div>
+      </Modal>
 
       <Modal open={Boolean(dlModal)} title={dlModal?.title || ''} onClose={() => setDlModal(null)}>
         <form

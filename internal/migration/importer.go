@@ -417,17 +417,20 @@ func (s *Service) targetAccounts(ctx context.Context) []Account {
 	return out
 }
 
-// matchNode finds the target node that is the same host (machine-id, or
-// address and SSH port).
+// matchNode finds the target node that is the same host (address and SSH port,
+// or unique machine-id).
 func (s *Service) matchNode(ctx context.Context, n map[string]any) string {
 	var id string
+	if s.DB.Reader.QueryRowContext(ctx, `SELECT id FROM nodes WHERE host = ? AND ssh_port = ?`,
+		db.RowString(n, "host"), db.RowString(n, "ssh_port")).Scan(&id) == nil {
+		return id
+	}
 	if mid := db.RowString(n, "machine_id"); mid != "" {
-		if s.DB.Reader.QueryRowContext(ctx, `SELECT id FROM nodes WHERE machine_id = ?`, mid).Scan(&id) == nil {
-			return id
+		var count int
+		if s.DB.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM nodes WHERE machine_id = ?`, mid).Scan(&count) == nil && count == 1 {
+			_ = s.DB.Reader.QueryRowContext(ctx, `SELECT id FROM nodes WHERE machine_id = ?`, mid).Scan(&id)
 		}
 	}
-	_ = s.DB.Reader.QueryRowContext(ctx, `SELECT id FROM nodes WHERE host = ? AND ssh_port = ?`,
-		db.RowString(n, "host"), db.RowString(n, "ssh_port")).Scan(&id)
 	return id
 }
 

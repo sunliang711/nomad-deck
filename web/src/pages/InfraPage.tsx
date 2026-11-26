@@ -1461,7 +1461,7 @@ export function InfraPage() {
                     </dd>
                   </div>
                   <div>
-                    <dt className="text-slate-500"><TermLabel term="节点 ID（/etc/machine-id）" tip="/etc/machine-id，用于探测克隆虚拟机导致的节点身份冲突。" /></dt>
+                    <dt className="text-slate-500"><TermLabel term="节点 ID（/etc/machine-id）" tip="/etc/machine-id；控制面结合硬件 UUID、网卡 MAC 与主机指纹区分克隆虚拟机与重复登记。" /></dt>
                     <dd className="mt-0.5 flex items-center justify-between gap-2">
                       <span className="font-mono break-all text-slate-800 dark:text-slate-200">{dn.machine_id || '-'}</span>
                       {dn.machine_id && (
@@ -1471,6 +1471,22 @@ export function InfraPage() {
                       )}
                     </dd>
                   </div>
+                  {(dp?.product_uuid || (Array.isArray(dp?.mac_addrs) && dp.mac_addrs.length > 0)) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <dt className="text-slate-500">硬件 UUID</dt>
+                        <dd className="mt-0.5 font-mono break-all text-slate-800 dark:text-slate-200">
+                          {dp?.product_uuid || '-'}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-slate-500">网卡 MAC</dt>
+                        <dd className="mt-0.5 font-mono break-all text-slate-800 dark:text-slate-200">
+                          {Array.isArray(dp?.mac_addrs) && dp.mac_addrs.length > 0 ? dp.mac_addrs.join('、') : '-'}
+                        </dd>
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <dt className="text-slate-500">地址别名</dt>
                     <dd className="mt-1 flex flex-wrap gap-1.5">

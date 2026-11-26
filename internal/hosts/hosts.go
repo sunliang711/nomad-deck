@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -25,6 +26,24 @@ import (
 	"nomad-deck/internal/sshx"
 )
 
+// HostIdentity holds hardware, OS, and SSH signals used to distinguish
+// duplicate registrations of the same machine from cloned VMs.
+type HostIdentity struct {
+	MachineID          string
+	ProductUUID        string
+	MACAddrs           []string
+	HostKeyFingerprint string
+}
+
+// IdentityRelation describes how two probed hosts relate.
+type IdentityRelation int
+
+const (
+	IdentityDifferent IdentityRelation = iota
+	IdentitySameHost
+	IdentityClone
+)
+
 // Service implements host and SSH key management.
 type Service struct {
 	DB    *db.DB
@@ -33,6 +52,8 @@ type Service struct {
 	Pool  *sshx.Pool
 	// LocalMachineID is the control plane's own /etc/machine-id (may be empty).
 	LocalMachineID string
+	// LocalIdentity holds the control plane host's full identity signals.
+	LocalIdentity HostIdentity
 }
 
 // Error is a validation or conflict error with an HTTP status.
@@ -59,6 +80,118 @@ func ReadLocalMachineID() string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// ReadLocalIdentity reads the control plane host's machine-id, DMI product UUID,
+// and physical/primary NIC MAC addresses (all best-effort, empty if unreadable).
+func ReadLocalIdentity() HostIdentity {
+	id := HostIdentity{MachineID: ReadLocalMachineID()}
+	if b, err := os.ReadFile("/sys/class/dmi/id/product_uuid"); err == nil {
+		id.ProductUUID = strings.ToLower(strings.TrimSpace(string(b)))
+	}
+	if entries, err := os.ReadDir("/sys/class/net"); err == nil {
+		var raw []string
+		for _, e := range entries {
+			name := e.Name()
+			if !sshx.IsPhysicalInterfaceName(name) {
+				continue
+			}
+			base := filepath.Join("/sys/class/net", name)
+			if tb, err := os.ReadFile(filepath.Join(base, "type")); err == nil && strings.TrimSpace(string(tb)) != "1" {
+				continue
+			}
+			if mb, err := os.ReadFile(filepath.Join(base, "address")); err == nil {
+				raw = append(raw, string(mb))
+			}
+		}
+		id.MACAddrs = sshx.NormalizeMACList(raw)
+	}
+	return id
+}
+
+func (s *Service) localIdentity() HostIdentity {
+	if s == nil {
+		return HostIdentity{}
+	}
+	id := s.LocalIdentity
+	if id.MachineID == "" {
+		id.MachineID = s.LocalMachineID
+	}
+	return id
+}
+
+// CompareHostIdentity determines whether two hosts are different machines,
+// duplicate registrations of the same machine, or cloned VMs sharing a machine-id.
+func CompareHostIdentity(a, b HostIdentity) IdentityRelation {
+	if a.MachineID != "" && b.MachineID != "" && a.MachineID == b.MachineID {
+		if a.ProductUUID != "" && b.ProductUUID != "" {
+			if strings.EqualFold(a.ProductUUID, b.ProductUUID) {
+				return IdentitySameHost
+			}
+			return IdentityClone
+		}
+		if len(a.MACAddrs) > 0 && len(b.MACAddrs) > 0 {
+			if hasSharedMAC(a.MACAddrs, b.MACAddrs) {
+				return IdentitySameHost
+			}
+			return IdentityClone
+		}
+		if a.HostKeyFingerprint != "" && b.HostKeyFingerprint != "" && a.HostKeyFingerprint != b.HostKeyFingerprint {
+			return IdentityClone
+		}
+		return IdentitySameHost
+	}
+	if a.MachineID == "" || b.MachineID == "" {
+		if a.ProductUUID != "" && b.ProductUUID != "" && strings.EqualFold(a.ProductUUID, b.ProductUUID) {
+			return IdentitySameHost
+		}
+		if len(a.MACAddrs) > 0 && len(b.MACAddrs) > 0 && hasSharedMAC(a.MACAddrs, b.MACAddrs) {
+			return IdentitySameHost
+		}
+	}
+	return IdentityDifferent
+}
+
+func hasSharedMAC(a, b []string) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	set := make(map[string]bool, len(a))
+	for _, m := range a {
+		set[strings.ToLower(strings.TrimSpace(m))] = true
+	}
+	for _, m := range b {
+		if set[strings.ToLower(strings.TrimSpace(m))] {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeIdentity(n *db.Node, p *sshx.ProbeResult) HostIdentity {
+	if n == nil {
+		return HostIdentity{}
+	}
+	id := HostIdentity{
+		MachineID:          n.MachineID,
+		HostKeyFingerprint: n.HostKeyFingerprint,
+	}
+	if p != nil {
+		if p.MachineID != "" {
+			id.MachineID = p.MachineID
+		}
+		id.ProductUUID = p.ProductUUID
+		id.MACAddrs = p.MACAddrs
+		return id
+	}
+	if n.ProbeJSON != "" && n.ProbeJSON != "{}" {
+		var parsed sshx.ProbeResult
+		if json.Unmarshal([]byte(n.ProbeJSON), &parsed) == nil {
+			id.ProductUUID = parsed.ProductUUID
+			id.MACAddrs = parsed.MACAddrs
+		}
+	}
+	return id
 }
 
 // ---- SSH keys ----
@@ -488,25 +621,66 @@ func (s *Service) probe(ctx context.Context, n *db.Node) (*TestResult, error) {
 		_ = db.UpdateNodeStatus(ctx, s.DB.Writer, n.ID, "offline", s.DB.Now())
 		return nil, &auth.Error{Status: 502, Code: "probe_failed", Message: "环境探测失败：" + err.Error()}
 	}
-	if p.MachineID != "" {
-		if other, err := db.GetNodeByMachineID(ctx, s.DB.Reader, p.MachineID); err == nil && other.ID != n.ID {
-			return nil, conflict("duplicate_host", "该主机已以“%s”登记（machine-id 相同）。请为已有主机添加地址别名，而不是重复登记；若为克隆虚拟机，请重新生成 /etc/machine-id", other.Name)
-		}
+	clonePeers, dupPeer, err := s.classifyExistingPeers(ctx, n, p)
+	if err != nil {
+		return nil, err
+	}
+	if dupPeer != "" {
+		return nil, conflict("duplicate_host", "该主机已以“%s”登记。请为已有主机添加地址别名，而不是重复登记", dupPeer)
 	}
 	applyProbe(n, p)
 	if err := db.UpdateNodeProbe(ctx, s.DB.Writer, n, s.DB.Now()); err != nil {
-		if errors.Is(err, db.ErrUnique) {
-			return nil, conflict("duplicate_host", "machine-id 与已登记主机重复")
-		}
 		return nil, err
 	}
-	return &TestResult{Node: n, Probe: p, Warnings: WarningsForHost(n, p, s.IsControlPlaneHost(n))}, nil
+	return &TestResult{Node: n, Probe: p, Warnings: WarningsForHostWithClones(n, p, s.IsControlPlaneHost(n), clonePeers)}, nil
 }
 
-// IsControlPlaneHost reports whether n shares the same /etc/machine-id as the
+func (s *Service) classifyExistingPeers(ctx context.Context, n *db.Node, p *sshx.ProbeResult) (clonePeers []string, dupPeer string, err error) {
+	if s == nil || s.DB == nil || s.DB.Reader == nil {
+		return nil, "", nil
+	}
+	nodes, err := db.ListNodes(ctx, s.DB.Reader)
+	if err != nil {
+		return nil, "", err
+	}
+	curID := nodeIdentity(n, p)
+	for _, other := range nodes {
+		if other.ID == n.ID {
+			continue
+		}
+		if other.LastCheckedAt.IsZero() && other.MachineID == "" && other.HostKeyFingerprint == "" {
+			continue
+		}
+		switch CompareHostIdentity(curID, nodeIdentity(other, nil)) {
+		case IdentitySameHost:
+			return nil, other.Name, nil
+		case IdentityClone:
+			clonePeers = append(clonePeers, other.Name)
+		}
+	}
+	return clonePeers, "", nil
+}
+
+// WarningsForNode computes preflight warnings for a node, including clone machine-id notices.
+func (s *Service) WarningsForNode(ctx context.Context, n *db.Node, p *sshx.ProbeResult) []string {
+	clonePeers, _, err := s.classifyExistingPeers(ctx, n, p)
+	if err != nil {
+		clonePeers = nil
+	}
+	return WarningsForHostWithClones(n, p, s.IsControlPlaneHost(n), clonePeers)
+}
+
+// IsControlPlaneHost reports whether n refers to the same host as the
 // NomadDeck control plane host.
 func (s *Service) IsControlPlaneHost(n *db.Node) bool {
-	return s != nil && n != nil && n.MachineID != "" && s.LocalMachineID != "" && n.MachineID == s.LocalMachineID
+	if s == nil || n == nil {
+		return false
+	}
+	local := s.localIdentity()
+	if local.MachineID == "" && local.ProductUUID == "" && len(local.MACAddrs) == 0 {
+		return false
+	}
+	return CompareHostIdentity(nodeIdentity(n, nil), local) == IdentitySameHost
 }
 
 func applyProbe(n *db.Node, p *sshx.ProbeResult) {
@@ -531,7 +705,16 @@ func Warnings(n *db.Node, p *sshx.ProbeResult) []string {
 
 // WarningsForHost lists preflight problems and co-location cautions found by a probe.
 func WarningsForHost(n *db.Node, p *sshx.ProbeResult, isControlPlaneHost bool) []string {
+	return WarningsForHostWithClones(n, p, isControlPlaneHost, nil)
+}
+
+// WarningsForHostWithClones lists preflight problems, co-location cautions, and
+// non-blocking notices when cloned VMs share /etc/machine-id.
+func WarningsForHostWithClones(n *db.Node, p *sshx.ProbeResult, isControlPlaneHost bool, clonePeers []string) []string {
 	var w []string
+	if len(clonePeers) > 0 {
+		w = append(w, fmt.Sprintf("检测到该主机与「%s」共用相同的 /etc/machine-id（疑似克隆虚拟机），已允许接入；建议按需在目标机执行 sudo rm -f /etc/machine-id /var/lib/dbus/machine-id && sudo systemd-machine-id-setup 重新生成，以免影响 DHCP 或系统日志", strings.Join(clonePeers, "、")))
+	}
 	if isControlPlaneHost {
 		w = append(w, "该主机与 NomadDeck 控制面同机：若控制面以 Docker 容器运行，请勿在本页重启/重装该主机 Docker；加入多节点集群时 advertise_addr 请填写真实内网 IP 而非 127.0.0.1")
 	}

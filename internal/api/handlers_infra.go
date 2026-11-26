@@ -184,8 +184,8 @@ func (a *API) getNode(w http.ResponseWriter, r *http.Request) {
 	}
 	warnings := []string{}
 	var parsed sshx.ProbeResult
-	if n.ProbeJSON != "" && n.ProbeJSON != "{}" && json.Unmarshal([]byte(n.ProbeJSON), &parsed) == nil && parsed.Arch != "" {
-		warnings = hosts.WarningsForHost(n, &parsed, a.Hosts.IsControlPlaneHost(n))
+	if n.ProbeJSON != "" && n.ProbeJSON != "{}" && json.Unmarshal([]byte(n.ProbeJSON), &parsed) == nil && (parsed.Arch != "" || parsed.MachineID != "") {
+		warnings = a.Hosts.WarningsForNode(r.Context(), n, &parsed)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"node": a.nodeOf(n), "probe": probe, "warnings": warnings})
 }

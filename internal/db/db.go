@@ -164,14 +164,32 @@ func (d *DB) migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		bodyStr := string(body)
+		rebuild := strings.Contains(bodyStr, "DROP TABLE ")
+		if rebuild {
+			if _, err := d.Writer.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+				return fmt.Errorf("disable foreign keys for %s: %w", m.name, err)
+			}
+		}
 		err = d.WithTx(ctx, func(tx *sql.Tx) error {
-			if _, err := tx.ExecContext(ctx, string(body)); err != nil {
+			if _, err := tx.ExecContext(ctx, bodyStr); err != nil {
 				return err
 			}
 			_, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)`,
 				m.version, m.name, d.NowString())
 			return err
 		})
+		if rebuild {
+			_, fkEnableErr := d.Writer.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+			if err == nil && fkEnableErr == nil {
+				var tbl string
+				if fkCheckErr := d.Writer.QueryRowContext(ctx, `PRAGMA foreign_key_check`).Scan(&tbl); fkCheckErr == nil {
+					err = fmt.Errorf("foreign key violation after migration %s on table %s", m.name, tbl)
+				}
+			} else if err == nil {
+				err = fkEnableErr
+			}
+		}
 		if err != nil {
 			return fmt.Errorf("apply migration %s: %w", m.name, err)
 		}

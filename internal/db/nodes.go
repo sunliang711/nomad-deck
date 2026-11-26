@@ -90,7 +90,25 @@ func GetNode(ctx context.Context, q Querier, id string) (*Node, error) {
 
 // GetNodeByMachineID loads a host by machine ID.
 func GetNodeByMachineID(ctx context.Context, q Querier, machineID string) (*Node, error) {
-	return scanNode(q.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE machine_id = ?`, machineID))
+	return scanNode(q.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE machine_id = ? LIMIT 1`, machineID))
+}
+
+// ListNodesByMachineID returns all hosts sharing the given machine ID.
+func ListNodesByMachineID(ctx context.Context, q Querier, machineID string) ([]*Node, error) {
+	rows, err := q.QueryContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE machine_id = ? ORDER BY name`, machineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Node
+	for rows.Next() {
+		n, err := scanNode(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
 }
 
 // ListNodes returns all hosts ordered by name.

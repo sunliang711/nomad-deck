@@ -3,6 +3,7 @@ package sshx
 import (
 	"bufio"
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,26 @@ else emit selinux disabled; fi
 emit swap_entries "$(awk 'NR>1' /proc/swaps 2>/dev/null | wc -l | tr -d ' ')"
 emit swap_crypt "$(awk 'NR>1{print $1}' /proc/swaps 2>/dev/null | grep -c '^/dev/mapper/' )"
 emit machine_id "$(cat /etc/machine-id 2>/dev/null)"
+if [ -r /sys/class/dmi/id/product_uuid ]; then
+  emit product_uuid "$(cat /sys/class/dmi/id/product_uuid 2>/dev/null)"
+elif [ "$SUDO" != "false" ] && $SUDO test -r /sys/class/dmi/id/product_uuid 2>/dev/null; then
+  emit product_uuid "$($SUDO cat /sys/class/dmi/id/product_uuid 2>/dev/null)"
+fi
+macs=""
+for p in /sys/class/net/*; do
+  [ -e "$p/address" ] || continue
+  ifn="${p##*/}"
+  case "$ifn" in
+    lo|docker*|veth*|br-*|cni*|flannel*|cali*|virbr*|tun*|tap*|wg*|tailscale*|dummy*) continue ;;
+  esac
+  if [ -r "$p/type" ] && [ "$(cat "$p/type" 2>/dev/null)" != "1" ]; then continue; fi
+  mac="$(cat "$p/address" 2>/dev/null)"
+  case "$mac" in
+    ""|00:00:00:00:00:00|ff:ff:ff:ff:ff:ff) continue ;;
+  esac
+  macs="${macs:+$macs,}$mac"
+done
+emit mac_addrs "$macs"
 emit epoch "$(date +%s.%N 2>/dev/null)"
 if command -v timedatectl >/dev/null 2>&1; then
   emit ntp_synced "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)"
@@ -122,6 +143,8 @@ type ProbeResult struct {
 	SwapEnabled    bool              `json:"swap_enabled"`
 	SwapEncrypted  bool              `json:"swap_encrypted"`
 	MachineID      string            `json:"machine_id"`
+	ProductUUID    string            `json:"product_uuid,omitempty"`
+	MACAddrs       []string          `json:"mac_addrs,omitempty"`
 	TimeSync       string            `json:"time_sync"`
 	ClockSkewMS    int64             `json:"clock_skew_ms"`
 	DockerMode     string            `json:"docker_mode"`
@@ -262,7 +285,9 @@ func ParseProbe(out string, localMid time.Time) *ProbeResult {
 	crypt, _ := strconv.Atoi(raw["swap_crypt"])
 	p.SwapEnabled = entries > 0
 	p.SwapEncrypted = entries > 0 && crypt == entries
-	p.MachineID = raw["machine_id"]
+	p.MachineID = strings.TrimSpace(raw["machine_id"])
+	p.ProductUUID = strings.ToLower(strings.TrimSpace(raw["product_uuid"]))
+	p.MACAddrs = NormalizeMACList(strings.Split(raw["mac_addrs"], ","))
 	switch strings.ToLower(raw["ntp_synced"]) {
 	case "yes", "true", "1":
 		p.TimeSync = "synced"
@@ -329,6 +354,36 @@ func osFamily(id, like, versionID, codename string) (family, code string) {
 	default:
 		return id, codename
 	}
+}
+
+// IsPhysicalInterfaceName reports whether a network interface name looks like a
+// physical or primary VM NIC rather than a virtual bridge/tunnel/container veth.
+func IsPhysicalInterfaceName(name string) bool {
+	if name == "" || name == "lo" {
+		return false
+	}
+	for _, p := range []string{"docker", "veth", "br-", "cni", "flannel", "cali", "virbr", "tun", "tap", "wg", "tailscale", "dummy"} {
+		if strings.HasPrefix(name, p) {
+			return false
+		}
+	}
+	return true
+}
+
+// NormalizeMACList cleans, deduplicates, and sorts MAC addresses.
+func NormalizeMACList(raw []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range raw {
+		m := strings.ToLower(strings.TrimSpace(s))
+		if m == "" || m == "00:00:00:00:00:00" || m == "ff:ff:ff:ff:ff:ff" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // parseDockerVersion extracts "27.3.1" from "Docker version 27.3.1, build ...".

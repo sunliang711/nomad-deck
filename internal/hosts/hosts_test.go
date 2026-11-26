@@ -1,7 +1,10 @@
 package hosts
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -58,5 +61,136 @@ func TestFormatPushKeyError(t *testing.T) {
 	netErr := formatPushKeyError(errors.New("dial tcp 10.0.0.1:22: i/o timeout"))
 	if !errors.As(netErr, &ae) || ae.Code != "push_key_failed" || !strings.Contains(ae.Message, "i/o timeout") {
 		t.Fatalf("expected generic push_key_failed, got %v", netErr)
+	}
+}
+
+func TestCompareHostIdentityAndCloneHandling(t *testing.T) {
+	// Different machine_id -> different hosts.
+	if got := CompareHostIdentity(
+		HostIdentity{MachineID: "mid-1", ProductUUID: "u1"},
+		HostIdentity{MachineID: "mid-2", ProductUUID: "u2"},
+	); got != IdentityDifferent {
+		t.Fatalf("expected IdentityDifferent, got %v", got)
+	}
+
+	// Same machine_id, different product_uuid (even with identical SSH host key) -> clone.
+	if got := CompareHostIdentity(
+		HostIdentity{MachineID: "mid-shared", ProductUUID: "uuid-a", HostKeyFingerprint: "SHA256:same"},
+		HostIdentity{MachineID: "mid-shared", ProductUUID: "uuid-b", HostKeyFingerprint: "SHA256:same"},
+	); got != IdentityClone {
+		t.Fatalf("expected IdentityClone for differing product_uuid, got %v", got)
+	}
+
+	// Same machine_id, same product_uuid -> duplicate host.
+	if got := CompareHostIdentity(
+		HostIdentity{MachineID: "mid-shared", ProductUUID: "UUID-A"},
+		HostIdentity{MachineID: "mid-shared", ProductUUID: "uuid-a"},
+	); got != IdentitySameHost {
+		t.Fatalf("expected IdentitySameHost for matching product_uuid, got %v", got)
+	}
+
+	// Same machine_id, no product_uuid, disjoint MACs -> clone.
+	if got := CompareHostIdentity(
+		HostIdentity{MachineID: "mid-shared", MACAddrs: []string{"52:54:00:00:00:01"}},
+		HostIdentity{MachineID: "mid-shared", MACAddrs: []string{"52:54:00:00:00:02"}},
+	); got != IdentityClone {
+		t.Fatalf("expected IdentityClone for disjoint MACs, got %v", got)
+	}
+
+	// Same machine_id, no product_uuid, shared MAC -> duplicate host.
+	if got := CompareHostIdentity(
+		HostIdentity{MachineID: "mid-shared", MACAddrs: []string{"52:54:00:00:00:01", "52:54:00:00:00:09"}},
+		HostIdentity{MachineID: "mid-shared", MACAddrs: []string{"52:54:00:00:00:09"}},
+	); got != IdentitySameHost {
+		t.Fatalf("expected IdentitySameHost for shared MAC, got %v", got)
+	}
+
+	// Same machine_id, no hardware/MAC signals, differing SSH host key -> clone.
+	if got := CompareHostIdentity(
+		HostIdentity{MachineID: "mid-shared", HostKeyFingerprint: "SHA256:fp1"},
+		HostIdentity{MachineID: "mid-shared", HostKeyFingerprint: "SHA256:fp2"},
+	); got != IdentityClone {
+		t.Fatalf("expected IdentityClone for differing SSH host keys, got %v", got)
+	}
+
+	// Empty machine_id, matching MAC -> duplicate host.
+	if got := CompareHostIdentity(
+		HostIdentity{MACAddrs: []string{"52:54:00:00:00:01"}},
+		HostIdentity{MachineID: "mid-1", MACAddrs: []string{"52:54:00:00:00:01"}},
+	); got != IdentitySameHost {
+		t.Fatalf("expected IdentitySameHost without machine_id when MAC matches, got %v", got)
+	}
+
+	// Control plane clone must not be flagged as co-located.
+	cpSvc := &Service{LocalIdentity: HostIdentity{MachineID: "mid-shared", ProductUUID: "uuid-cp", MACAddrs: []string{"52:54:00:00:00:aa"}}}
+	cloneProbe, _ := json.Marshal(sshx.ProbeResult{MachineID: "mid-shared", ProductUUID: "uuid-node", MACAddrs: []string{"52:54:00:00:00:bb"}})
+	cloneNode := &db.Node{Host: "10.0.0.2", MachineID: "mid-shared", ProbeJSON: string(cloneProbe)}
+	if cpSvc.IsControlPlaneHost(cloneNode) {
+		t.Fatal("cloned VM should not be treated as control plane host")
+	}
+}
+
+func TestClassifyExistingPeersAndWarningsForNode(t *testing.T) {
+	ctx := context.Background()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "hosts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	now := d.Now()
+	if err := db.InsertSSHKey(ctx, d.Writer, &db.SSHKey{
+		ID: "k1", Name: "default", Algorithm: "ed25519", PublicKey: "ssh-ed25519 AAAA",
+		PrivateKeyEncrypted: "ct", Fingerprint: "SHA256:abc", IsDefault: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p1 := sshx.ProbeResult{
+		MachineID: "mid-clone", ProductUUID: "uuid-1", MACAddrs: []string{"52:54:00:00:00:01"},
+		SudoReady: true, Arch: "amd64", TimeSync: "synced", OptWritable: true,
+	}
+	p1JSON, _ := json.Marshal(p1)
+	n1 := &db.Node{
+		ID: "n1", Name: "deck-node-1", Host: "10.0.0.1", SSHPort: 22, SSHUser: "root", SSHKeyID: "k1",
+		MachineID: "mid-clone", Arch: "amd64", TimeSync: "synced", SudoReady: true,
+		ProbeJSON: string(p1JSON), Status: "online", LastCheckedAt: now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.InsertNode(ctx, d.Writer, n1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateNodeProbe(ctx, d.Writer, n1, now); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := &Service{DB: d}
+	n2 := &db.Node{ID: "n2", Name: "n2", Host: "10.0.0.2", SSHPort: 22, SSHUser: "root", SSHKeyID: "k1"}
+	p2 := &sshx.ProbeResult{
+		MachineID: "mid-clone", ProductUUID: "uuid-2", MACAddrs: []string{"52:54:00:00:00:02"},
+		SudoReady: true, Arch: "amd64", TimeSync: "synced", OptWritable: true,
+	}
+	clones, dup, err := svc.classifyExistingPeers(ctx, n2, p2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dup != "" || len(clones) != 1 || clones[0] != "deck-node-1" {
+		t.Fatalf("expected clone peer [deck-node-1] and no dup, got clones=%v dup=%q", clones, dup)
+	}
+	warnings := svc.WarningsForNode(ctx, n2, p2)
+	if !strings.Contains(strings.Join(warnings, "\n"), "deck-node-1") || !strings.Contains(strings.Join(warnings, "\n"), "已允许接入") {
+		t.Fatalf("expected non-blocking clone warning, got %v", warnings)
+	}
+
+	// Same host under second IP must still be caught as duplicate.
+	n1Dup := &db.Node{ID: "n1-dup", Name: "n1-alt", Host: "192.168.1.1", SSHPort: 22, SSHUser: "root", SSHKeyID: "k1"}
+	p1Dup := &sshx.ProbeResult{
+		MachineID: "mid-clone", ProductUUID: "uuid-1", MACAddrs: []string{"52:54:00:00:00:01"},
+		SudoReady: true, Arch: "amd64", TimeSync: "synced", OptWritable: true,
+	}
+	_, dup, err = svc.classifyExistingPeers(ctx, n1Dup, p1Dup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dup != "deck-node-1" {
+		t.Fatalf("expected duplicate peer deck-node-1, got %q", dup)
 	}
 }

@@ -54,6 +54,8 @@ selinux=disabled
 swap_entries=1
 swap_crypt=0
 machine_id=0123456789abcdef0123456789abcdef
+product_uuid=EC234567-89AB-CDEF-0123-456789ABCDEF
+mac_addrs=52:54:00:11:22:33,52:54:00:AA:BB:CC,52:54:00:11:22:33,00:00:00:00:00:00
 epoch=1700000010.500000000
 ntp_synced=yes
 docker_installed=1
@@ -77,6 +79,12 @@ opt_writable=1
 	}
 	if strings.Join(p.Missing, ",") != "sha256sum" {
 		t.Fatalf("missing: %v", p.Missing)
+	}
+	if p.ProductUUID != "ec234567-89ab-cdef-0123-456789abcdef" {
+		t.Fatalf("product_uuid: %q", p.ProductUUID)
+	}
+	if strings.Join(p.MACAddrs, ",") != "52:54:00:11:22:33,52:54:00:aa:bb:cc" {
+		t.Fatalf("mac_addrs: %v", p.MACAddrs)
 	}
 
 	rhel := ParseProbe("arch=aarch64\nos_id=rocky\nos_id_like=rhel centos fedora\nos_version_id=9.4\nsudo=root\ndocker_installed=0\n", time.Time{})

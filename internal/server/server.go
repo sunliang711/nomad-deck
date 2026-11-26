@@ -146,7 +146,8 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 			}
 		}
 	}
-	hostSvc := &hosts.Service{DB: d, Keys: keys, Audit: rec, Pool: pool, LocalMachineID: hosts.ReadLocalMachineID()}
+	localID := hosts.ReadLocalIdentity()
+	hostSvc := &hosts.Service{DB: d, Keys: keys, Audit: rec, Pool: pool, LocalMachineID: localID.MachineID, LocalIdentity: localID}
 	proxy := &netx.Manager{DB: d, Keys: keys}
 	releases := &release.Provider{DB: d, CacheDir: filepath.Join(cfg.DataDir, "cache", "releases")}
 	vaultSvc := &vault.Service{DB: d, Keys: keys, Audit: rec, Hosts: hostSvc, Ops: engine, Releases: releases, Proxy: proxy,

@@ -81,3 +81,37 @@ func TestAuditListFilters(t *testing.T) {
 		t.Fatalf("pagination: %d %d", len(page), len(rest))
 	}
 }
+
+func TestNodesAllowSharedMachineIDWithForeignKeysIntact(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	now := d.Now()
+	if err := InsertSSHKey(ctx, d.Writer, &SSHKey{
+		ID: "k1", Name: "default", Algorithm: "ed25519", PublicKey: "ssh-ed25519 AAAA",
+		PrivateKeyEncrypted: "ct", Fingerprint: "SHA256:abc", IsDefault: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []*Node{
+		{ID: "n1", Name: "node-1", Host: "10.0.0.1", SSHPort: 22, SSHUser: "root", SSHKeyID: "k1", CreatedAt: now, UpdatedAt: now},
+		{ID: "n2", Name: "node-2", Host: "10.0.0.2", SSHPort: 22, SSHUser: "root", SSHKeyID: "k1", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := InsertNode(ctx, d.Writer, n); err != nil {
+			t.Fatal(err)
+		}
+		n.MachineID = "shared-clone-mid"
+		n.Status = "online"
+		if err := UpdateNodeProbe(ctx, d.Writer, n, now); err != nil {
+			t.Fatalf("UpdateNodeProbe(%s) failed: %v", n.ID, err)
+		}
+	}
+	rows, err := ListNodesByMachineID(ctx, d.Reader, "shared-clone-mid")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("expected 2 nodes sharing machine_id, got %d (%v)", len(rows), err)
+	}
+}

@@ -153,7 +153,7 @@ func HostIssues(n *db.Node) []PreflightIssue {
 	add := func(sev, format string, args ...any) {
 		out = append(out, PreflightIssue{NodeID: n.ID, Node: n.Name, Severity: sev, Message: fmt.Sprintf(format, args...)})
 	}
-	if n.MachineID == "" || n.LastCheckedAt.IsZero() {
+	if (n.MachineID == "" && n.Arch == "") || n.LastCheckedAt.IsZero() {
 		add("block", "主机尚未完成连通性测试与环境探测")
 		return out
 	}

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Boxes, Copy, Download, KeyRound, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowUpRight, Boxes, Copy, Download, FilePlus2, KeyRound, Play, RefreshCw, RotateCcw, Search, Square, Trash2 } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiDelete, apiDownload, apiGet, apiPost, fmtTime, openSSE } from '../lib/api';
 import { copyText } from '../lib/clipboard';
@@ -34,8 +34,6 @@ import {
   SectionTabs,
   Select,
   StatusBadge,
-  TermLabel,
-  statusTone,
 } from '../components/UI';
 import { CodeEditor } from '../components/CodeEditor';
 import { VisualJobBuilder, type VisualJobBuilderHandle } from '../components/VisualJobBuilder';
@@ -219,6 +217,8 @@ export function JobCenterPage() {
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
   const [revisions, setRevisions] = useState<any[]>([]);
   const [selectedJobId, setSelectedJobId] = useState('');
+  const [sidebarTab, setSidebarTab] = useState<'jobs' | 'templates'>('jobs');
+  const [sidebarQuery, setSidebarQuery] = useState('');
   const [tplName, setTplName] = useState('');
   const [err, setErr] = useState('');
   const [loadingClusters, setLoadingClusters] = useState(true);
@@ -587,6 +587,43 @@ export function JobCenterPage() {
     </div>
   );
 
+  const namespaceOptions = useMemo(() => {
+    const set = new Set<string>(clusterNamespaces.length > 0 ? clusterNamespaces : ['default']);
+    if (namespace) set.add(namespace);
+    return Array.from(set);
+  }, [clusterNamespaces, namespace]);
+
+  const activeSample = useMemo(
+    () => STARTER_SAMPLES.find((sample) => sample.hcl === hcl) || null,
+    [hcl],
+  );
+
+  const filteredJobs = useMemo(() => {
+    const q = sidebarQuery.trim().toLowerCase();
+    if (!q) return jobs;
+    return jobs.filter(
+      (j) =>
+        String(j.id || '').toLowerCase().includes(q) ||
+        String(j.namespace || '').toLowerCase().includes(q) ||
+        String(j.type || '').toLowerCase().includes(q),
+    );
+  }, [jobs, sidebarQuery]);
+
+  const filteredTemplates = useMemo(() => {
+    const q = sidebarQuery.trim().toLowerCase();
+    if (!q) return templates;
+    return templates.filter((t) => String(t.name || '').toLowerCase().includes(q));
+  }, [templates, sidebarQuery]);
+
+  const startFreshDraft = () => {
+    setSelectedJobId('');
+    setRevisions([]);
+    setHcl(sampleHCL);
+    setEditMode('hcl');
+    setJobVariables({});
+    clearPlan();
+  };
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -602,27 +639,33 @@ export function JobCenterPage() {
                 </Select>
               </div>
             </div>
-            <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
               <span className="shrink-0">命名空间</span>
-              <div className="w-28">
-                <Input aria-label="任务命名空间" list="jc-namespace-list" value={namespace} onChange={(e) => { setNamespace(e.target.value); clearPlan(); }} placeholder="default" />
-                <datalist id="jc-namespace-list">
-                  {clusterNamespaces.map((ns) => <option key={ns} value={ns} />)}
-                </datalist>
+              <div className="w-32">
+                <Select
+                  aria-label="任务命名空间"
+                  size="sm"
+                  value={namespace}
+                  disabled={modeBusy || (editMode === 'visual' && !visualReady)}
+                  onChange={(e) => { setNamespace(e.target.value); clearPlan(); }}
+                >
+                  {namespaceOptions.map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+                </Select>
               </div>
-            </label>
-            <Button onClick={() => { void loadClusters(); void loadJobs(); }}>
-              <RefreshCw className="h-4 w-4" />
+            </div>
+            <Button size="sm" onClick={() => { void loadClusters(); void loadJobs(); }}>
+              <RefreshCw className="h-3.5 w-3.5" />
               <span>刷新</span>
             </Button>
             {isAdmin && clusterId && (
               <Button
+                size="sm"
                 onClick={() =>
                   void apiDownload(`/api/v1/nomad/${clusterId}/job-ops/export`, { namespace }, 'nomad-jobs.zip')
                     .catch((ex) => toast.error(ex.message))
                 }
               >
-                <Download className="h-4 w-4" />
+                <Download className="h-3.5 w-3.5" />
                 <span>批量导出 HCL</span>
               </Button>
             )}
@@ -639,132 +682,238 @@ export function JobCenterPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
-        <Card title="任务与模板" className="min-w-0">
-          <div className="space-y-4 text-xs">
-            <div className="max-h-80 overflow-y-auto space-y-2">
-              {jobs.length === 0 ? (
-                <EmptyState title="准备运行第一个 Job" description="编排工作台已准备示例配置，先校验，再预览计划即可提交。" />
-              ) : (
-                jobs.map((j) => {
-                  const jobNs = j.namespace || namespace;
-                  const workbenchHref = `/nomad?id=${encodeURIComponent(clusterId)}&tab=workbench&ns=${encodeURIComponent(jobNs)}&job=${encodeURIComponent(j.id)}`;
-                  return (
-                    <div key={`${jobNs}:${j.id}`} className="space-y-3 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 space-y-1.5">
-                          <Link
-                            to={workbenchHref}
-                            title="前往运行态工作台查看详情"
-                            className="block font-mono font-semibold break-all text-slate-900 hover:text-indigo-600 hover:underline dark:text-slate-100 dark:hover:text-indigo-400"
-                          >
-                            {j.id}
-                          </Link>
-                          <StatusBadge value={j.stop ? 'stopped' : j.status} />
-                        </div>
-                        <Link
-                          to={workbenchHref}
-                          title="在运行态工作台查看 Allocations、日志与终端"
-                          className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-800 dark:text-indigo-300 dark:hover:bg-indigo-500/15"
-                        >
-                          <span>运行态</span>
-                          <ArrowUpRight className="h-3 w-3" />
-                        </Link>
-                      </div>
-                      {isAdmin && (
-                        <div className="flex flex-wrap gap-1">
-                          <Button size="sm" onClick={() => void loadJobForEdit(j)}>编辑</Button>
-                          <Button
-                            size="sm"
-                            aria-label="启动 Job"
-                            disabled={!j.stop}
-                            onClick={() =>
-                              void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/start`, {})
-                                .then(() => {
-                                  toast.success(`已启动 Job ${j.id}`);
-                                  return loadJobs();
-                                })
-                                .catch((ex) => setErr(ex.message))
-                            }
-                          >
-                            <Play className="h-3 w-3" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            aria-label="停止 Job"
-                            disabled={j.stop}
-                            onClick={async () => {
-                              if (!(await askConfirm(`确认停止运行中的 Job「${j.id}」（Namespace: ${jobNs}）吗？`, { title: '停止 Job', confirmText: '确认停止', danger: true }))) return;
-                              void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/stop`, {})
-                                .then(() => {
-                                  toast.success(`已停止 Job ${j.id}`);
-                                  return loadJobs();
-                                })
-                                .catch((ex) => setErr(ex.message));
-                            }}
-                          >
-                            <Square className="h-3 w-3" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            aria-label="清理 Job"
-                            variant="danger"
-                            onClick={async () => {
-                              if (!(await askConfirm(`确认清理并彻底删除 Job「${j.id}」（Namespace: ${jobNs}）吗？`, { title: '清理删除 Job', confirmText: '确认 Purge', danger: true }))) return;
-                              void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/purge`, { confirm_job_id: j.id })
-                                .then(() => {
-                                  toast.success(`已清理 Job ${j.id}`);
-                                  return loadJobs();
-                                })
-                                .catch((ex) => setErr(ex.message));
-                            }}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[310px_minmax(0,1fr)]">
+        <Card
+          title="任务与模板"
+          actions={
+            isAdmin ? (
+              <Button size="sm" variant="ghost" onClick={startFreshDraft} title="清空当前编辑并新建空白示例任务">
+                <FilePlus2 className="h-3.5 w-3.5" />
+                <span>新建</span>
+              </Button>
+            ) : undefined
+          }
+          className="min-w-0"
+        >
+          <div className="space-y-3 text-xs">
+            <div className="grid grid-cols-2 rounded-xl border border-slate-200/80 bg-slate-50/80 p-1 dark:border-slate-800 dark:bg-slate-950/60">
+              <button
+                type="button"
+                onClick={() => { setSidebarTab('jobs'); setSidebarQuery(''); }}
+                className={`rounded-lg py-1.5 text-xs font-medium transition ${
+                  sidebarTab === 'jobs'
+                    ? 'bg-white text-indigo-600 shadow-xs dark:bg-slate-800 dark:text-indigo-300'
+                    : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+              >
+                运行任务 ({jobs.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSidebarTab('templates'); setSidebarQuery(''); }}
+                className={`rounded-lg py-1.5 text-xs font-medium transition ${
+                  sidebarTab === 'templates'
+                    ? 'bg-white text-indigo-600 shadow-xs dark:bg-slate-800 dark:text-indigo-300'
+                    : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+              >
+                模板库 ({templates.length})
+              </button>
             </div>
 
-            <div className="border-t border-slate-200 pt-3 dark:border-slate-800">
-              <div className="mb-1.5 font-semibold">Job 模板库 ({templates.length})</div>
-              <div className="max-h-56 overflow-y-auto space-y-2">
-                {templates.map((t) => (
-                  <div key={t.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 p-2.5 dark:border-slate-800">
-                    <span className="break-all">{t.name}</span>
-                    <div className="flex shrink-0 gap-1">
-                      <Button size="sm" onClick={() => { setHcl(t.hcl || ''); setEditMode('hcl'); setJobVariables({}); clearPlan(); }}>载入</Button>
-                      {isAdmin && (
+            {((sidebarTab === 'jobs' && jobs.length > 0) || (sidebarTab === 'templates' && templates.length > 0)) && (
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={sidebarQuery}
+                  onChange={(e) => setSidebarQuery(e.target.value)}
+                  placeholder={sidebarTab === 'jobs' ? '筛选任务名称或命名空间…' : '筛选模板名称…'}
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50/80 py-1.5 pl-8 pr-2.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-100"
+                />
+              </div>
+            )}
+
+            {sidebarTab === 'jobs' ? (
+              <div className="max-h-[480px] overflow-y-auto space-y-2 pr-0.5">
+                {jobs.length === 0 ? (
+                  <EmptyState title="暂无运行中的 Job" description="右侧工作台已准备好示例配置，先校验再预览计划即可提交运行。" />
+                ) : filteredJobs.length === 0 ? (
+                  <div className="py-8 text-center text-slate-400 dark:text-slate-500">没有匹配的任务</div>
+                ) : (
+                  filteredJobs.map((j) => {
+                    const jobNs = j.namespace || namespace;
+                    const workbenchHref = `/nomad?id=${encodeURIComponent(clusterId)}&tab=workbench&ns=${encodeURIComponent(jobNs)}&job=${encodeURIComponent(j.id)}`;
+                    const isEditing = selectedJobId === j.id;
+                    return (
+                      <div
+                        key={`${jobNs}:${j.id}`}
+                        className={`rounded-xl border p-3 transition ${
+                          isEditing
+                            ? 'border-indigo-400 bg-indigo-50/45 dark:border-indigo-500/60 dark:bg-indigo-500/10'
+                            : 'border-slate-200/90 bg-white/60 hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900/50 dark:hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 space-y-1">
+                            <Link
+                              to={workbenchHref}
+                              title="前往运行态工作台查看详情"
+                              className="block font-mono text-[13px] font-semibold truncate text-slate-900 hover:text-indigo-600 hover:underline dark:text-slate-100 dark:hover:text-indigo-400"
+                            >
+                              {j.id}
+                            </Link>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <StatusBadge value={j.stop ? 'stopped' : j.status} />
+                              <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                                {j.type || 'service'} · {jobNs}
+                              </span>
+                            </div>
+                          </div>
+                          <Link
+                            to={workbenchHref}
+                            title="在运行态工作台查看 Allocations、日志与终端"
+                            className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-slate-200/80 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300 dark:hover:border-indigo-500/40 dark:hover:text-indigo-300"
+                          >
+                            <span>运行态</span>
+                            <ArrowUpRight className="h-3 w-3" />
+                          </Link>
+                        </div>
+
+                        {isAdmin && (
+                          <div className="mt-2.5 flex items-center gap-1 border-t border-slate-100 pt-2 dark:border-slate-800/80">
+                            <Button
+                              size="sm"
+                              variant={isEditing ? 'primary' : 'secondary'}
+                              className="flex-1"
+                              onClick={() => void loadJobForEdit(j)}
+                            >
+                              {isEditing ? '编辑中' : '载入编辑'}
+                            </Button>
+                            <button
+                              type="button"
+                              title="启动 Job"
+                              aria-label="启动 Job"
+                              disabled={!j.stop}
+                              onClick={() =>
+                                void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/start`, {})
+                                  .then(() => {
+                                    toast.success(`已启动 Job ${j.id}`);
+                                    return loadJobs();
+                                  })
+                                  .catch((ex) => setErr(ex.message))
+                              }
+                              className="rounded-lg p-1.5 text-slate-400 transition hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-35 disabled:pointer-events-none dark:hover:bg-emerald-500/15 dark:hover:text-emerald-400"
+                            >
+                              <Play className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              title="停止 Job"
+                              aria-label="停止 Job"
+                              disabled={j.stop}
+                              onClick={async () => {
+                                if (!(await askConfirm(`确认停止运行中的 Job「${j.id}」（Namespace: ${jobNs}）吗？`, { title: '停止 Job', confirmText: '确认停止', danger: true }))) return;
+                                void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/stop`, {})
+                                  .then(() => {
+                                    toast.success(`已停止 Job ${j.id}`);
+                                    return loadJobs();
+                                  })
+                                  .catch((ex) => setErr(ex.message));
+                              }}
+                              className="rounded-lg p-1.5 text-slate-400 transition hover:bg-amber-50 hover:text-amber-600 disabled:opacity-35 disabled:pointer-events-none dark:hover:bg-amber-500/15 dark:hover:text-amber-400"
+                            >
+                              <Square className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              title="清理并彻底删除 Job"
+                              aria-label="清理 Job"
+                              onClick={async () => {
+                                if (!(await askConfirm(`确认清理并彻底删除 Job「${j.id}」（Namespace: ${jobNs}）吗？`, { title: '清理删除 Job', confirmText: '确认 Purge', danger: true }))) return;
+                                void apiPost(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(jobNs)}/jobs/${encodeURIComponent(j.id)}/purge`, { confirm_job_id: j.id })
+                                  .then(() => {
+                                    toast.success(`已清理 Job ${j.id}`);
+                                    return loadJobs();
+                                  })
+                                  .catch((ex) => setErr(ex.message));
+                              }}
+                              className="rounded-lg p-1.5 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15 dark:hover:text-rose-400"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            ) : (
+              <div className="max-h-[480px] overflow-y-auto space-y-2 pr-0.5">
+                {templates.length === 0 ? (
+                  <EmptyState title="暂无保存的模板" description="在编辑器下方输入模板名称并点击「存为模板」，方便下次一键复用。" />
+                ) : filteredTemplates.length === 0 ? (
+                  <div className="py-8 text-center text-slate-400 dark:text-slate-500">没有匹配的模板</div>
+                ) : (
+                  filteredTemplates.map((t) => (
+                    <div
+                      key={t.id}
+                      className="flex items-center justify-between gap-2 rounded-xl border border-slate-200/90 bg-white/60 p-2.5 dark:border-slate-800 dark:bg-slate-900/50"
+                    >
+                      <span className="min-w-0 flex-1 truncate font-medium text-slate-800 dark:text-slate-200">{t.name}</span>
+                      <div className="flex shrink-0 items-center gap-1">
                         <Button
                           size="sm"
-                          variant="danger"
-                          onClick={async () => {
-                            if (!(await askConfirm(`确认删除 Job 模板「${t.name}」吗？`, { title: '删除模板', confirmText: '确认删除', danger: true }))) return;
-                            void apiDelete(`/api/v1/job-templates/${t.id}`)
-                              .then(() => {
-                                toast.success(`已删除模板 ${t.name}`);
-                                return loadClusters();
-                              })
-                              .catch((ex) => setErr(ex.message));
+                          onClick={() => {
+                            setSelectedJobId('');
+                            setRevisions([]);
+                            setHcl(t.hcl || '');
+                            setEditMode('hcl');
+                            setJobVariables({});
+                            clearPlan();
                           }}
                         >
-                          删
+                          载入
                         </Button>
-                      )}
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            title="删除模板"
+                            aria-label="删除模板"
+                            onClick={async () => {
+                              if (!(await askConfirm(`确认删除 Job 模板「${t.name}」吗？`, { title: '删除模板', confirmText: '确认删除', danger: true }))) return;
+                              void apiDelete(`/api/v1/job-templates/${t.id}`)
+                                .then(() => {
+                                  toast.success(`已删除模板 ${t.name}`);
+                                  return loadClusters();
+                                })
+                                .catch((ex) => setErr(ex.message));
+                            }}
+                            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15 dark:hover:text-rose-400"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
-            </div>
+            )}
           </div>
         </Card>
 
         <Card
           className="min-w-0"
-          title={<TermLabel term="Job 编排工作台" tip="支持编写 Nomad HCL（HashiCorp Configuration Language）、表单可视化编排或 JSON 定义，提交前可做语法校验和变更比对。" />}
+          title={
+            <div className="flex flex-wrap items-center gap-2">
+              <span>Job 编排工作台</span>
+              <Badge tone={selectedJobId ? 'blue' : 'neutral'}>
+                {selectedJobId ? `编辑：${selectedJobId}` : '新建任务'}
+              </Badge>
+            </div>
+          }
           actions={
             <div className="flex flex-wrap items-center gap-2">
               {selectedCluster && !needsDeployment && (
@@ -792,11 +941,11 @@ export function JobCenterPage() {
             </div>
           }
         >
-          <div className="space-y-4 text-xs">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-3 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2.5">
               <SectionTabs
                 tabs={[
-                  { id: 'hcl', label: '原生 HCL 编辑器', tip: 'Nomad 原生 HashiCorp Configuration Language 声明式任务定义。' },
+                  { id: 'hcl', label: '原生 HCL', tip: 'Nomad 原生 HashiCorp Configuration Language 声明式任务定义。' },
                   ...(isAdmin ? [{ id: 'visual', label: '可视化编排' }] : []),
                   { id: 'json', label: 'JSON 定义' },
                 ]}
@@ -804,30 +953,39 @@ export function JobCenterPage() {
                 onChange={(m) => { void changeMode(m as 'hcl' | 'visual' | 'json'); }}
               />
               {isAdmin && (
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-slate-500 dark:text-slate-400 mr-1">入门示例：</span>
-                  {STARTER_SAMPLES.map((s) => (
-                    <Button
-                      key={s.id}
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400 dark:text-slate-500 shrink-0">入门示例</span>
+                  <div className="w-48">
+                    <Select
+                      aria-label="选择入门示例"
                       size="sm"
-                      title={s.desc}
-                      onClick={() => {
-                        setHcl(s.hcl);
+                      value={activeSample?.id || ''}
+                      onChange={(e) => {
+                        const found = STARTER_SAMPLES.find((s) => s.id === e.target.value);
+                        if (!found) return;
+                        setSelectedJobId('');
+                        setRevisions([]);
+                        setHcl(found.hcl);
                         setEditMode('hcl');
                         setJobVariables({});
                         clearPlan();
                       }}
                     >
-                      {s.label}
-                    </Button>
-                  ))}
+                      <option value="">选择示例模板…</option>
+                      {STARTER_SAMPLES.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
                 </div>
               )}
             </div>
 
-            {STARTER_SAMPLES.find((sample) => sample.hcl === hcl) && (
-              <p className="rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-3 leading-5 text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-200">
-                {STARTER_SAMPLES.find((sample) => sample.hcl === hcl)?.desc}
+            {activeSample && (
+              <p className="px-1 text-[11px] text-slate-500 dark:text-slate-400">
+                当前示例：{activeSample.desc}
               </p>
             )}
 
@@ -851,17 +1009,17 @@ export function JobCenterPage() {
                 </details>
               </div>
             ) : (
-              <CodeEditor value={hcl} onChange={(value) => { setHcl(value); clearPlan(); }} readOnly={!isAdmin} height="380px" />
+              <CodeEditor value={hcl} onChange={(value) => { setHcl(value); clearPlan(); }} readOnly={!isAdmin} height="440px" />
             )}
 
             {isAdmin && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/40">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/50">
                 <div className="flex flex-wrap items-center gap-2">
                   <input
-                    placeholder="输入名称保存为模板..."
+                    placeholder="输入名称保存为模板…"
                     value={tplName}
                     onChange={(e) => setTplName(e.target.value)}
-                    className="w-48 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-950"
+                    className="w-44 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
                   />
                   <Button
                     size="sm"
@@ -895,7 +1053,7 @@ export function JobCenterPage() {
                   </Button>
                   <Button
                     size="sm"
-                    variant="primary"
+                    variant={plan?.plan_id ? 'primary' : 'secondary'}
                     disabled={!plan?.plan_id || needsDeployment || modeBusy}
                     title={!plan?.plan_id ? '请先点击「2. 预览计划」生成执行计划' : '确认将任务提交至 Nomad 集群运行'}
                     onClick={() => void runApply()}

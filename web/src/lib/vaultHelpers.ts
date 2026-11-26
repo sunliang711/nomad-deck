@@ -3,7 +3,10 @@ export interface ParsedKVPath {
   path: string;
   rolePath: string;
   templatePath: string;
+  templateExamplePath: string;
   hadDataPrefix: boolean;
+  hasTrailingSlash: boolean;
+  isWildcard: boolean;
 }
 
 /**
@@ -11,11 +14,22 @@ export interface ParsedKVPath {
  * and the Nomad template API path (`<mount>/data/<path>`).
  */
 export function parseKVPath(raw: string, fallbackMount = 'secret'): ParsedKVPath {
-  const cleaned = raw.trim().replace(/^\/+|\/+$/g, '');
+  const trimmedRaw = raw.trim();
+  const cleaned = trimmedRaw.replace(/^\/+|\/+$/g, '');
   if (!cleaned) {
     const m = fallbackMount.trim().replace(/^\/+|\/+$/g, '') || 'secret';
-    return { mount: m, path: '', rolePath: '', templatePath: '', hadDataPrefix: false };
+    return {
+      mount: m,
+      path: '',
+      rolePath: '',
+      templatePath: '',
+      templateExamplePath: '',
+      hadDataPrefix: false,
+      hasTrailingSlash: false,
+      isWildcard: false,
+    };
   }
+  const hasTrailingSlash = trimmedRaw.endsWith('/') && cleaned.includes('/');
   const slash = cleaned.indexOf('/');
   if (slash < 0) {
     return {
@@ -23,7 +37,10 @@ export function parseKVPath(raw: string, fallbackMount = 'secret'): ParsedKVPath
       path: '',
       rolePath: cleaned,
       templatePath: `${cleaned}/data`,
+      templateExamplePath: `${cleaned}/data`,
       hadDataPrefix: false,
+      hasTrailingSlash,
+      isWildcard: false,
     };
   }
   const mount = cleaned.slice(0, slash);
@@ -36,12 +53,20 @@ export function parseKVPath(raw: string, fallbackMount = 'secret'): ParsedKVPath
     rest = rest.slice('data/'.length);
     hadDataPrefix = true;
   }
+  const isWildcard = rest.includes('*');
+  const templatePath = rest ? `${mount}/data/${rest}` : `${mount}/data`;
+  const templateExamplePath = isWildcard
+    ? `${mount}/data/${rest.replace(/\*/g, '<你的密钥名>')}`
+    : templatePath;
   return {
     mount,
     path: rest,
     rolePath: rest ? `${mount}/${rest}` : mount,
-    templatePath: rest ? `${mount}/data/${rest}` : `${mount}/data`,
+    templatePath,
+    templateExamplePath,
     hadDataPrefix,
+    hasTrailingSlash,
+    isWildcard,
   };
 }
 

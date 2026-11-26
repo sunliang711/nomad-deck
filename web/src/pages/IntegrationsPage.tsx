@@ -363,7 +363,7 @@ export function IntegrationsPage() {
     setRoleForm({
       role_name: '',
       policy_mode: 'explicit',
-      secret_paths: `${defaultMount}/apps/`,
+      secret_paths: `${defaultMount}/apps/app`,
       bound_namespace: nomadNamespaces[0] || 'default',
       token_period: '1h',
     });
@@ -544,8 +544,10 @@ export function IntegrationsPage() {
   };
 
   const openExampleForRole = (r: any) => {
+    const rawFirst = (r.secret_paths || [])[0] || 'secret/apps/demo';
+    const concreteExplicit = rawFirst.includes('*') ? rawFirst.replace(/\*/g, 'demo') : rawFirst;
     const defaultPath = r.policy_mode === 'explicit'
-      ? (r.secret_paths || [])[0] || 'secret/apps/demo'
+      ? concreteExplicit
       : `${(r.secret_paths || [])[0] || 'secret'}/${r.bound_claims?.nomad_namespace || 'default'}/vault-app`;
     void fetchExample(r, 'docker_env', defaultPath);
   };
@@ -639,7 +641,9 @@ export function IntegrationsPage() {
     .map((s) => s.trim())
     .filter(Boolean)
     .map((raw) => parseKVPath(raw, vaultMounts[0] || 'secret'));
+  const validRolePreviews = roleParsedPreviews.filter((p) => p.path);
   const hasAccidentalDataPrefix = roleForm.policy_mode === 'explicit' && roleParsedPreviews.some((p) => p.hadDataPrefix);
+  const hasTrailingSlashWarning = roleForm.policy_mode === 'explicit' && validRolePreviews.some((p) => p.hasTrailingSlash && !p.isWildcard);
 
   return (
     <div className="space-y-5">
@@ -1360,11 +1364,15 @@ export function IntegrationsPage() {
           <div className="space-y-1.5">
             <Input
               label={roleForm.policy_mode === 'templated' ? 'KV 存储空间名称' : '允许读取的 Secret 路径'}
-              placeholder={roleForm.policy_mode === 'templated' ? '例如 secret' : '例如 secret/apps/postgres'}
+              placeholder={
+                roleForm.policy_mode === 'templated'
+                  ? '例如 secret'
+                  : '例如 secret/apps/postgres（多路径用逗号分隔，目录通配写 secret/apps/*）'
+              }
               hint={
                 roleForm.policy_mode === 'templated'
                   ? '填写 Vault KV v2 挂载名（如 secret），多个用逗号分隔。'
-                  : '格式「挂载名/密钥路径」，多个用逗号分隔；这里不要写 data/。'
+                  : '格式「挂载名/密钥路径」，多个用逗号分隔（不要写 data/）。注意：路径按精确匹配生效，不会自动包含子路径（如填 secret/apps 只能读 apps 本身，读不到 secret/apps/app）；需读子路径请写全路径，或末尾加 /* 放行整目录（如 secret/apps/*）。'
               }
               required={roleForm.policy_mode === 'explicit' && !editingRole?.custom_policy_hcl}
               value={roleForm.secret_paths}
@@ -1379,7 +1387,8 @@ export function IntegrationsPage() {
                     type="button"
                     className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono hover:border-indigo-400 dark:border-slate-700 dark:bg-slate-800"
                     onClick={() => {
-                      const next = roleForm.policy_mode === 'templated' ? m : `${m}/apps/`;
+                      const appHint = roleForm.role_name.trim() || 'app';
+                      const next = roleForm.policy_mode === 'templated' ? m : `${m}/apps/${appHint}`;
                       setRoleForm({ ...roleForm, secret_paths: next });
                     }}
                   >
@@ -1402,6 +1411,28 @@ export function IntegrationsPage() {
                   }
                 >
                   立即修正
+                </button>
+              </div>
+            )}
+            {hasTrailingSlashWarning && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
+                <span>
+                  末尾的 <code className="font-mono">/</code> 保存时会被去掉，仅授权该精确路径本身，<strong>不会</strong>包含子路径。如需放行整个目录请改为 <code className="font-mono">/*</code>，或补全具体密钥名（如 <code className="font-mono">secret/apps/app</code>）。
+                </span>
+                <button
+                  type="button"
+                  className="shrink-0 font-semibold underline"
+                  onClick={() =>
+                    setRoleForm({
+                      ...roleForm,
+                      secret_paths: roleParsedPreviews
+                        .map((p) => (p.hasTrailingSlash && p.path && !p.isWildcard ? `${p.rolePath}/*` : p.rolePath))
+                        .filter(Boolean)
+                        .join(', '),
+                    })
+                  }
+                >
+                  改为 /* 通配
                 </button>
               </div>
             )}
@@ -1440,11 +1471,39 @@ export function IntegrationsPage() {
             )}
           </div>
 
-          {roleForm.policy_mode === 'explicit' && roleParsedPreviews.length > 0 && roleParsedPreviews[0].path && (
-            <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-2.5 text-[11px] space-y-1 dark:border-indigo-500/30 dark:bg-indigo-950/20">
+          {roleForm.policy_mode === 'explicit' && validRolePreviews.length > 0 && (
+            <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-2.5 text-[11px] leading-relaxed space-y-2 dark:border-indigo-500/30 dark:bg-indigo-950/20">
               <div className="font-semibold text-indigo-950 dark:text-indigo-100">效果预览</div>
-              <div>• Vault 授权路径：<code className="font-mono">{roleParsedPreviews[0].rolePath}</code></div>
-              <div>• Job <code className="font-mono">template</code> 写法：<code className="font-mono">{`{{ with secret "${roleParsedPreviews[0].templatePath}" }}`}</code></div>
+              {validRolePreviews.map((p, idx) => (
+                <div key={`${p.rolePath}-${idx}`} className={idx > 0 ? 'border-t border-indigo-200/60 pt-1.5 space-y-0.5 dark:border-indigo-500/20' : 'space-y-0.5'}>
+                  {p.isWildcard ? (
+                    <>
+                      <div>
+                        • Vault 通配授权：<code className="font-mono">{p.rolePath}</code>
+                        <span className="text-slate-600 dark:text-slate-300">（允许读取该前缀下所有子路径，请确认符合最小权限原则）</span>
+                      </div>
+                      <div>
+                        • Job <code className="font-mono">template</code> 写法：需填具体密钥路径，如{' '}
+                        <code className="font-mono">{`{{ with secret "${p.templateExamplePath}" }}`}</code>
+                        <span className="text-slate-600 dark:text-slate-300">（模板中不可写 *）</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        • Vault 精确授权：<code className="font-mono">{p.rolePath}</code>
+                        <span className="text-slate-600 dark:text-slate-300">
+                          （仅此一条，<strong>不含</strong>其下的子路径如 <code className="font-mono">{`${p.rolePath}/xxx`}</code>）
+                        </span>
+                      </div>
+                      <div>
+                        • Job <code className="font-mono">template</code> 写法：
+                        <code className="font-mono">{`{{ with secret "${p.templatePath}" }}`}</code>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
             </div>
           )}
 

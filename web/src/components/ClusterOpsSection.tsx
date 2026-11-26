@@ -4,7 +4,7 @@ import { apiGet, fmtTime } from '../lib/api';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { isTaskActiveStatus } from '../lib/actionLabels';
 import { useConfirm } from './ConfirmDialog';
-import { Badge, Button, Card, ExternalUrlLink, Input, StatusBadge, TermLabel } from './UI';
+import { Badge, Button, Card, ExternalUrlLink, Input, Select, StatusBadge, TermLabel } from './UI';
 
 interface ClusterOpsSectionProps {
   product: 'nomad' | 'vault';
@@ -154,11 +154,10 @@ export function ClusterOpsSection({
       </div>
       <Input aria-label={label} placeholder="latest 或具体版本号" value={value} onChange={(e) => onChange(e.target.value)} />
       {availableVersions.length > 0 && (
-        <select
+        <Select
           aria-label="选择官方版本"
           value=""
           onChange={(e) => e.target.value && onChange(e.target.value)}
-          className="w-full rounded-lg border border-slate-200 pl-3 pr-8 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
         >
           <option value="">从官方版本列表选择…</option>
           <option value="latest">latest（最新稳定版）</option>
@@ -167,7 +166,7 @@ export function ClusterOpsSection({
               {v}
             </option>
           ))}
-        </select>
+        </Select>
       )}
       <p className="text-xs leading-5 text-slate-500">填写 latest 自动安装最新稳定版，也可指定具体版本号。</p>
     </div>

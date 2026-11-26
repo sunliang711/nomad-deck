@@ -5,6 +5,12 @@ import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, f
 import { copyText } from '../lib/clipboard';
 import { buildTemplateData, parseKVPath } from '../lib/vaultHelpers';
 import { useAuth } from '../lib/auth';
+import {
+  readStoredSelection,
+  resolveClusterSelection,
+  VAULT_CLUSTER_KEY,
+  writeStoredSelection,
+} from '../lib/selectionMemory';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -45,7 +51,7 @@ export function VaultPage() {
   const validTabs = ['status', 'custody', 'snapshots', 'manage'];
   const [clusters, setClusters] = useState<any[]>([]);
   const [nodes, setNodes] = useState<any[]>([]);
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedId, setSelectedId] = useState(() => queryId || readStoredSelection(VAULT_CLUSTER_KEY));
   const [loadingList, setLoadingList] = useState(true);
   const selectionRef = useRef(selectedId);
   selectionRef.current = selectedId;
@@ -62,6 +68,12 @@ export function VaultPage() {
       setSelectedId(queryId);
     }
   }, [queryId, clusters]);
+
+  useEffect(() => {
+    if (selectedId && clusters.some((c: any) => c.id === selectedId)) {
+      writeStoredSelection(VAULT_CLUSTER_KEY, selectedId);
+    }
+  }, [selectedId, clusters]);
   const [status, setStatus] = useState<any>(null);
   const [custodyData, setCustodyData] = useState<any>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
@@ -114,11 +126,9 @@ export function VaultPage() {
       const list = cRes.clusters || [];
       setClusters(list);
       setNodes(nRes.nodes || []);
-      setSelectedId((prev) => {
-        if (prev && list.some((c: any) => c.id === prev)) return prev;
-        if (queryId && list.some((c: any) => c.id === queryId)) return queryId;
-        return list[0]?.id || '';
-      });
+      setSelectedId((prev) =>
+        resolveClusterSelection(list, queryId, prev, readStoredSelection(VAULT_CLUSTER_KEY)),
+      );
     } catch (ex: any) {
       setErr(ex?.message || '加载 Vault 集群列表失败');
     } finally {

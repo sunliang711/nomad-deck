@@ -13,6 +13,12 @@ import {
   type VaultRoleOption,
 } from '../lib/vaultHelpers';
 import { useAuth } from '../lib/auth';
+import {
+  JOB_CENTER_CLUSTER_KEY,
+  readStoredSelection,
+  resolveClusterSelection,
+  writeStoredSelection,
+} from '../lib/selectionMemory';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import {
@@ -194,7 +200,7 @@ export function JobCenterPage() {
   const toast = useToast();
   const askConfirm = useConfirm();
   const [clusters, setClusters] = useState<any[]>([]);
-  const [clusterId, setClusterId] = useState(queryClusterId);
+  const [clusterId, setClusterId] = useState(() => queryClusterId || readStoredSelection(JOB_CENTER_CLUSTER_KEY));
   const [namespace, setNamespace] = useState(queryNamespace || 'default');
   const [jobs, setJobs] = useState<any[]>([]);
   const [templates, setTemplates] = useState<any[]>([]);
@@ -271,11 +277,9 @@ export function JobCenterPage() {
       setClusters(list);
       setTemplates(tRes.templates || []);
       if (list.length > 0) {
-        setClusterId((prev) => {
-          if (prev && list.some((c: any) => c.id === prev)) return prev;
-          if (queryClusterId && list.some((c: any) => c.id === queryClusterId)) return queryClusterId;
-          return list[0].id;
-        });
+        setClusterId((prev) =>
+          resolveClusterSelection(list, queryClusterId, prev, readStoredSelection(JOB_CENTER_CLUSTER_KEY)),
+        );
       }
     } catch (ex: any) {
       setErr(ex?.message || '加载集群或模板列表失败');
@@ -326,6 +330,12 @@ export function JobCenterPage() {
       setClusterId(queryClusterId);
     }
   }, [queryClusterId, clusters]);
+
+  useEffect(() => {
+    if (clusterId && clusters.some((c: any) => c.id === clusterId)) {
+      writeStoredSelection(JOB_CENTER_CLUSTER_KEY, clusterId);
+    }
+  }, [clusterId, clusters]);
 
   useEffect(() => {
     if (queryNamespace) {
@@ -584,14 +594,14 @@ export function JobCenterPage() {
         subtitle="编写任务 → 校验配置 → 预览计划 → 确认运行，支持 HCL、可视化与 JSON"
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
               <span className="shrink-0">集群</span>
               <div className="w-40">
-                <Select aria-label="目标 Nomad 集群" value={clusterId} disabled={modeBusy || (editMode === 'visual' && !visualReady)} onChange={(e) => { setClusterId(e.target.value); clearPlan(); }}>
+                <Select aria-label="目标 Nomad 集群" size="sm" value={clusterId} disabled={modeBusy || (editMode === 'visual' && !visualReady)} onChange={(e) => { setClusterId(e.target.value); clearPlan(); }}>
                   {clusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </Select>
               </div>
-            </label>
+            </div>
             <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
               <span className="shrink-0">命名空间</span>
               <div className="w-28">

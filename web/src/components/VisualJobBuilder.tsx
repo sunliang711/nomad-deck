@@ -86,9 +86,9 @@ function ValueEditor({ node, field, choices, disabled, onChange }: {
           <div className="text-[11px] text-slate-500">原生 HCL 表达式，例如 var.cpu、["http"] 或模板 heredoc。</div>
         </div>
       ) : field.kind === 'bool' ? (
-        <select id={`value-${node.name}`} aria-label={node.name} disabled={disabled} value={expression} onChange={(e) => onChange(e.target.value)} className="w-full rounded border border-slate-300 bg-white p-2 dark:border-slate-700 dark:bg-slate-950">
+        <Select id={`value-${node.name}`} aria-label={node.name} size="sm" disabled={disabled} value={expression} onChange={(e) => onChange(e.target.value)}>
           <option value="true">true</option><option value="false">false</option>
-        </select>
+        </Select>
       ) : field.kind === 'list' ? (
         <div className="space-y-1.5">
           {(literal as string[]).map((value, i) => (

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowLeft, ArrowUpRight, ChevronRight, RefreshCw, Search, Terminal } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, fmtBytes, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Badge, Button, Card, EmptyState, ErrorAlert, Input, LoadingState, Modal, SectionTabs, Sparkline, StatusBadge, TermLabel } from './UI';
+import { Badge, Button, Card, EmptyState, ErrorAlert, Input, LoadingState, Modal, SectionTabs, Select, Sparkline, StatusBadge, TermLabel } from './UI';
 import { useToast } from './Toast';
 import { useConfirm } from './ConfirmDialog';
 import { Drawer } from './Drawer';
@@ -343,20 +343,23 @@ export function NomadWorkbench({
           }}
         />
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={namespace}
-            onChange={(e) => {
-              setNamespace(e.target.value);
-              backToJobs();
-            }}
-            className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs dark:border-slate-700 dark:bg-slate-950"
-          >
-            <option value="*">全部 Namespace (*)</option>
-            {(namespaces.length ? namespaces : [{ name: 'default' }]).map((ns: any) => {
-              const nsName = ns.name || ns.Name;
-              return <option key={nsName} value={nsName}>{nsName}</option>;
-            })}
-          </select>
+          <div className="w-40">
+            <Select
+              aria-label="工作台 Namespace"
+              size="sm"
+              value={namespace}
+              onChange={(e) => {
+                setNamespace(e.target.value);
+                backToJobs();
+              }}
+            >
+              <option value="*">全部 Namespace (*)</option>
+              {(namespaces.length ? namespaces : [{ name: 'default' }]).map((ns: any) => {
+                const nsName = ns.name || ns.Name;
+                return <option key={nsName} value={nsName}>{nsName}</option>;
+              })}
+            </Select>
+          </div>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -465,13 +468,16 @@ export function NomadWorkbench({
                       <div className="flex flex-wrap items-center gap-2 rounded bg-slate-50 p-2.5 dark:bg-slate-950">
                         <span>Task Group：</span>
                         {selectedJob.groups?.length > 1 ? (
-                          <select
-                            value={scaleGroup}
-                            onChange={(e) => setScaleGroup(e.target.value)}
-                            className="rounded border border-slate-300 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-900"
-                          >
-                            {selectedJob.groups.map((g: string) => <option key={g} value={g}>{g}</option>)}
-                          </select>
+                          <div className="w-40">
+                            <Select
+                              aria-label="扩缩容 Task Group"
+                              size="sm"
+                              value={scaleGroup}
+                              onChange={(e) => setScaleGroup(e.target.value)}
+                            >
+                              {selectedJob.groups.map((g: string) => <option key={g} value={g}>{g}</option>)}
+                            </Select>
+                          </div>
                         ) : (
                           <b>{scaleGroup || '-'}</b>
                         )}
@@ -1043,17 +1049,19 @@ export function NomadWorkbench({
                 onChange={(t) => setAllocTab(t as 'logs' | 'events' | 'files')}
               />
               {Object.keys(selectedAlloc.TaskStates || {}).length > 0 && (
-                <label className="flex items-center gap-1.5 text-slate-500">
-                  <span>Task：</span>
-                  <select
-                    aria-label="选择 Task"
-                    value={logTask}
-                    onChange={(e) => setLogTask(e.target.value)}
-                    className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                  >
-                    {Object.keys(selectedAlloc.TaskStates || {}).map((t) => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </label>
+                <div className="flex items-center gap-1.5 text-slate-500">
+                  <span className="shrink-0">Task：</span>
+                  <div className="w-36">
+                    <Select
+                      aria-label="选择 Task"
+                      size="sm"
+                      value={logTask}
+                      onChange={(e) => setLogTask(e.target.value)}
+                    >
+                      {Object.keys(selectedAlloc.TaskStates || {}).map((t) => <option key={t} value={t}>{t}</option>)}
+                    </Select>
+                  </div>
+                </div>
               )}
             </div>
 
@@ -1061,10 +1069,12 @@ export function NomadWorkbench({
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-semibold text-slate-800 dark:text-slate-100">实时日志输出（{logTask || '-'}）</span>
-                  <select aria-label="日志输出流" value={logType} onChange={(e) => setLogType(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-950">
-                    <option value="stdout">标准输出 · stdout</option>
-                    <option value="stderr">错误与服务日志 · stderr</option>
-                  </select>
+                  <div className="w-48">
+                    <Select aria-label="日志输出流" size="sm" value={logType} onChange={(e) => setLogType(e.target.value)}>
+                      <option value="stdout">标准输出 · stdout</option>
+                      <option value="stderr">错误与服务日志 · stderr</option>
+                    </Select>
+                  </div>
                 </div>
                 <pre className="h-[420px] overflow-auto rounded-xl bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100 whitespace-pre-wrap">
                   {allocLogs || '等待日志… 若没有输出，请尝试切换 stdout / stderr。'}

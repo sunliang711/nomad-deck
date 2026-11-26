@@ -3,6 +3,12 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Boxes, ExternalLink, FileCode2, Plus, RefreshCw } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import {
+  NOMAD_CLUSTER_KEY,
+  readStoredSelection,
+  resolveClusterSelection,
+  writeStoredSelection,
+} from '../lib/selectionMemory';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -45,7 +51,7 @@ export function NomadPage() {
   const querySub = searchParams.get('sub') || '';
   const [clusters, setClusters] = useState<any[]>([]);
   const [nodes, setNodes] = useState<any[]>([]);
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedId, setSelectedId] = useState(() => queryId || readStoredSelection(NOMAD_CLUSTER_KEY));
   const [loadingList, setLoadingList] = useState(true);
   const selectionRef = useRef(selectedId);
   selectionRef.current = selectedId;
@@ -56,6 +62,12 @@ export function NomadPage() {
       setSelectedId(queryId);
     }
   }, [queryId, clusters]);
+
+  useEffect(() => {
+    if (selectedId && clusters.some((c: any) => c.id === selectedId)) {
+      writeStoredSelection(NOMAD_CLUSTER_KEY, selectedId);
+    }
+  }, [selectedId, clusters]);
 
   useEffect(() => {
     if (queryTab === 'workbench' || queryTab === 'status' || queryTab === 'snapshots' || queryTab === 'governance') {
@@ -107,11 +119,9 @@ export function NomadPage() {
       const list = cRes.clusters || [];
       setClusters(list);
       setNodes(nRes.nodes || []);
-      setSelectedId((prev) => {
-        if (prev && list.some((c: any) => c.id === prev)) return prev;
-        if (queryId && list.some((c: any) => c.id === queryId)) return queryId;
-        return list[0]?.id || '';
-      });
+      setSelectedId((prev) =>
+        resolveClusterSelection(list, queryId, prev, readStoredSelection(NOMAD_CLUSTER_KEY)),
+      );
     } catch (ex: any) {
       setErr(ex?.message || '加载 Nomad 集群列表失败');
     } finally {

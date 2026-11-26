@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, AlertCircle, Eye, EyeOff, Info, ExternalLink, Copy, Check, Inbox, Loader2 } from 'lucide-react';
+import { X, AlertCircle, Eye, EyeOff, Info, ExternalLink, Copy, Check, Inbox, Loader2, ChevronDown, Search } from 'lucide-react';
 import { copyText } from '../lib/clipboard';
 import { useToast } from './Toast';
 import { isTopDialog, registerDialog } from './dialogLayers';
@@ -462,22 +462,417 @@ export function MaskedSecret({ value, label }: { value: string; label?: React.Re
   );
 }
 
+interface ParsedSelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+  group?: string;
+}
+
+function extractSelectText(node: React.ReactNode): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractSelectText).join('');
+  if (React.isValidElement(node)) return extractSelectText((node.props as any).children);
+  return '';
+}
+
+function parseSelectChildren(nodes: React.ReactNode, group?: string): ParsedSelectOption[] {
+  const out: ParsedSelectOption[] = [];
+  React.Children.forEach(nodes, (child) => {
+    if (!React.isValidElement(child)) return;
+    if (child.type === React.Fragment) {
+      out.push(...parseSelectChildren((child.props as any).children, group));
+      return;
+    }
+    const props = child.props as any;
+    if (child.type === 'optgroup') {
+      out.push(...parseSelectChildren(props.children, props.label ? String(props.label) : undefined));
+      return;
+    }
+    if (child.type === 'option') {
+      const label = extractSelectText(props.children);
+      const val = props.value !== undefined ? String(props.value) : label;
+      out.push({
+        value: val,
+        label: label || val,
+        disabled: Boolean(props.disabled),
+        group,
+      });
+    }
+  });
+  return out;
+}
+
 export function Select({
   label,
   children,
   className = '',
-  ...rest
-}: React.SelectHTMLAttributes<HTMLSelectElement> & { label?: React.ReactNode }) {
+  size = 'md',
+  searchable,
+  value,
+  defaultValue,
+  disabled = false,
+  required,
+  name,
+  id: propId,
+  onChange,
+  'aria-label': ariaLabel,
+  title: propTitle,
+}: Omit<React.SelectHTMLAttributes<HTMLSelectElement>, 'size' | 'children'> & {
+  label?: React.ReactNode;
+  size?: 'sm' | 'md';
+  searchable?: boolean;
+  children?: React.ReactNode;
+}) {
+  const autoId = useId();
+  const triggerId = propId || `${autoId}-trigger`;
+  const listboxId = `${autoId}-listbox`;
+
+  const options = useMemo(() => parseSelectChildren(children), [children]);
+  const isControlled = value !== undefined;
+  const [internalVal, setInternalVal] = useState<string>(() => {
+    if (defaultValue !== undefined) return String(defaultValue);
+    return options.find((o) => !o.disabled)?.value ?? '';
+  });
+
+  const currentVal = isControlled ? String(value) : internalVal;
+  const selectedIdx = options.findIndex((o) => o.value === currentVal);
+  const selectedOpt = selectedIdx >= 0 ? options[selectedIdx] : null;
+
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({ visibility: 'hidden' });
+
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const typeaheadRef = useRef({ text: '', at: 0 });
+
+  const showSearch = searchable ?? options.length >= 10;
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!showSearch || !q) return options;
+    return options.filter(
+      (o) =>
+        o.label.toLowerCase().includes(q) ||
+        o.value.toLowerCase().includes(q) ||
+        (o.group && o.group.toLowerCase().includes(q)),
+    );
+  }, [options, query, showSearch]);
+
+  const closeMenu = (restoreFocus = false) => {
+    setOpen(false);
+    setQuery('');
+    if (restoreFocus) triggerRef.current?.focus();
+  };
+
+  const openMenu = () => {
+    if (disabled) return;
+    setQuery('');
+    const initial =
+      selectedIdx >= 0 && !options[selectedIdx]?.disabled
+        ? selectedIdx
+        : Math.max(0, options.findIndex((o) => !o.disabled));
+    setActiveIdx(initial);
+    setOpen(true);
+  };
+
+  const commitValue = (opt: ParsedSelectOption) => {
+    if (opt.disabled) return;
+    if (!isControlled) setInternalVal(opt.value);
+    if (onChange && opt.value !== currentVal) {
+      const target = { value: opt.value, name: name || '' };
+      onChange({ target, currentTarget: target } as unknown as React.ChangeEvent<HTMLSelectElement>);
+    }
+    closeMenu(true);
+  };
+
+  useLayoutEffect(() => {
+    if (!open) return;
+
+    const place = () => {
+      const trg = triggerRef.current;
+      if (!trg) return;
+      const rect = trg.getBoundingClientRect();
+      const maxH = 300;
+      const below = Math.max(0, window.innerHeight - rect.bottom - 12);
+      const above = Math.max(0, rect.top - 12);
+      const estimatedH = panelRef.current ? Math.min(panelRef.current.scrollHeight, maxH) : Math.min(options.length * 36 + 56, maxH);
+      const openUpwards = below < Math.min(estimatedH, 200) && above > below;
+      const menuWidth = Math.min(Math.max(rect.width, 168), window.innerWidth - 24);
+      const left = Math.max(12, Math.min(rect.left, window.innerWidth - menuWidth - 12));
+      setMenuStyle({
+        position: 'fixed',
+        left,
+        top: openUpwards ? undefined : rect.bottom + 6,
+        bottom: openUpwards ? window.innerHeight - rect.top + 6 : undefined,
+        width: menuWidth,
+        maxHeight: Math.max(120, Math.min(maxH, openUpwards ? above : below)),
+        visibility: 'visible',
+      });
+    };
+
+    const onPointerDown = (e: Event) => {
+      const t = e.target as Node;
+      if (!triggerRef.current?.contains(t) && !panelRef.current?.contains(t)) {
+        closeMenu(false);
+      }
+    };
+
+    const onWindowKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeMenu(true);
+      }
+    };
+
+    place();
+    const raf = window.requestAnimationFrame(place);
+    if (showSearch) {
+      window.setTimeout(() => searchRef.current?.focus(), 0);
+    }
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onWindowKeyDown, true);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onWindowKeyDown, true);
+    };
+  }, [open, options.length, showSearch]);
+
+  useEffect(() => {
+    if (!open || filtered.length === 0) return;
+    if (activeIdx >= filtered.length) {
+      const next = filtered.findIndex((o) => !o.disabled);
+      setActiveIdx(next >= 0 ? next : 0);
+    }
+    const el = panelRef.current?.querySelector<HTMLElement>(`[data-opt-idx="${activeIdx}"]`);
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [activeIdx, filtered, open]);
+
+  const moveActive = (delta: number) => {
+    if (filtered.length === 0) return;
+    for (let step = 1; step <= filtered.length; step++) {
+      const idx = (activeIdx + delta * step + filtered.length * step) % filtered.length;
+      if (!filtered[idx]?.disabled) {
+        setActiveIdx(idx);
+        return;
+      }
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (disabled) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!open) openMenu();
+      else moveActive(1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!open) openMenu();
+      else moveActive(-1);
+    } else if (e.key === 'Home' && open) {
+      e.preventDefault();
+      const first = filtered.findIndex((o) => !o.disabled);
+      if (first >= 0) setActiveIdx(first);
+    } else if (e.key === 'End' && open) {
+      e.preventDefault();
+      for (let i = filtered.length - 1; i >= 0; i--) {
+        if (!filtered[i].disabled) {
+          setActiveIdx(i);
+          break;
+        }
+      }
+    } else if (e.key === 'Enter' || (e.key === ' ' && !showSearch)) {
+      e.preventDefault();
+      if (open) {
+        const opt = filtered[activeIdx];
+        if (opt && !opt.disabled) commitValue(opt);
+      } else {
+        openMenu();
+      }
+    } else if (e.key === 'Tab') {
+      if (open) closeMenu(false);
+    } else if (!showSearch && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const now = Date.now();
+      typeaheadRef.current.text =
+        (now - typeaheadRef.current.at < 700 ? typeaheadRef.current.text : '') + e.key.toLowerCase();
+      typeaheadRef.current.at = now;
+      const idx = filtered.findIndex(
+        (o) => !o.disabled && o.label.toLowerCase().startsWith(typeaheadRef.current.text),
+      );
+      if (idx >= 0) {
+        e.preventDefault();
+        if (!open) setOpen(true);
+        setActiveIdx(idx);
+      }
+    }
+  };
+
+  const triggerSizing =
+    size === 'sm' ? 'px-2.5 py-1.5 text-xs rounded-lg gap-1.5' : 'px-3 py-2 text-sm rounded-lg gap-2';
+
+  const isPlaceholder = selectedOpt ? selectedOpt.value === '' : !currentVal;
+  const displayLabel = selectedOpt ? selectedOpt.label : currentVal || '请选择';
+
   return (
-    <label className="block space-y-1.5">
-      {label && <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">{label}</span>}
-      <select
-        {...rest}
-        className={`w-full rounded-lg border border-[#dce3ee] bg-white pl-3 pr-8 py-2 text-sm text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 ${className}`}
+    <div className="relative block space-y-1.5">
+      {label && (
+        <label
+          htmlFor={triggerId}
+          onClick={(e) => {
+            e.preventDefault();
+            triggerRef.current?.focus();
+          }}
+          className="block text-xs font-medium text-slate-700 dark:text-slate-300 cursor-default"
+        >
+          {label}
+        </label>
+      )}
+      {required && (
+        <input
+          type="text"
+          tabIndex={-1}
+          aria-hidden="true"
+          required
+          disabled={disabled}
+          value={currentVal}
+          onChange={() => {}}
+          className="sr-only pointer-events-none absolute inset-0 h-0 w-0 opacity-0"
+        />
+      )}
+      <button
+        ref={triggerRef}
+        id={triggerId}
+        type="button"
+        role="combobox"
+        aria-label={typeof ariaLabel === 'string' ? ariaLabel : typeof label === 'string' ? label : undefined}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
+        disabled={disabled}
+        title={propTitle || displayLabel}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (open) closeMenu(false);
+          else openMenu();
+        }}
+        onKeyDown={handleKeyDown}
+        className={`flex w-full items-center justify-between border text-left transition focus:outline-none ${triggerSizing} ${
+          disabled
+            ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500'
+            : open
+            ? 'border-indigo-400 bg-white text-slate-900 shadow-[0_0_0_3px_rgba(99,102,241,0.12)] dark:border-indigo-500 dark:bg-slate-950 dark:text-slate-100 dark:shadow-[0_0_0_3px_rgba(99,102,241,0.2)]'
+            : 'border-[#dce3ee] bg-white text-slate-900 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:hover:border-slate-600'
+        } ${className}`}
       >
-        {children}
-      </select>
-    </label>
+        <span className={`min-w-0 flex-1 truncate ${isPlaceholder ? 'text-slate-400 dark:text-slate-500' : ''}`}>
+          {displayLabel}
+        </span>
+        <ChevronDown
+          className={`shrink-0 text-slate-400 transition-transform duration-150 ${
+            size === 'sm' ? 'h-3.5 w-3.5' : 'h-4 w-4'
+          } ${open ? 'rotate-180 text-indigo-500 dark:text-indigo-400' : ''}`}
+          aria-hidden="true"
+        />
+      </button>
+
+      {open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={panelRef}
+            id={listboxId}
+            role="listbox"
+            aria-label={typeof ariaLabel === 'string' ? ariaLabel : typeof label === 'string' ? label : '选项列表'}
+            style={menuStyle}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onKeyDown={handleKeyDown}
+            className="nd-select-panel z-[90] flex flex-col overflow-hidden rounded-xl border border-slate-200/95 bg-white/98 p-1.5 shadow-[0_14px_38px_rgba(15,23,42,0.14),0_2px_8px_rgba(15,23,42,0.06)] backdrop-blur-md dark:border-slate-700/95 dark:bg-slate-900/98 dark:shadow-[0_18px_44px_rgba(2,6,23,0.72)]"
+          >
+            {showSearch && (
+              <div className="relative mb-1.5 shrink-0">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                <input
+                  ref={searchRef}
+                  type="text"
+                  value={query}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setActiveIdx(0);
+                  }}
+                  placeholder="搜索选项…"
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                />
+              </div>
+            )}
+
+            <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain">
+              {filtered.length === 0 ? (
+                <div className="px-3 py-4 text-center text-xs text-slate-400 dark:text-slate-500">
+                  没有匹配的选项
+                </div>
+              ) : (
+                filtered.map((opt, idx) => {
+                  const prevGroup = idx > 0 ? filtered[idx - 1].group : undefined;
+                  const showGroupHeader = Boolean(opt.group && opt.group !== prevGroup);
+                  const isSelected = opt.value === currentVal;
+                  const isActive = idx === activeIdx;
+
+                  return (
+                    <React.Fragment key={`${opt.group || ''}:${opt.value}:${idx}`}>
+                      {showGroupHeader && (
+                        <div className="px-2.5 pt-2 pb-1 text-[11px] font-semibold text-slate-400 dark:text-slate-500">
+                          {opt.group}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        role="option"
+                        data-opt-idx={idx}
+                        aria-selected={isSelected}
+                        aria-disabled={opt.disabled || undefined}
+                        disabled={opt.disabled}
+                        onMouseEnter={() => !opt.disabled && setActiveIdx(idx)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          commitValue(opt);
+                        }}
+                        className={`flex w-full items-center justify-between gap-2.5 rounded-lg px-2.5 py-2 text-left transition ${
+                          size === 'sm' ? 'text-xs' : 'text-[13px]'
+                        } ${
+                          opt.disabled
+                            ? 'cursor-not-allowed text-slate-400 opacity-50 dark:text-slate-500'
+                            : isSelected
+                            ? 'bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200'
+                            : isActive
+                            ? 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-slate-100'
+                            : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <span className="min-w-0 flex-1 break-words leading-snug">{opt.label}</span>
+                        {isSelected && (
+                          <Check className="h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-300" aria-hidden="true" />
+                        )}
+                      </button>
+                    </React.Fragment>
+                  );
+                })
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
+    </div>
   );
 }
 

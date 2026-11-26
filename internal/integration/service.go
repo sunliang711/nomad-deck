@@ -266,7 +266,7 @@ func (s *Service) Create(ctx context.Context, actor audit.Actor, in Input) (*Vie
 		return nil, badRequest("目标集群需为 Vault 集群")
 	}
 	if in.AuthPath == "" {
-		in.AuthPath = "jwt-nomad-" + strings.ToLower(regexp.MustCompile(`[^A-Za-z0-9_-]`).ReplaceAllString(src.Name, "-"))
+		in.AuthPath = defaultAuthPath(src.Name)
 	}
 	if !reAuthPath.MatchString(in.AuthPath) {
 		return nil, badRequest("auth_path 只能包含字母、数字、下划线与连字符")
@@ -275,12 +275,18 @@ func (s *Service) Create(ctx context.Context, actor audit.Actor, in Input) (*Vie
 	if err := in.apply(&cfg); err != nil {
 		return nil, err
 	}
+	if err := s.checkCreateConflict(ctx, in.Name, src, dst, in.AuthPath); err != nil {
+		return nil, err
+	}
 	b, _ := json.Marshal(cfg)
 	now := s.DB.Now()
 	i := &db.Integration{ID: db.NewID(), Name: in.Name, Type: TypeNomadVault, SourceClusterID: src.ID, TargetClusterID: dst.ID,
 		AuthPath: in.AuthPath, ConfigJSON: string(b), CreatedAt: now, UpdatedAt: now}
 	if err := db.InsertIntegration(ctx, s.DB.Writer, i); err != nil {
 		if errors.Is(err, db.ErrUnique) {
+			if cerr := s.checkCreateConflict(ctx, in.Name, src, dst, in.AuthPath); cerr != nil {
+				return nil, cerr
+			}
 			return nil, conflict("integration_conflict", "名称已存在、该 Vault 集群上的 Auth 路径已被占用，或该 Nomad 集群已绑定另一个 Vault 集群")
 		}
 		return nil, err
@@ -288,6 +294,46 @@ func (s *Service) Create(ctx context.Context, actor audit.Actor, in Input) (*Vie
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "integration.create", ResourceType: "integration", ResourceID: i.ID,
 		ResourceName: i.Name, Summary: map[string]any{"source": src.Name, "target": dst.Name, "auth_path": i.AuthPath}})
 	return s.Get(ctx, i.ID)
+}
+
+func authSlug(name string) string {
+	s := strings.ToLower(regexp.MustCompile(`[^A-Za-z0-9_-]+`).ReplaceAllString(name, "-"))
+	s = strings.Trim(s, "-_")
+	if s == "" {
+		s = "cluster"
+	}
+	return s
+}
+
+func defaultAuthPath(srcName string) string {
+	p := "jwt-nomad-" + authSlug(srcName)
+	if len(p) > 63 {
+		p = strings.TrimRight(p[:63], "-_")
+	}
+	return p
+}
+
+func (s *Service) checkCreateConflict(ctx context.Context, name string, src, dst *db.Cluster, authPath string) error {
+	existing, err := db.ListIntegrations(ctx, s.DB.Reader, "")
+	if err != nil {
+		return nil
+	}
+	for _, e := range existing {
+		if e.SourceClusterID == src.ID && e.Type == TypeNomadVault {
+			targetName := e.TargetClusterID
+			if tc, err := db.GetCluster(ctx, s.DB.Reader, e.TargetClusterID); err == nil {
+				targetName = tc.Name
+			}
+			return conflict("integration_source_bound", "Nomad 集群「%s」已绑定联动「%s」（目标 Vault：%s），每个 Nomad 集群只能绑定一个 Vault 集群", src.Name, e.Name, targetName)
+		}
+		if e.Name == name {
+			return conflict("integration_name_taken", "联动名称「%s」已存在，请换一个名称", name)
+		}
+		if e.TargetClusterID == dst.ID && e.AuthPath == authPath {
+			return conflict("integration_auth_path_taken", "Vault 集群「%s」上的 Auth 路径「%s」已被联动「%s」占用，请在高级参数中改用其他路径（例如 %s）", dst.Name, authPath, e.Name, defaultAuthPath(src.Name))
+		}
+	}
+	return nil
 }
 
 // Update edits a draft or applied integration (a new Apply rolls it out).

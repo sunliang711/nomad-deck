@@ -106,6 +106,8 @@ export function IntegrationsPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', source_cluster_id: '', target_cluster_id: '', auth_path: 'jwt-nomad' });
+  const [createTouched, setCreateTouched] = useState({ name: false, auth_path: false });
+  const [createErr, setCreateErr] = useState('');
   const [showEditIntegration, setShowEditIntegration] = useState(false);
   const [savingIntegration, setSavingIntegration] = useState(false);
   const [editIntegrationForm, setEditIntegrationForm] = useState({
@@ -243,9 +245,53 @@ export function IntegrationsPage() {
     }
   };
 
+  const slugify = (raw: string) =>
+    raw
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^[-_]+|[-_]+$/g, '') || 'cluster';
+
+  const suggestCreateDefaults = (nomadId: string, vaultId: string) => {
+    const nomad = clusters.find((c) => c.id === nomadId);
+    const nomadSlug = slugify(nomad?.name || 'nomad');
+    const usedNames = new Set(items.map((it) => it.name));
+    const usedAuths = new Set(items.filter((it) => it.target_cluster_id === vaultId).map((it) => it.auth_path));
+
+    let name = usedNames.has('nomad-vault') ? `${nomadSlug}-vault` : 'nomad-vault';
+    if (usedNames.has(name)) {
+      let n = 2;
+      while (usedNames.has(`${nomadSlug}-vault-${n}`)) n++;
+      name = `${nomadSlug}-vault-${n}`;
+    }
+
+    let authPath = usedAuths.has('jwt-nomad') ? `jwt-nomad-${nomadSlug}` : 'jwt-nomad';
+    if (authPath.length > 63) authPath = authPath.slice(0, 63).replace(/[-_]+$/, '');
+    if (usedAuths.has(authPath)) {
+      let n = 2;
+      while (usedAuths.has(`jwt-nomad-${nomadSlug}-${n}`)) n++;
+      authPath = `jwt-nomad-${nomadSlug}-${n}`.slice(0, 63).replace(/[-_]+$/, '');
+    }
+
+    return { name, authPath };
+  };
+
+  const openCreateModal = () => {
+    const nomadClusters = clusters.filter((c) => c.type === 'nomad');
+    const vaultClusters = clusters.filter((c) => c.type === 'vault');
+    const boundNomadIds = new Set(items.map((it) => it.source_cluster_id));
+    const n = nomadClusters.find((c) => !boundNomadIds.has(c.id))?.id || nomadClusters[0]?.id || '';
+    const v = vaultClusters[0]?.id || '';
+    const { name, authPath } = suggestCreateDefaults(n, v);
+    setCreateForm({ name, source_cluster_id: n, target_cluster_id: v, auth_path: authPath });
+    setCreateTouched({ name: false, auth_path: false });
+    setCreateErr('');
+    setShowCreate(true);
+  };
+
   const createIntegration = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr('');
+    setCreateErr('');
     try {
       const nomadDefault = clusters.find((c) => c.type === 'nomad')?.id || '';
       const vaultDefault = clusters.find((c) => c.type === 'vault')?.id || '';
@@ -258,7 +304,9 @@ export function IntegrationsPage() {
       toast.success(`已创建联动 ${createForm.name}，接下来请添加 Role 并点击「应用联动」`);
       await load(res.integration?.id);
     } catch (ex: any) {
-      toast.error(ex?.message || '创建联动失败');
+      const msg = ex?.message || '创建联动失败';
+      setCreateErr(msg);
+      toast.error(msg);
     }
   };
 
@@ -602,15 +650,7 @@ export function IntegrationsPage() {
               <span>刷新</span>
             </Button>
             {isAdmin && (
-              <Button
-                variant="primary"
-                onClick={() => {
-                  const n = clusters.find((c) => c.type === 'nomad')?.id || '';
-                  const v = clusters.find((c) => c.type === 'vault')?.id || '';
-                  setCreateForm({ name: 'nomad-vault', source_cluster_id: n, target_cluster_id: v, auth_path: 'jwt-nomad' });
-                  setShowCreate(true);
-                }}
-              >
+              <Button variant="primary" onClick={openCreateModal}>
                 <Plus className="h-4 w-4" />
                 <span>新建联动</span>
               </Button>
@@ -1060,49 +1100,93 @@ export function IntegrationsPage() {
         )}
       </Modal>
 
-      {/* 新建联动：默认隐藏底层参数 */}
+      {/* 新建联动：智能推荐未绑定集群与不冲突名称/Auth Mount */}
       <Modal open={showCreate} title="新建 Nomad-Vault 联动" onClose={() => setShowCreate(false)}>
-        <form onSubmit={createIntegration} className="space-y-3 text-xs">
-          <Input
-            label="联动名称"
-            required
-            placeholder="例如 nomad-vault"
-            value={createForm.name}
-            onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
-          />
-          <Select
-            label="Nomad 集群（使用密码的任务跑在这里）"
-            value={createForm.source_cluster_id || clusters.find((c) => c.type === 'nomad')?.id || ''}
-            onChange={(e) => setCreateForm({ ...createForm, source_cluster_id: e.target.value })}
-          >
-            {clusters.filter((c) => c.type === 'nomad').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </Select>
-          <Select
-            label="Vault 集群（密码存在这里）"
-            value={createForm.target_cluster_id || clusters.find((c) => c.type === 'vault')?.id || ''}
-            onChange={(e) => setCreateForm({ ...createForm, target_cluster_id: e.target.value })}
-          >
-            {clusters.filter((c) => c.type === 'vault').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </Select>
-          <details className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/40">
-            <summary className="cursor-pointer font-medium text-slate-700 dark:text-slate-200">
-              高级参数（通常保持默认即可）
-            </summary>
-            <div className="mt-3 space-y-2">
+        {(() => {
+          const nomadClusters = clusters.filter((c) => c.type === 'nomad');
+          const vaultClusters = clusters.filter((c) => c.type === 'vault');
+          const selectedNomadId = createForm.source_cluster_id || nomadClusters[0]?.id || '';
+          const selectedVaultId = createForm.target_cluster_id || vaultClusters[0]?.id || '';
+          const existingForNomad = items.find((it) => it.source_cluster_id === selectedNomadId);
+          return (
+            <form onSubmit={createIntegration} className="space-y-3 text-xs">
+              <ErrorAlert message={createErr} onClose={() => setCreateErr('')} />
               <Input
-                label="Vault JWT Auth Mount"
+                label="联动名称"
                 required
-                hint="Vault 上专门用来认 Nomad 身份卡的认证路径，默认 jwt-nomad 即可。"
-                value={createForm.auth_path}
-                onChange={(e) => setCreateForm({ ...createForm, auth_path: e.target.value })}
+                placeholder="例如 nomad-vault"
+                value={createForm.name}
+                onChange={(e) => {
+                  setCreateTouched((prev) => ({ ...prev, name: true }));
+                  setCreateForm({ ...createForm, name: e.target.value });
+                }}
               />
-            </div>
-          </details>
-          <div className="flex justify-end gap-2">
-            <Button onClick={() => setShowCreate(false)}>取消</Button>
-            <Button type="submit" variant="primary">创建联动</Button>
-          </div>
-        </form>
+              <Select
+                label="Nomad 集群（使用密码的任务跑在这里）"
+                value={selectedNomadId}
+                onChange={(e) => {
+                  const nextNomad = e.target.value;
+                  const sug = suggestCreateDefaults(nextNomad, selectedVaultId);
+                  setCreateForm((prev) => ({
+                    ...prev,
+                    source_cluster_id: nextNomad,
+                    name: createTouched.name ? prev.name : sug.name,
+                    auth_path: createTouched.auth_path ? prev.auth_path : sug.authPath,
+                  }));
+                }}
+              >
+                {nomadClusters.map((c) => {
+                  const bound = items.find((it) => it.source_cluster_id === c.id);
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{bound ? `（已绑定联动：${bound.name}）` : ''}
+                    </option>
+                  );
+                })}
+              </Select>
+              {existingForNomad && (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                  该 Nomad 集群已绑定联动「{existingForNomad.name}」（指向 {existingForNomad.target_cluster || existingForNomad.target_cluster_id}）。一个 Nomad 集群只能绑定一个 Vault；一个 Vault 可对接多个 Nomad 集群。
+                </p>
+              )}
+              <Select
+                label="Vault 集群（密码存在这里）"
+                value={selectedVaultId}
+                onChange={(e) => {
+                  const nextVault = e.target.value;
+                  const sug = suggestCreateDefaults(selectedNomadId, nextVault);
+                  setCreateForm((prev) => ({
+                    ...prev,
+                    target_cluster_id: nextVault,
+                    auth_path: createTouched.auth_path ? prev.auth_path : sug.authPath,
+                  }));
+                }}
+              >
+                {vaultClusters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+              <details className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/40">
+                <summary className="cursor-pointer font-medium text-slate-700 dark:text-slate-200">
+                  高级参数（Auth Mount：<code className="font-mono">{createForm.auth_path || '自动生成'}</code>）
+                </summary>
+                <div className="mt-3 space-y-2">
+                  <Input
+                    label="Vault JWT Auth Mount"
+                    hint="同一个 Vault 对接多个 Nomad 集群时需使用不同的 Auth 路径（已自动避开冲突，留空则按集群名自动生成）。"
+                    value={createForm.auth_path}
+                    onChange={(e) => {
+                      setCreateTouched((prev) => ({ ...prev, auth_path: true }));
+                      setCreateForm({ ...createForm, auth_path: e.target.value });
+                    }}
+                  />
+                </div>
+              </details>
+              <div className="flex justify-end gap-2">
+                <Button type="button" onClick={() => setShowCreate(false)}>取消</Button>
+                <Button type="submit" variant="primary" disabled={Boolean(existingForNomad)}>创建联动</Button>
+              </div>
+            </form>
+          );
+        })()}
       </Modal>
 
       {/* 编辑联动：折叠高级参数并补充大白话说明 */}

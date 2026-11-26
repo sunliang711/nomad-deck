@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowRight,
+  ArrowUpRight,
   CheckCircle2,
   Copy,
   Link2,
@@ -760,28 +761,53 @@ export function IntegrationsPage() {
               )
             }
           >
-            <div className="mb-4 flex flex-wrap items-center gap-4 text-xs text-slate-600 dark:text-slate-300">
-              <span>
-                <TermLabel term="Auth Mount" tip="Vault 中启用 JWT 认证引擎的挂载路径，用于校验 Nomad 签发给工作负载的身份 JWT（OIDC / JWKS）。" />:{' '}
-                <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.auth_path}</code>
-              </span>
-              <span>
-                JWKS 模式: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config?.jwks_mode || 'url'}</code>
-              </span>
-              <span>
-                Audience: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{(selected.config?.aud || ['vault.io']).join(', ')}</code>
-              </span>
-              <span>
-                身份 TTL: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config?.identity_ttl || '1h'}</code>
-              </span>
-              {selected.config?.default_role && (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 dark:text-slate-300">
+              <div className="flex flex-wrap items-center gap-4">
                 <span>
-                  默认 Role: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config.default_role}</code>
+                  <TermLabel term="Auth Mount" tip="Vault 中启用 JWT 认证引擎的挂载路径，用于校验 Nomad 签发给工作负载的身份 JWT（OIDC / JWKS）。" />:{' '}
+                  <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.auth_path}</code>
                 </span>
-              )}
-              <span className="inline-flex items-center gap-1.5">
-                状态: <StatusBadge value={selected.status} />
-              </span>
+                <span>
+                  JWKS 模式: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config?.jwks_mode || 'url'}</code>
+                </span>
+                <span>
+                  Audience: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{(selected.config?.aud || ['vault.io']).join(', ')}</code>
+                </span>
+                <span>
+                  身份 TTL: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config?.identity_ttl || '1h'}</code>
+                </span>
+                {selected.config?.default_role && (
+                  <span>
+                    默认 Role: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">{selected.config.default_role}</code>
+                  </span>
+                )}
+                <span className="inline-flex items-center gap-1.5">
+                  状态: <StatusBadge value={selected.status} />
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 shrink-0">
+                <Link
+                  to={`/nomad?id=${encodeURIComponent(selected.source_cluster_id)}`}
+                  className="inline-flex items-center gap-0.5 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  <span>Nomad 集群</span>
+                  <ArrowUpRight className="h-3 w-3" />
+                </Link>
+                <Link
+                  to={`/vault?id=${encodeURIComponent(selected.target_cluster_id)}`}
+                  className="inline-flex items-center gap-0.5 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  <span>Vault 集群</span>
+                  <ArrowUpRight className="h-3 w-3" />
+                </Link>
+                <Link
+                  to={`/jobs?cluster_id=${encodeURIComponent(selected.source_cluster_id)}`}
+                  className="inline-flex items-center gap-0.5 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  <span>Job 中心</span>
+                  <ArrowUpRight className="h-3 w-3" />
+                </Link>
+              </div>
             </div>
 
             <div className="mb-2.5 flex items-center justify-between gap-2">

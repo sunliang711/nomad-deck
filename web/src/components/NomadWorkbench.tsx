@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ChevronRight, RefreshCw, Search, Terminal } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ArrowLeft, ArrowUpRight, ChevronRight, RefreshCw, Search, Terminal } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, fmtBytes, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Badge, Button, Card, EmptyState, ErrorAlert, Input, LoadingState, Modal, SectionTabs, Sparkline, StatusBadge, TermLabel } from './UI';
@@ -9,12 +10,28 @@ import { Drawer } from './Drawer';
 import { TerminalModal } from './TerminalModal';
 import { CodeEditor } from './CodeEditor';
 
-export function NomadWorkbench({ clusterId }: { clusterId: string }) {
+const VALID_SUB_TABS = new Set(['jobs', 'clients', 'servers', 'topology', 'storage', 'variables', 'evaluations']);
+
+export function NomadWorkbench({
+  clusterId,
+  initialNamespace,
+  initialJobId,
+  initialSubTab,
+  onClearDeepLink,
+}: {
+  clusterId: string;
+  initialNamespace?: string;
+  initialJobId?: string;
+  initialSubTab?: string;
+  onClearDeepLink?: () => void;
+}) {
   const { isAdmin } = useAuth();
   const toast = useToast();
   const askConfirm = useConfirm();
-  const [subTab, setSubTab] = useState('jobs');
-  const [namespace, setNamespace] = useState('default');
+  const [subTab, setSubTab] = useState(() =>
+    initialJobId ? 'jobs' : initialSubTab && VALID_SUB_TABS.has(initialSubTab) ? initialSubTab : 'jobs',
+  );
+  const [namespace, setNamespace] = useState(initialNamespace || 'default');
   const [namespaces, setNamespaces] = useState<any[]>([]);
   const [searchQ, setSearchQ] = useState('');
   const [searchRes, setSearchRes] = useState<any>(null);
@@ -128,32 +145,47 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
     return stop;
   }, [clusterId]);
 
-  const inspectJob = async (job: any) => {
+  const inspectJob = useCallback(async (job: any) => {
     const request = ++jobRequestRef.current;
     ++allocRequestRef.current;
-    setSelectedJob(job);
+    const ns = job.namespace || (namespace === '*' ? 'default' : namespace);
+    setSelectedJob({ ...job, namespace: ns });
     setSelectedAlloc(null);
     // Hide the previous job's actions while the new detail request is in flight.
     setJobSummary(null);
     setJobAllocs([]);
     setJobDeps([]);
     setJobEvals([]);
-    const ns = job.namespace || namespace;
     const jid = encodeURIComponent(job.id);
+    const nsEnc = encodeURIComponent(ns);
+    const needsMeta = !job.status || !Array.isArray(job.groups);
     try {
-      const [sum, allocs, deps, evals] = await Promise.all([
-        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${jid}/summary`),
-        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${jid}/allocations`),
-        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${jid}/deployments`),
-        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(ns)}/jobs/${jid}/evaluations`),
+      const [sum, allocs, deps, evals, detail] = await Promise.all([
+        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${nsEnc}/jobs/${jid}/summary`),
+        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${nsEnc}/jobs/${jid}/allocations`),
+        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${nsEnc}/jobs/${jid}/deployments`),
+        apiGet(`/api/v1/nomad/${clusterId}/namespaces/${nsEnc}/jobs/${jid}/evaluations`),
+        needsMeta ? apiGet(`/api/v1/nomad/${clusterId}/namespaces/${nsEnc}/jobs/${jid}`).catch(() => null) : Promise.resolve(null),
       ]);
       if (request !== jobRequestRef.current) return;
+      const meta = detail?.job?.summary || detail?.job;
+      const enriched = meta
+        ? {
+            ...job,
+            ...meta,
+            id: meta.id || job.id,
+            namespace: meta.namespace || ns,
+            status: detail?.job?.status || meta.status || job.status,
+            stop: detail?.job?.stop ?? meta.stop ?? job.stop,
+          }
+        : { ...job, namespace: ns };
+      setSelectedJob(enriched);
       const s = sum.data || sum.summary || sum;
       setJobSummary(s);
       setJobAllocs(allocs.data || allocs.allocations || []);
       setJobDeps(deps.data || deps.deployments || []);
       setJobEvals(evals.data || evals.evaluations || []);
-      const firstGrp = (job.groups && job.groups[0]) || Object.keys(s?.Summary || {})[0] || '';
+      const firstGrp = (enriched.groups && enriched.groups[0]) || Object.keys(s?.Summary || {})[0] || '';
       if (firstGrp) {
         setScaleGroup(firstGrp);
         setScaleCount(1);
@@ -161,7 +193,21 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
     } catch (ex: any) {
       if (request === jobRequestRef.current) setErr(ex?.message || '加载 Job 详情失败');
     }
-  };
+  }, [clusterId, namespace]);
+
+  useEffect(() => {
+    if (initialSubTab && VALID_SUB_TABS.has(initialSubTab) && !initialJobId) {
+      setSubTab(initialSubTab);
+    }
+  }, [initialSubTab, initialJobId]);
+
+  useEffect(() => {
+    if (!initialJobId) return;
+    const targetNs = initialNamespace || 'default';
+    setSubTab('jobs');
+    setNamespace(targetNs);
+    void inspectJob({ id: initialJobId, namespace: targetNs });
+  }, [clusterId, initialJobId, initialNamespace, inspectJob]);
 
   const closeAllocDrawer = () => {
     ++allocRequestRef.current;
@@ -181,6 +227,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
     setJobAllocs([]);
     setJobDeps([]);
     setJobEvals([]);
+    onClearDeepLink?.();
   };
 
   // inspectAlloc refreshes details and restarts logs, including allocations listed before tasks appear.
@@ -376,7 +423,14 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                   </span>
                   <StatusBadge value={selectedJob.stop ? 'stopped' : selectedJob.status} />
                 </nav>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <Link
+                    to={`/jobs?cluster_id=${encodeURIComponent(clusterId)}&namespace=${encodeURIComponent(selectedJob.namespace || 'default')}&job=${encodeURIComponent(selectedJob.id)}`}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-indigo-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-indigo-400 dark:hover:bg-slate-700"
+                  >
+                    <span>在 Job 中心编辑</span>
+                    <ArrowUpRight className="h-3.5 w-3.5" />
+                  </Link>
                   <Button size="sm" onClick={() => void inspectJob(selectedJob)}>
                     <RefreshCw className="h-3.5 w-3.5" />
                     <span>刷新</span>
@@ -829,7 +883,23 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                     {evaluations.slice(0, 30).map((ev: any) => (
                       <tr key={ev.ID}>
                         <td className="py-2 pr-3 font-mono">{(ev.ID || '').slice(0, 8)}</td>
-                        <td className="py-2 pr-3 font-mono font-medium">{ev.JobID || '-'}</td>
+                        <td className="py-2 pr-3 font-mono font-medium">
+                          {ev.JobID ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const targetNs = ev.Namespace || (namespace === '*' ? 'default' : namespace);
+                                setSubTab('jobs');
+                                void inspectJob({ id: ev.JobID, namespace: targetNs });
+                              }}
+                              className="text-left text-indigo-600 hover:underline dark:text-indigo-400"
+                            >
+                              {ev.JobID}
+                            </button>
+                          ) : (
+                            '-'
+                          )}
+                        </td>
                         <td className="py-2 pr-3">{ev.TriggeredBy || '-'}</td>
                         <td className="py-2 pr-3"><StatusBadge value={ev.Status} /></td>
                         <td className="py-2 text-slate-500">{ev.StatusDescription || (ev.BlockedEval ? '等待资源或约束' : '-')}</td>
@@ -874,11 +944,32 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
                     {kind} ({list.length})
                   </div>
                   <ul className="space-y-1 font-mono text-[11px] text-slate-600 dark:text-slate-300">
-                    {list.slice(0, 8).map((item: any, idx: number) => (
-                      <li key={idx} className="truncate">
-                        {typeof item === 'string' ? item : item.ID || item.Name || JSON.stringify(item)}
-                      </li>
-                    ))}
+                    {list.slice(0, 8).map((item: any, idx: number) => {
+                      const label = typeof item === 'string' ? item : item.ID || item.Name || JSON.stringify(item);
+                      const isJobMatch = kind.toLowerCase() === 'jobs';
+                      const jobId = typeof item === 'string' ? item : item.ID || item.Name;
+                      const jobNs = (typeof item === 'object' && item?.Namespace) || (namespace === '*' ? 'default' : namespace);
+                      return (
+                        <li key={idx} className="truncate">
+                          {isJobMatch && jobId ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSearchRes(null);
+                                setSubTab('jobs');
+                                setNamespace(jobNs);
+                                void inspectJob({ id: jobId, namespace: jobNs });
+                              }}
+                              className="text-left text-indigo-600 hover:underline dark:text-indigo-400"
+                            >
+                              {label}
+                            </button>
+                          ) : (
+                            label
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               ))}

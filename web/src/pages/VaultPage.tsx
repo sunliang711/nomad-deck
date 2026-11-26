@@ -56,6 +56,12 @@ export function VaultPage() {
       setTab(queryTab);
     }
   }, [queryTab]);
+
+  useEffect(() => {
+    if (queryId && clusters.some((c: any) => c.id === queryId)) {
+      setSelectedId(queryId);
+    }
+  }, [queryId, clusters]);
   const [status, setStatus] = useState<any>(null);
   const [custodyData, setCustodyData] = useState<any>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);

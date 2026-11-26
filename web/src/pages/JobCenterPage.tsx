@@ -189,6 +189,7 @@ export function JobCenterPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClusterId = searchParams.get('cluster_id') || '';
   const queryNamespace = searchParams.get('namespace') || '';
+  const queryJobId = searchParams.get('job') || '';
   const queryFrom = searchParams.get('from') || '';
   const toast = useToast();
   const askConfirm = useConfirm();
@@ -319,6 +320,18 @@ export function JobCenterPage() {
       setErr(ex?.message || '加载 Job 列表失败');
     }
   }, [clusterId, namespace, needsDeployment]);
+
+  useEffect(() => {
+    if (queryClusterId && clusters.some((c: any) => c.id === queryClusterId)) {
+      setClusterId(queryClusterId);
+    }
+  }, [queryClusterId, clusters]);
+
+  useEffect(() => {
+    if (queryNamespace) {
+      setNamespace(queryNamespace);
+    }
+  }, [queryNamespace]);
 
   useEffect(() => {
     void loadClusters();
@@ -491,12 +504,17 @@ export function JobCenterPage() {
   const runApply = async () => {
     if (!clusterId || !plan?.plan_id) return;
     setErr('');
+    const targetJobId = plan.job_id || selectedJobId;
+    const targetNs = plan.namespace || namespace;
     try {
       await apiPost(`/api/v1/nomad/${clusterId}/job-ops/apply`, { plan_id: plan.plan_id });
       clearPlan();
+      const targetUrl = targetJobId
+        ? `/nomad?id=${encodeURIComponent(clusterId)}&tab=workbench&ns=${encodeURIComponent(targetNs)}&job=${encodeURIComponent(targetJobId)}`
+        : `/nomad?id=${encodeURIComponent(clusterId)}&tab=workbench&ns=${encodeURIComponent(targetNs)}`;
       toast.success('Job 已提交运行', {
         label: '查看运行态',
-        onClick: () => navigate(`/nomad?id=${clusterId}&tab=workbench`),
+        onClick: () => navigate(targetUrl),
       });
       await loadJobs();
     } catch (ex: any) {
@@ -540,6 +558,14 @@ export function JobCenterPage() {
       if (request === editRequestRef.current) setErr(ex?.message || '读取 Job 编辑源码失败');
     }
   };
+
+  useEffect(() => {
+    if (!queryJobId || queryFrom === 'integration' || !selectedCluster || needsDeployment) return;
+    void loadJobForEdit({ id: queryJobId, namespace: queryNamespace || namespace });
+    const next = new URLSearchParams(searchParams);
+    next.delete('job');
+    setSearchParams(next, { replace: true });
+  }, [queryJobId, queryFrom, selectedCluster, needsDeployment]);
 
   if (loadingClusters) return <LoadingState label="正在加载 Job 工作区…" />;
 
@@ -612,14 +638,31 @@ export function JobCenterPage() {
               ) : (
                 jobs.map((j) => {
                   const jobNs = j.namespace || namespace;
+                  const workbenchHref = `/nomad?id=${encodeURIComponent(clusterId)}&tab=workbench&ns=${encodeURIComponent(jobNs)}&job=${encodeURIComponent(j.id)}`;
                   return (
                     <div key={`${jobNs}:${j.id}`} className="space-y-3 rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                      <div className="space-y-1.5">
-                        <div className="font-mono font-semibold break-all">{j.id}</div>
-                        <StatusBadge value={j.stop ? 'stopped' : j.status} />
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 space-y-1.5">
+                          <Link
+                            to={workbenchHref}
+                            title="前往运行态工作台查看详情"
+                            className="block font-mono font-semibold break-all text-slate-900 hover:text-indigo-600 hover:underline dark:text-slate-100 dark:hover:text-indigo-400"
+                          >
+                            {j.id}
+                          </Link>
+                          <StatusBadge value={j.stop ? 'stopped' : j.status} />
+                        </div>
+                        <Link
+                          to={workbenchHref}
+                          title="在运行态工作台查看 Allocations、日志与终端"
+                          className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-50 dark:border-slate-700 dark:bg-slate-800 dark:text-indigo-300 dark:hover:bg-indigo-500/15"
+                        >
+                          <span>运行态</span>
+                          <ArrowUpRight className="h-3 w-3" />
+                        </Link>
                       </div>
                       {isAdmin && (
-                        <div className="flex gap-1">
+                        <div className="flex flex-wrap gap-1">
                           <Button size="sm" onClick={() => void loadJobForEdit(j)}>编辑</Button>
                           <Button
                             size="sm"
@@ -716,10 +759,14 @@ export function JobCenterPage() {
             <div className="flex flex-wrap items-center gap-2">
               {selectedCluster && !needsDeployment && (
                 <Link
-                  to={`/nomad?id=${clusterId}&tab=workbench`}
+                  to={
+                    selectedJobId
+                      ? `/nomad?id=${encodeURIComponent(clusterId)}&tab=workbench&ns=${encodeURIComponent(namespace)}&job=${encodeURIComponent(selectedJobId)}`
+                      : `/nomad?id=${encodeURIComponent(clusterId)}&tab=workbench&ns=${encodeURIComponent(namespace)}`
+                  }
                   className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400 mr-1"
                 >
-                  <span>运行态工作台</span>
+                  <span>{selectedJobId ? `运行态 (${selectedJobId})` : '运行态工作台'}</span>
                   <ArrowUpRight className="h-3.5 w-3.5" />
                 </Link>
               )}

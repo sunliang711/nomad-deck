@@ -261,7 +261,7 @@ export function DashboardPage() {
                       {c.maintenance_mode && <Badge tone="amber">维护中</Badge>}
                       <StatusBadge value={c.init_state === 'uninitialized' && c.health_status === 'unreachable' ? 'uninitialized' : c.health_status} />
                       <Link
-                        to={c.type === 'nomad' && c.init_state === 'initialized' ? '/jobs' : detailHref}
+                        to={c.type === 'nomad' && c.init_state === 'initialized' ? `/jobs?cluster_id=${encodeURIComponent(c.id)}` : detailHref}
                         className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400 inline-flex items-center gap-0.5 ml-1"
                       >
                         {c.type === 'nomad' && c.init_state === 'initialized' ? '运行 Job' : '管理'}

@@ -37,15 +37,31 @@ export function NomadPage() {
   const { openTask, openNodeLogs, tasks } = useOpsDrawer();
   const toast = useToast();
   const askConfirm = useConfirm();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryId = searchParams.get('id') || '';
+  const queryTab = searchParams.get('tab') || '';
+  const queryNs = searchParams.get('ns') || '';
+  const queryJob = searchParams.get('job') || '';
+  const querySub = searchParams.get('sub') || '';
   const [clusters, setClusters] = useState<any[]>([]);
   const [nodes, setNodes] = useState<any[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [loadingList, setLoadingList] = useState(true);
   const selectionRef = useRef(selectedId);
   selectionRef.current = selectedId;
-  const [tab, setTab] = useState(searchParams.get('tab') === 'workbench' ? 'workbench' : 'status');
+  const [tab, setTab] = useState(queryTab === 'workbench' ? 'workbench' : 'status');
+
+  useEffect(() => {
+    if (queryId && clusters.some((c: any) => c.id === queryId)) {
+      setSelectedId(queryId);
+    }
+  }, [queryId, clusters]);
+
+  useEffect(() => {
+    if (queryTab === 'workbench' || queryTab === 'status' || queryTab === 'snapshots' || queryTab === 'governance') {
+      setTab(queryTab);
+    }
+  }, [queryTab]);
   const [status, setStatus] = useState<any>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
   const [namespaces, setNamespaces] = useState<any[]>([]);
@@ -412,7 +428,7 @@ export function NomadPage() {
                     <Button size="sm" onClick={() => setTab('workbench')}>
                       运行态工作台
                     </Button>
-                    <Link to="/jobs" className="primary-button">
+                    <Link to={`/jobs?cluster_id=${encodeURIComponent(selectedId)}`} className="primary-button">
                       <FileCode2 className="h-3.5 w-3.5" />
                       <span>前往 Job 中心</span>
                     </Link>
@@ -423,7 +439,23 @@ export function NomadPage() {
             </div>
           )}
 
-          {tab === 'workbench' && <NomadWorkbench key={selectedId} clusterId={selectedId} />}
+          {tab === 'workbench' && (
+            <NomadWorkbench
+              key={selectedId}
+              clusterId={selectedId}
+              initialNamespace={queryNs}
+              initialJobId={queryJob}
+              initialSubTab={querySub}
+              onClearDeepLink={() => {
+                if (!queryNs && !queryJob && !querySub) return;
+                const next = new URLSearchParams(searchParams);
+                next.delete('ns');
+                next.delete('job');
+                next.delete('sub');
+                setSearchParams(next, { replace: true });
+              }}
+            />
+          )}
 
           {tab === 'snapshots' && (
             <Card

@@ -170,3 +170,23 @@ func TestDockerConfigMergeAndRender(t *testing.T) {
 		t.Fatal("drop-in")
 	}
 }
+
+// 验证未填写版本时可安装最新版，并保留显式配置的优先级。
+func TestDockerInstallVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name, requested, configured, want string
+	}{
+		{name: "empty uses latest", want: "latest"},
+		{name: "spaces use latest", requested: "  ", want: "latest"},
+		{name: "host default", configured: "29.0.1", want: "29.0.1"},
+		{name: "explicit wins", requested: " 28.0.2 ", configured: "29.0.1", want: "28.0.2"},
+		{name: "explicit latest", requested: "latest", configured: "29.0.1", want: "latest"},
+		{name: "invalid stays invalid", requested: "bad-version", want: "bad-version"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dockerInstallVersion(tc.requested, tc.configured); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

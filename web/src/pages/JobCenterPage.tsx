@@ -99,6 +99,76 @@ const STARTER_SAMPLES: Array<{ id: string; label: string; desc: string; hcl: str
 }
 `,
   },
+  {
+    id: 'postgres',
+    label: 'PostgreSQL + Vault',
+    desc: '先配置 postgres Role 与 secret/apps/postgres（username、password、database）。示例数据保存在当前 Allocation。',
+    hcl: `job "postgres" {
+  datacenters = ["dc1"]
+  type        = "service"
+
+  group "database" {
+    count = 1
+    network {
+      port "db" {
+        static = 5432
+        to     = 5432
+      }
+    }
+
+    # 数据保留在当前 Allocation，重新调度前需配置持久卷与备份。
+    ephemeral_disk {
+      size   = 1024
+      sticky = true
+    }
+
+    task "postgres" {
+      driver = "docker"
+      config {
+        image   = "postgres:17-bookworm"
+        ports   = ["db"]
+        volumes = ["local/pgdata:/var/lib/postgresql/data"]
+      }
+
+      vault {
+        role = "postgres"
+        env  = false
+      }
+
+      env {
+        POSTGRES_PASSWORD_FILE = "/secrets/postgres-password"
+      }
+
+      template {
+        destination = "secrets/postgres-password"
+        perms       = "0600"
+        change_mode = "noop"
+        data        = <<EOT
+{{ with secret "secret/data/apps/postgres" }}{{ .Data.data.password }}{{ end }}
+EOT
+      }
+
+      template {
+        destination = "secrets/postgres.env"
+        env         = true
+        data        = <<EOT
+{{ with secret "secret/data/apps/postgres" }}
+POSTGRES_USER={{ .Data.data.username | toJSON }}
+POSTGRES_DB={{ .Data.data.database | toJSON }}
+{{ end }}
+EOT
+      }
+
+      resources {
+        cpu    = 200
+        memory = 256
+      }
+    }
+  }
+}
+`,
+  },
+
 ];
 
 const sampleHCL = STARTER_SAMPLES[0].hcl;
@@ -268,7 +338,7 @@ export function JobCenterPage() {
       clearPlan();
       toast.success('Job 已提交运行', {
         label: '查看运行态',
-        onClick: () => navigate(`/nomad?id=${clusterId}`),
+        onClick: () => navigate(`/nomad?id=${clusterId}&tab=workbench`),
       });
       await loadJobs();
     } catch (ex: any) {
@@ -485,7 +555,7 @@ export function JobCenterPage() {
             <div className="flex flex-wrap items-center gap-2">
               {selectedCluster && !needsDeployment && (
                 <Link
-                  to={`/nomad?id=${clusterId}`}
+                  to={`/nomad?id=${clusterId}&tab=workbench`}
                   className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400 mr-1"
                 >
                   <span>运行态工作台</span>
@@ -530,6 +600,12 @@ export function JobCenterPage() {
                 </div>
               )}
             </div>
+
+            {STARTER_SAMPLES.find((sample) => sample.hcl === hcl) && (
+              <p className="rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-3 leading-5 text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-200">
+                {STARTER_SAMPLES.find((sample) => sample.hcl === hcl)?.desc}
+              </p>
+            )}
 
             {editMode === 'visual' ? (
               <div className="space-y-3">
@@ -621,9 +697,17 @@ export function JobCenterPage() {
                     </Button>
                   )}
                 </div>
-                <pre className="max-h-56 overflow-auto rounded-lg bg-slate-950 p-2.5 font-mono text-[11px] text-slate-100">
-                  {JSON.stringify(plan.diff || plan, null, 2)}
-                </pre>
+                <p className="leading-5 text-indigo-900 dark:text-indigo-200">
+                  任务 {plan.job_id} · 命名空间 {plan.namespace} · {({ Added: '创建任务', Edited: '更新任务', None: '配置无变化', Deleted: '删除任务' } as Record<string, string>)[plan.diff?.Type] || '配置变更'}
+                </p>
+                {(plan.warnings || plan.validation_warnings) && <p role="alert" className="whitespace-pre-wrap text-amber-700 dark:text-amber-300">{[plan.validation_warnings, plan.warnings].filter(Boolean).join('\n')}</p>}
+                {plan.failed_tg_allocs && Object.keys(plan.failed_tg_allocs).length > 0 && <p role="alert" className="text-red-700 dark:text-red-300">部分任务无法调度，请展开详情检查资源或约束条件。</p>}
+                <details>
+                  <summary className="cursor-pointer py-1 font-medium">查看调度变更详情</summary>
+                  <pre className="mt-2 max-h-56 overflow-auto rounded-lg bg-slate-950 p-2.5 font-mono text-[11px] text-slate-100">
+                    {JSON.stringify({ diff: plan.diff, failed_tg_allocs: plan.failed_tg_allocs }, null, 2)}
+                  </pre>
+                </details>
               </div>
             )}
 

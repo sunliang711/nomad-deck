@@ -2,6 +2,7 @@ package workbench
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -13,6 +14,53 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+func TestNomadWebSocketTLSAfterHTTP2(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/warmup" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(r.Proto)); err != nil {
+			t.Errorf("write protocol: %v", err)
+		}
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	client := srv.Client()
+	transport := client.Transport.(*http.Transport)
+	transport.TLSClientConfig.RootCAs = pool
+	transport.ForceAttemptHTTP2 = true
+	resp, err := client.Get(srv.URL + "/warmup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("warmup protocol: %s", resp.Proto)
+	}
+	dialer := nomadWebSocketDialer(client)
+	if !strings.Contains(strings.Join(transport.TLSClientConfig.NextProtos, ","), "h2") {
+		t.Fatal("HTTP transport ALPN was modified")
+	}
+	conn, _, err := dialer.Dial("wss"+strings.TrimPrefix(srv.URL, "https"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_, protocol, err := conn.ReadMessage()
+	if err != nil || string(protocol) != "HTTP/1.1" {
+		t.Fatalf("WebSocket protocol: %q, error: %v", protocol, err)
+	}
+}
 
 func runningAlloc(t *testing.T, s *Service, clusterID, job string) string {
 	t.Helper()

@@ -43,7 +43,7 @@ export function NomadPage() {
   const [loadingList, setLoadingList] = useState(true);
   const selectionRef = useRef(selectedId);
   selectionRef.current = selectedId;
-  const [tab, setTab] = useState('status');
+  const [tab, setTab] = useState(searchParams.get('tab') === 'workbench' ? 'workbench' : 'status');
   const [status, setStatus] = useState<any>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
   const [namespaces, setNamespaces] = useState<any[]>([]);

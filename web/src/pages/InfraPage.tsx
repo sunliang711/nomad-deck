@@ -64,6 +64,8 @@ export function InfraPage() {
   const [saveAndTest, setSaveAndTest] = useState(true);
   const [dockerNode, setDockerNode] = useState<any>(null);
   const [dockerInfo, setDockerInfo] = useState<any>(null);
+  const [dockerErr, setDockerErr] = useState('');
+  const [dockerBusy, setDockerBusy] = useState(false);
   const [dockerVer, setDockerVer] = useState('');
   const [dockerUseProxy, setDockerUseProxy] = useState(false);
   const [dockerDrain, setDockerDrain] = useState(false);
@@ -231,7 +233,9 @@ export function InfraPage() {
 
   const openDocker = async (n: any) => {
     setDockerNode(n);
-    setErr('');
+    setDockerInfo(null);
+    setDockerErr('');
+    setDockerBusy(true);
     try {
       const [res, defaults] = await Promise.all([apiGet(`/api/v1/nodes/${n.id}/docker`), apiGet('/api/v1/settings')]);
       setDockerVer(defaults.settings?.['defaults.docker_version'] || '');
@@ -248,13 +252,16 @@ export function InfraPage() {
         proxy_url: cfg.pull_proxy?.url || '',
       });
     } catch (ex: any) {
-      setErr(ex?.message || '加载 Docker 信息失败');
+      setDockerErr(ex?.message || '加载 Docker 信息失败');
+    } finally {
+      setDockerBusy(false);
     }
   };
 
   const runDockerAction = async (action: 'install' | 'upgrade' | 'adopt') => {
-    if (!dockerNode) return;
-    setErr('');
+    if (!dockerNode || dockerBusy) return;
+    setDockerErr('');
+    setDockerBusy(true);
     try {
       const res = await apiPost(`/api/v1/nodes/${dockerNode.id}/docker/${action}`, {
         version: dockerVer.trim(),
@@ -263,15 +270,21 @@ export function InfraPage() {
         confirm: dockerConfirm,
         allow_interruption: dockerAllowInterruption,
       });
-      if (res.task?.id) openTask(res.task.id, `Docker ${action}: ${dockerNode.name}`);
+      if (res.task?.id) {
+        setDockerNode(null);
+        openTask(res.task.id, `Docker ${action === 'install' ? '安装' : action === 'upgrade' ? '升级' : '转为托管'}：${dockerNode.name}`);
+      }
     } catch (ex: any) {
-      setErr(ex?.message || `Docker ${action} 失败`);
+      setDockerErr(ex?.message || `Docker ${action} 失败`);
+    } finally {
+      setDockerBusy(false);
     }
   };
 
   const saveDockerCfg = async () => {
-    if (!dockerNode) return;
-    setErr('');
+    if (!dockerNode || dockerBusy) return;
+    setDockerErr('');
+    setDockerBusy(true);
     try {
       const mirrors = dockerCfg.registry_mirrors
         .split(',')
@@ -284,20 +297,28 @@ export function InfraPage() {
           url: dockerCfg.proxy_url.trim(),
         },
       });
-      if (res.task?.id) openTask(res.task.id, `更新 Docker 配置: ${dockerNode.name}`);
+      if (res.task?.id) {
+        setDockerNode(null);
+        openTask(res.task.id, `更新 Docker 配置：${dockerNode.name}`);
+      }
     } catch (ex: any) {
-      setErr(ex?.message || '保存 Docker 配置失败');
+      setDockerErr(ex?.message || '保存 Docker 配置失败');
+    } finally {
+      setDockerBusy(false);
     }
   };
 
   const testDockerProxy = async () => {
-    if (!dockerNode) return;
-    setErr('');
+    if (!dockerNode || dockerBusy) return;
+    setDockerErr('');
+    setDockerBusy(true);
     try {
       const res = await apiPost(`/api/v1/nodes/${dockerNode.id}/docker/proxy-test`, {});
       toast.info(`镜像代理测试结果：${JSON.stringify(res.result)}`);
     } catch (ex: any) {
-      setErr(ex?.message || '代理测试失败');
+      setDockerErr(ex?.message || '代理测试失败');
+    } finally {
+      setDockerBusy(false);
     }
   };
 
@@ -848,28 +869,37 @@ export function InfraPage() {
       </Modal>
 
       {/* Docker management modal */}
-      <Modal open={Boolean(dockerNode)} title={`Docker 管理：${dockerNode?.name}`} onClose={() => setDockerNode(null)} wide>
+      <Modal open={Boolean(dockerNode)} title={`Docker 管理：${dockerNode?.name}`} busy={dockerBusy} onClose={() => setDockerNode(null)} wide>
+        <ErrorAlert message={dockerErr} onClose={() => setDockerErr('')} />
+        {!dockerInfo && <p role="status" className="py-8 text-center text-sm text-slate-500">{dockerBusy ? '正在读取 Docker 状态…' : '无法读取 Docker 信息，请关闭后重试。'}</p>}
         {dockerInfo && (
           <div className="space-y-4 text-xs">
-            <div className="grid grid-cols-3 gap-3 rounded bg-slate-50 p-3 dark:bg-slate-950">
-              <div>模式：<span className="font-semibold">{dockerInfo.mode || 'absent'}</span></div>
+            <div className="grid gap-3 rounded-xl bg-slate-50 p-3 dark:bg-slate-950 sm:grid-cols-3">
+              <div>管理方式：<span className="font-semibold">{{ absent: '未安装', managed: '平台托管', external: '外部安装' }[dockerInfo.mode as string] || dockerInfo.mode}</span></div>
               <div>版本：<span className="font-mono">{dockerInfo.version || '-'}</span></div>
-              <div>状态：<Badge tone={statusTone(dockerInfo.status)}>{dockerInfo.status || '-'}</Badge></div>
+              <div>状态：{dockerInfo.mode === 'absent' ? <Badge tone="neutral">等待安装</Badge> : <StatusBadge value={dockerInfo.status} />}</div>
             </div>
-            <div className="flex flex-wrap items-end gap-2">
+            <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700 space-y-3">
+              <div className="text-sm font-semibold">{dockerInfo.mode === 'absent' ? '1. 安装容器运行环境' : '版本与维护'}</div>
+              <p className="text-xs leading-5 text-slate-500">Docker 用于运行 PostgreSQL 等容器任务。安装包由控制面下载、验签并分发到当前主机。</p>
+              <div className="flex flex-wrap items-end gap-2">
               <div className="w-48">
-                <Input label="目标版本（可选）" placeholder="留空按仓库最新版" value={dockerVer} onChange={(e) => setDockerVer(e.target.value)} />
+                <Input label={dockerInfo.mode === 'absent' ? '安装版本（可选）' : '目标版本'} placeholder={dockerInfo.mode === 'absent' ? '留空安装仓库最新版' : '请输入完整版本号'} value={dockerVer} onChange={(e) => setDockerVer(e.target.value)} />
               </div>
-              <Button variant="primary" onClick={() => void runDockerAction('install')}>安装</Button>
-              <Button onClick={() => void runDockerAction('upgrade')}>升级</Button>
+              {dockerInfo.mode === 'absent' && <Button variant="primary" loading={dockerBusy} onClick={() => void runDockerAction('install')}>安装 Docker</Button>}
+              {dockerInfo.mode === 'managed' && <Button loading={dockerBusy} disabled={!dockerVer.trim()} onClick={() => void runDockerAction('upgrade')}>升级 Docker</Button>}
               {dockerInfo.mode === 'external' && (
-                <Button onClick={() => void runDockerAction('adopt')}>转为托管</Button>
+                <Button loading={dockerBusy} onClick={() => void runDockerAction('adopt')}>转为托管</Button>
               )}
             </div>
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={dockerUseProxy} onChange={(e) => setDockerUseProxy(e.target.checked)} />
               <span>安装/升级使用系统代理</span>
             </label>
+            </div>
+            {dockerInfo.mode !== 'absent' && <details className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+              <summary className="cursor-pointer font-medium">升级策略与中断确认</summary>
+              <div className="mt-3 space-y-3">
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={dockerDrain} onChange={(e) => setDockerDrain(e.target.checked)} />
               <span>升级前疏散 Nomad 工作负载</span>
@@ -883,8 +913,11 @@ export function InfraPage() {
               <input type="checkbox" checked={dockerAllowInterruption} onChange={(e) => setDockerAllowInterruption(e.target.checked)} />
               <span>允许无法疏散节点的容器中断</span>
             </label>
-            <div className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-800">
-              <div className="font-semibold">守护进程配置与镜像拉取代理</div>
+              </div>
+            </details>}
+            {dockerInfo.mode !== 'absent' && <div className="space-y-3 rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+              <div className="text-sm font-semibold">镜像下载与代理</div>
+              <p className="leading-5 text-slate-500">安装包代理和镜像代理分别配置。如果无法拉取 Docker Hub 镜像，可在这里沿用系统代理。</p>
               <Input
                 label="Registry Mirrors（逗号分隔）"
                 value={dockerCfg.registry_mirrors}
@@ -907,10 +940,10 @@ export function InfraPage() {
                 />
               )}
               <div className="flex gap-2">
-                <Button variant="primary" onClick={() => void saveDockerCfg()}>应用守护进程配置</Button>
-                <Button onClick={() => void testDockerProxy()}>从节点测试代理</Button>
+                <Button variant="primary" loading={dockerBusy} onClick={() => void saveDockerCfg()}>应用守护进程配置</Button>
+                <Button disabled={dockerBusy} onClick={() => void testDockerProxy()}>从节点测试代理</Button>
               </div>
-            </div>
+            </div>}
           </div>
         )}
       </Modal>

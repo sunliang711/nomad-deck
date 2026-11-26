@@ -26,6 +26,9 @@ export function IntegrationsPage() {
   const [deleting, setDeleting] = useState(false);
   const deleteRef = useRef(false);
   const [deleteTaskId, setDeleteTaskId] = useState('');
+  const [applyTaskId, setApplyTaskId] = useState('');
+  const [applying, setApplying] = useState(false);
+  const applyRef = useRef(false);
   const toast = useToast();
   const askConfirm = useConfirm();
 
@@ -43,7 +46,7 @@ export function IntegrationsPage() {
   const [roleForm, setRoleForm] = useState({
     role_name: '',
     policy_mode: 'explicit',
-    secret_paths: 'secret/data/*',
+    secret_paths: '',
     bound_namespace: 'default',
     token_period: '1h',
   });
@@ -82,6 +85,43 @@ export function IntegrationsPage() {
     setExampleHCL('');
     void load();
   }, [deleteTask?.id, deleteTask?.status, load]);
+
+  const applyTask = tasks.find((task) => task.id === applyTaskId);
+  const applyPending = Boolean(applyTaskId && (!applyTask || isTaskActiveStatus(applyTask.status)));
+
+  useEffect(() => {
+    if (!applyTask || isTaskActiveStatus(applyTask.status)) return;
+    setApplyTaskId('');
+    setPlan(null);
+    void load(applyTask.target_id);
+  }, [applyTask?.id, applyTask?.status, load]);
+
+  const applyIntegration = async () => {
+    if (!selected || applyRef.current || applyPending) return;
+    applyRef.current = true;
+    setApplying(true);
+    setErr('');
+    try {
+      const preview = await apiPost(`/api/v1/integrations/${selected.id}/plan`, {});
+      if (preview.plan?.errors?.length) throw new Error(preview.plan.errors.join('\n'));
+      const source = clusters.find((cluster) => cluster.id === selected.source_cluster_id);
+      const confirmSingle = source?.mode === 'single' && preview.plan?.scope === 'vault_and_nomad';
+      // 单节点配置下发需要重启服务，确认后才向后端传递维护授权。
+      if (confirmSingle && !(await askConfirm('启用联动需要重启这台 Nomad Server，期间调度与 API 会短暂中断。确认现在应用配置吗？', {
+        title: '确认单节点维护', confirmText: '确认并应用',
+      }))) return;
+      const result = await apiPost(`/api/v1/integrations/${selected.id}/apply`, { confirm_single_node: confirmSingle });
+      if (result.task?.id) {
+        setApplyTaskId(result.task.id);
+        openTask(result.task.id, `应用联动：${selected.name}`);
+      }
+    } catch (ex: any) {
+      setErr(ex?.message || '应用联动失败');
+    } finally {
+      applyRef.current = false;
+      setApplying(false);
+    }
+  };
 
   const selectItem = async (id: string) => {
     setErr('');
@@ -219,6 +259,15 @@ export function IntegrationsPage() {
         }
       />
 
+      <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-5 text-sm dark:border-indigo-500/30 dark:bg-indigo-950/30">
+        <h2 className="font-semibold text-slate-900 dark:text-slate-100">让任务安全读取 Vault 密钥</h2>
+        <ol className="mt-3 grid gap-3 text-xs leading-5 text-slate-600 dark:text-slate-300 sm:grid-cols-3">
+          <li><strong>1. 保存凭据</strong><br />在 Vault 中启用 KV v2，创建应用 Secret，例如 secret/apps/postgres。</li>
+          <li><strong>2. 配置读取权限</strong><br />添加 Role，只授权应用所需的路径，再点击「应用联动」使配置生效。</li>
+          <li><strong>3. 在 Job 中引用</strong><br />在 vault 块填写 Role 名称，使用 template 读取密钥；密码无需写入 Job。</li>
+        </ol>
+      </div>
+
       {items.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {items.map((it) => (
@@ -229,7 +278,7 @@ export function IntegrationsPage() {
               onClick={() => void selectItem(it.id)}
             >
               <span>{it.name}</span>
-              <span className="opacity-75">({it.status})</span>
+              <StatusBadge value={it.status} />
             </Button>
           ))}
         </div>
@@ -262,16 +311,9 @@ export function IntegrationsPage() {
                   >
                     <TermLabel term="Plan 预览" tip="对比 Nomad JWKS、Vault JWT Auth 挂载、Role 与 Policy 期望状态与当前线上状态的差异。" />
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={() =>
-                      void apiPost(`/api/v1/integrations/${selected.id}/apply`, {})
-                        .then((r) => r.task?.id && openTask(r.task.id, `Apply 联动: ${selected.name}`))
-                        .catch((ex) => toast.error(ex.message))
-                    }
-                  >
-                    一键 Apply
+                  <Button size="sm" variant="primary" loading={applying} disabled={applyPending || deletePending}
+                    onClick={() => void applyIntegration()}>
+                    {applyPending ? '正在应用…' : '应用联动'}
                   </Button>
                   <Button
                     size="sm"
@@ -318,7 +360,7 @@ export function IntegrationsPage() {
                     <div>
                       <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">{r.role_name}</span>
                       <span className="ml-2 text-slate-500">
-                        mode: {r.policy_mode} · paths: {(r.secret_paths || []).join(', ')}
+                        {r.policy_mode === 'explicit' ? '指定路径' : '按任务隔离'} · {(r.secret_paths || []).join(', ')}
                       </span>
                     </div>
                     {isAdmin && (
@@ -333,7 +375,7 @@ export function IntegrationsPage() {
                         >
                           示例 Job
                         </Button>
-                        <Button size="sm" variant="danger" onClick={() => void deleteRole(r)}>
+                        <Button size="sm" variant="danger" aria-label={`删除 Role ${r.role_name}`} onClick={() => void deleteRole(r)}>
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
@@ -392,14 +434,14 @@ export function IntegrationsPage() {
 
       <Modal open={showRole} title="添加工作负载 Role" onClose={() => setShowRole(false)}>
         <form onSubmit={addRole} className="space-y-3 text-xs">
-          <Input label="Role 名称" required value={roleForm.role_name} onChange={(e) => setRoleForm({ ...roleForm, role_name: e.target.value })} />
+          <Input label="Role 名称" placeholder="例如 postgres，在 Job 的 vault.role 中使用" required value={roleForm.role_name} onChange={(e) => setRoleForm({ ...roleForm, role_name: e.target.value })} />
           <Select label="Policy 模式" value={roleForm.policy_mode} onChange={(e) => setRoleForm({ ...roleForm, policy_mode: e.target.value })}>
             <option value="explicit">explicit（固定路径列表）</option>
             <option value="templated">templated（ACL 模板变量）</option>
           </Select>
-          <Input label="Secret 路径或挂载（逗号分隔，如 secret/data/*）" required value={roleForm.secret_paths} onChange={(e) => setRoleForm({ ...roleForm, secret_paths: e.target.value })} />
+          <Input label={roleForm.policy_mode === 'templated' ? 'KV 挂载名称' : '允许读取的 Secret 路径'} placeholder={roleForm.policy_mode === 'templated' ? '例如 secret' : '例如 secret/apps/postgres'} hint={roleForm.policy_mode === 'templated' ? '填写 KV 挂载名称，多个用逗号分隔；权限按 Namespace 和 Job 自动隔离。' : '填写「挂载/密钥路径」，无需加 data/。多个路径用逗号分隔，建议精确授权。'} required value={roleForm.secret_paths} onChange={(e) => setRoleForm({ ...roleForm, secret_paths: e.target.value })} />
           <Input label="允许的 Nomad Namespace" required value={roleForm.bound_namespace} onChange={(e) => setRoleForm({ ...roleForm, bound_namespace: e.target.value })} />
-          <Input label="Token Period" value={roleForm.token_period} onChange={(e) => setRoleForm({ ...roleForm, token_period: e.target.value })} />
+          <Input label="Token 续期周期" value={roleForm.token_period} onChange={(e) => setRoleForm({ ...roleForm, token_period: e.target.value })} />
           <div className="flex justify-end gap-2">
             <Button onClick={() => setShowRole(false)}>取消</Button>
             <Button type="submit" variant="primary">保存</Button>

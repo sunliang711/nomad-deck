@@ -721,11 +721,11 @@ func (s *Service) InstallDocker(ctx context.Context, actor audit.Actor, nodeID s
 	case !adopt && d.node.DockerMode != "absent":
 		return nil, conflict("docker_present", "主机已安装 Docker（%s 模式）", d.node.DockerMode)
 	}
-	if in.Version == "" {
-		in.Version = d.effective().Version
-	}
-	if err := validDockerVersion(in.Version); err != nil {
-		return nil, err
+	in.Version = dockerInstallVersion(in.Version, d.effective().Version)
+	if in.Version != "latest" {
+		if err := validDockerVersion(in.Version); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := dockerTarget(d.node); err != nil {
 		return nil, err
@@ -744,11 +744,33 @@ func (s *Service) InstallDocker(ctx context.Context, actor audit.Actor, nodeID s
 	task, err := s.Ops.Submit(ctx, ops.Spec{Action: action, TargetType: "node", TargetID: nodeID, Locks: s.dockerLocks(d),
 		TriggeredBy: actor.Name, Params: map[string]any{"version": in.Version, "use_proxy": hc.UseProxy},
 		Run: func(ctx context.Context, t *ops.Task) error {
-			step, err := t.Step("下载并校验 Docker "+in.Version, "")
+			version := in.Version
+			step, err := t.Step("下载并校验 Docker "+version, "")
 			if err != nil {
 				return err
 			}
-			arts, err := s.fetchDocker(ctx, step, hc, d.node, in.Version)
+			// 留空时从已验签的官方仓库索引选择最新版，实际安装与记录使用解析后的版本。
+			if version == "latest" {
+				target, targetErr := dockerTarget(d.node)
+				if targetErr != nil {
+					step.Finish(targetErr, nil)
+					return targetErr
+				}
+				index, indexErr := s.Releases.Docker(ctx).Index(ctx, hc.Client, target, step.Log())
+				if indexErr != nil {
+					step.Finish(indexErr, nil)
+					return indexErr
+				}
+				versions := index.EngineVersions()
+				if len(versions) == 0 {
+					err := badRequest("Docker 官方仓库中没有适用于该主机的版本")
+					step.Finish(err, nil)
+					return err
+				}
+				version = versions[0]
+				step.Logf("Resolved Docker version: %s", version)
+			}
+			arts, err := s.fetchDocker(ctx, step, hc, d.node, version)
 			step.Finish(err, nil)
 			if err != nil {
 				return err
@@ -763,7 +785,7 @@ func (s *Service) InstallDocker(ctx context.Context, actor audit.Actor, nodeID s
 					return err
 				}
 			}
-			err = s.installDockerOn(ctx, t, nc, d, arts, in.Version)
+			err = s.installDockerOn(ctx, t, nc, d, arts, version)
 			return err
 		}})
 	if err != nil {
@@ -772,6 +794,15 @@ func (s *Service) InstallDocker(ctx context.Context, actor audit.Actor, nodeID s
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: action, ResourceType: "node", ResourceID: nodeID,
 		ResourceName: d.node.Name, OperationTaskID: task.ID, Summary: map[string]any{"version": in.Version, "use_proxy": hc.UseProxy}})
 	return task, nil
+}
+
+func dockerInstallVersion(requested, configured string) string {
+	for _, value := range []string{requested, configured} {
+		if version := strings.TrimSpace(value); version != "" {
+			return version
+		}
+	}
+	return "latest"
 }
 
 // DockerUpgradeKind classifies an upgrade.

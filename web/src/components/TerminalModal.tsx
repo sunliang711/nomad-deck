@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { apiPost, wsURL } from '../lib/api';
-import { ErrorAlert, Modal } from './UI';
+import { Button, ErrorAlert, Modal } from './UI';
 
 const utf8Encoder = new TextEncoder();
 
@@ -47,6 +47,7 @@ export function TerminalModal({
   const containerRef = useRef<HTMLDivElement>(null);
   const [err, setErr] = useState('');
   const [status, setStatus] = useState('连接中...');
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     if (!open || !clusterId || !allocId || !task) return;
@@ -137,14 +138,15 @@ export function TerminalModal({
       ws?.close();
       term?.dispose();
     };
-  }, [open, clusterId, allocId, task, action, JSON.stringify(command)]);
+  }, [open, clusterId, allocId, task, action, JSON.stringify(command), revision]);
 
   return (
     <Modal open={open} title={title || `交互式终端 (${task})`} onClose={onClose} wide>
       <div className="space-y-3">
-        <div className="flex items-center justify-between text-xs text-slate-500">
-          <span>Allocation: {allocId}</span>
-          <span>状态：{status}</span>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+          <span className="break-all">Allocation: {allocId}</span>
+          <span role="status">状态：{status}</span>
+          {(err || status.startsWith('已断开')) && <Button size="sm" onClick={() => setRevision((value) => value + 1)}>重新连接</Button>}
         </div>
         <ErrorAlert message={err} />
         <div ref={containerRef} className="h-[420px] w-full overflow-hidden rounded bg-slate-950 p-1" />

@@ -783,19 +783,21 @@ export function VaultPage() {
                 </div>
               </Card>
 
-              <Card title="KV v2 Secret 浏览">
+              <Card title="应用密钥 · KV v2">
                 <div className="space-y-3 text-xs">
+                  <p className="leading-5 text-slate-500">先启用密钥存储空间（挂载），再填写密钥路径并新建 Secret。例如挂载 secret、路径 apps/postgres，可用于保存数据库凭据。</p>
                   {isAdmin && (
                     <Button size="sm" onClick={() => setShowKVMount(true)}>启用 KV v2 挂载</Button>
                   )}
-                  <div className="flex gap-2">
-                    <Select value={kvMount} onChange={(e) => setKvMount(e.target.value)}>
+                  <div className="grid gap-3 sm:grid-cols-[1fr_1.4fr_auto] sm:items-end">
+                    <Select label="密钥存储空间" value={kvMount} onChange={(e) => setKvMount(e.target.value)}>
                       {mounts.map((m: any) => (
                         <option key={m.path || m} value={m.path || m}>{m.path || m}</option>
                       ))}
                     </Select>
-                    <Input placeholder="路径（可空）" value={kvPath} onChange={(e) => setKvPath(e.target.value)} />
+                    <Input label="密钥路径" placeholder="例如 apps/postgres；留空浏览根目录" value={kvPath} onChange={(e) => setKvPath(e.target.value)} />
                     <Button
+                      disabled={!kvMount}
                       onClick={() =>
                         void apiGet(`/api/v1/vault/${selectedId}/kv/list?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(kvPath)}`)
                           .then((r) => setKvKeys(r.keys || []))
@@ -844,7 +846,7 @@ export function VaultPage() {
                   {isAdmin && kvItem && (
                     <div className="space-y-2 border-t border-slate-200 pt-2 dark:border-slate-800">
                       <div className="font-mono font-semibold">{kvItem.path} (v{kvItem.cas})</div>
-                      <CodeEditor value={kvItem.data} onChange={(v) => setKvItem({ ...kvItem, data: v })} height="180px" />
+                      <CodeEditor label="Secret 数据（JSON）" value={kvItem.data} onChange={(v) => setKvItem({ ...kvItem, data: v })} height="180px" />
                       <Button
                         variant="primary"
                         onClick={() => {

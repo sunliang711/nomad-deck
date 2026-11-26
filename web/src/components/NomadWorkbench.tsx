@@ -32,6 +32,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
   const [filePreview, setFilePreview] = useState<{ path: string; text: string } | null>(null);
   const [allocLogs, setAllocLogs] = useState('');
   const [logTask, setLogTask] = useState('');
+  const [logType, setLogType] = useState('stdout');
   const [logRevision, setLogRevision] = useState(0);
   const [terminal, setTerminal] = useState<{ allocId: string; task: string; action?: string } | null>(null);
 
@@ -216,7 +217,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
     if (!selectedAlloc?.ID || !logTask) return;
     setAllocLogs('');
     const stop = openSSE(
-      `/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/logs/stream?task=${encodeURIComponent(logTask)}&type=stdout&follow=true`,
+      `/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/logs/stream?task=${encodeURIComponent(logTask)}&type=${logType}&follow=true`,
       {
         onEvent: (ev, d) => {
           if (ev === 'log' && d?.data) {
@@ -230,7 +231,7 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
       },
     );
     return stop;
-  }, [clusterId, selectedAlloc?.ID, logTask, logRevision]);
+  }, [clusterId, selectedAlloc?.ID, logTask, logType, logRevision]);
 
   return (
     <div className="space-y-4">
@@ -512,9 +513,15 @@ export function NomadWorkbench({ clusterId }: { clusterId: string }) {
 
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                   <div>
-                    <div className="mb-1 font-semibold">实时日志 (stdout)</div>
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold">实时日志</span>
+                      <select aria-label="日志输出流" value={logType} onChange={(e) => setLogType(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-950">
+                        <option value="stdout">标准输出 · stdout</option>
+                        <option value="stderr">错误与服务日志 · stderr</option>
+                      </select>
+                    </div>
                     <pre className="h-56 overflow-auto rounded bg-slate-950 p-2.5 font-mono text-[11px] text-slate-100 whitespace-pre-wrap">
-                      {allocLogs || '等待日志...'}
+                      {allocLogs || '等待日志… 若没有输出，请尝试切换 stdout / stderr。'}
                     </pre>
                   </div>
 

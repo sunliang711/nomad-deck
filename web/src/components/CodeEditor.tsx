@@ -9,11 +9,13 @@ export function CodeEditor({
   onChange,
   readOnly = false,
   height = '340px',
+  label = '代码编辑器',
 }: {
   value: string;
   onChange?: (val: string) => void;
   readOnly?: boolean;
   height?: string;
+  label?: string;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -55,6 +57,7 @@ export function CodeEditor({
         keymap.of([...defaultKeymap, ...historyKeymap]),
         editorTheme,
         EditorState.readOnly.of(readOnly),
+        EditorView.contentAttributes.of({ 'aria-label': label }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && onChangeRef.current) {
             onChangeRef.current(update.state.doc.toString());
@@ -68,7 +71,7 @@ export function CodeEditor({
       view.destroy();
       viewRef.current = null;
     };
-  }, [readOnly, height, theme]);
+  }, [readOnly, height, theme, label]);
 
   useEffect(() => {
     const view = viewRef.current;

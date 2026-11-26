@@ -193,12 +193,7 @@ func (s *Service) dialNomad(ctx context.Context, t *Ticket) (*websocket.Conn, er
 		q.Set("command", string(cmd))
 	}
 	u.RawQuery = q.Encode()
-	d := websocket.Dialer{HandshakeTimeout: 15 * time.Second}
-	if tr, ok := c.HTTP.Transport.(*http.Transport); ok && tr.TLSClientConfig != nil {
-		d.TLSClientConfig = tr.TLSClientConfig.Clone()
-	} else if u.Scheme == "wss" {
-		d.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-	}
+	d := nomadWebSocketDialer(c.HTTP)
 	h := http.Header{}
 	h.Set("X-Nomad-Token", c.Token)
 	conn, resp, err := d.DialContext(ctx, u.String(), h)
@@ -209,6 +204,16 @@ func (s *Service) dialNomad(ctx context.Context, t *Ticket) (*websocket.Conn, er
 		return nil, err
 	}
 	return conn, nil
+}
+
+func nomadWebSocketDialer(client *http.Client) websocket.Dialer {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if tr, ok := client.Transport.(*http.Transport); ok && tr.TLSClientConfig != nil {
+		cfg = tr.TLSClientConfig.Clone()
+	}
+	// WebSocket 使用 HTTP/1.1 Upgrade；保留 CA 与客户端证书，避免复用 HTTP/2 的 ALPN。
+	cfg.NextProtos = []string{"http/1.1"}
+	return websocket.Dialer{HandshakeTimeout: 15 * time.Second, TLSClientConfig: cfg}
 }
 
 // Relay forwards frames between the browser and Nomad until either side

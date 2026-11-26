@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowRight, Copy, Lock, Plus, RefreshCw, Shield, Unlock } from 'lucide-react';
+import { ArrowRight, Copy, ExternalLink, Lock, Plus, RefreshCw, Shield, Unlock } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { copyText } from '../lib/clipboard';
 import { buildTemplateData, parseKVPath } from '../lib/vaultHelpers';
@@ -79,6 +79,7 @@ export function VaultPage() {
   const [err, setErr] = useState('');
   const [rootToken, setRootToken] = useState('');
   const [revokingRootToken, setRevokingRootToken] = useState(false);
+  const [uiLoginModal, setUiLoginModal] = useState<{ url: string; targetLabel: string; wrapTTL: number; tokenTTL: string } | null>(null);
   const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(null);
 
   // Create wizard
@@ -245,6 +246,7 @@ export function VaultPage() {
 
   useEffect(() => {
     setRootToken('');
+    setUiLoginModal(null);
     setUninstallPlan(null);
     setPolicyEdit({ name: '', rules: '' });
     setSelectedPolicy('');
@@ -281,6 +283,24 @@ export function VaultPage() {
       run: async (pw) => {
         const r = await apiPost(`/api/v1/vault/${selectedId}/root-token`, { current_password: pw });
         setRootToken(r.root_token || '');
+      },
+    });
+  };
+
+  const handleOpenWebUI = (targetUrl: string, label?: string) => {
+    setPwAction({
+      title: `免密登录 Vault Web UI${label ? ` · ${label}` : ''}`,
+      run: async (pw) => {
+        const r = await apiPost(`/api/v1/vault/${selectedId}/ui-login`, {
+          current_password: pw,
+          target_url: targetUrl,
+        });
+        setUiLoginModal({
+          url: r.login_url,
+          targetLabel: label || targetUrl,
+          wrapTTL: Number(r.wrap_ttl_seconds || 120),
+          tokenTTL: r.token_ttl || '1h',
+        });
       },
     });
   };
@@ -440,6 +460,7 @@ export function VaultPage() {
                     .then((r) => { toast.success(r.report?.message || '已核对'); return loadDetail(); })
                     .catch((ex) => setErr(ex.message))
                 }
+                onOpenWebUI={handleOpenWebUI}
                 onUninstall={handleUninstall}
                 onOpenJoin={() => { setJoinNodeId(''); setConfirmSwap(false); setShowJoin(true); }}
                 onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Vault 日志: ${n.name}`)}
@@ -1193,6 +1214,41 @@ export function VaultPage() {
           if (pwAction) await pwAction.run(pw);
         }}
       />
+
+      <Modal
+        open={Boolean(uiLoginModal)}
+        title={`免密登录 Vault Web UI${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`}
+        onClose={() => setUiLoginModal(null)}
+        footer={
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button type="button" onClick={() => setUiLoginModal(null)}>关闭</Button>
+            {uiLoginModal && (
+              <a
+                href={uiLoginModal.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setUiLoginModal(null)}
+                className="primary-button"
+              >
+                <span>立即免密打开 Vault UI</span>
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            )}
+          </div>
+        }
+      >
+        {uiLoginModal && (
+          <div className="space-y-3 text-xs leading-5 text-slate-600 dark:text-slate-300">
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 px-3.5 py-2.5 text-indigo-950 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-100">
+              <p>已生成<strong>单次自毁信封链接</strong>（{uiLoginModal.wrapTTL} 秒内有效，拆封一次即作废）。</p>
+              <p className="mt-1">打开后会自动登录 Vault 原生后台，会话有效期为 <strong>{uiLoginModal.tokenTTL}</strong>，到期自动失效，无需手动吊销。</p>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              提示：如果节点使用自签名 TLS 证书，浏览器首次打开提示“证书风险”时点击“继续访问”后，页面仍会自动完成登录。
+            </p>
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={Boolean(rootToken)}

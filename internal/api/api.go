@@ -273,6 +273,7 @@ func (a *API) Handler() http.Handler {
 				r.Post("/vault/{id}/custody/recover-token", a.vaultRecoverToken)
 				r.Post("/vault/{id}/root-token", a.vaultGenerateRootToken)
 				r.Post("/vault/{id}/root-token/revoke", a.vaultRevokeRootToken)
+				r.Post("/vault/{id}/ui-login", a.vaultUILogin)
 				r.Post("/vault/{id}/rekey", a.vaultRekey)
 				r.Post("/vault/{id}/auth", a.vaultEnableAuth)
 				r.Delete("/vault/{id}/auth", a.vaultDisableAuth)

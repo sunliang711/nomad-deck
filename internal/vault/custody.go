@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -967,6 +968,95 @@ func (s *Service) GenerateRootToken(ctx context.Context, actor audit.Actor, clus
 	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "vault.root_token_generate", ResourceType: "cluster",
 		ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"generation": gen, "node": am.NodeName}})
 	return root, nil
+}
+
+// UILoginLink is a short-lived single-use Vault UI login URL.
+type UILoginLink struct {
+	LoginURL       string `json:"login_url"`
+	WrapTTLSeconds int    `json:"wrap_ttl_seconds"`
+	TokenTTL       string `json:"token_ttl"`
+}
+
+// CreateWrappedUILogin derives a temporary root token to mint a 1h Vault token
+// wrapped in a 120s single-use response-wrapping envelope, immediately revokes
+// the derived root token, and returns the Vault UI login URL.
+func (s *Service) CreateWrappedUILogin(ctx context.Context, actor audit.Actor, clusterID, targetURL string) (*UILoginLink, error) {
+	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if cl.InitState != db.InitInitialized {
+		return nil, conflict("not_initialized", "集群尚未完成初始化")
+	}
+	if cl.MaintenanceMode {
+		return nil, conflict("maintenance", "集群处于维护模式（%s）", cl.MaintenanceReason)
+	}
+	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	am, err := s.activeMember(ctx, cl, members)
+	if err != nil {
+		return nil, err
+	}
+	baseURL, err := resolveVaultUIBaseURL(cl, members, am, targetURL)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.client(cl, am, "")
+	if err != nil {
+		return nil, err
+	}
+	keys, gen, err := s.activeKeys(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	root, err := generateRoot(ctx, c, keys)
+	if err != nil {
+		_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "vault.ui_login_link", ResourceType: "cluster",
+			ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"generation": gen, "target_url": baseURL}, Err: err})
+		return nil, fmt.Errorf("生成免密登录链接失败：%w", err)
+	}
+	rc := c.WithToken(root)
+	wrapped, wrapErr := rc.CreateWrappedUIToken(ctx, "1h", "120s", "nomad-deck-ui-"+actor.Name)
+	revokeErr := rc.RevokeSelf(ctx)
+	if wrapErr != nil {
+		finalErr := errors.Join(wrapErr, revokeErr)
+		_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "vault.ui_login_link", ResourceType: "cluster",
+			ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"generation": gen, "target_url": baseURL}, Err: finalErr})
+		return nil, fmt.Errorf("生成免密登录链接失败：%w", finalErr)
+	}
+	if revokeErr != nil {
+		_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "vault.ui_login_link", ResourceType: "cluster",
+			ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"generation": gen, "target_url": baseURL}, Err: revokeErr})
+		return nil, fmt.Errorf("吊销临时 Root Token 失败：%w", revokeErr)
+	}
+	loginURL := strings.TrimRight(baseURL, "/") + "/ui/vault/auth?wrapped_token=" + url.QueryEscape(wrapped)
+	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "vault.ui_login_link", ResourceType: "cluster",
+		ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"generation": gen, "node": am.NodeName, "target_url": baseURL, "token_ttl": "1h"}})
+	return &UILoginLink{LoginURL: loginURL, WrapTTLSeconds: 120, TokenTTL: "1h"}, nil
+}
+
+func resolveVaultUIBaseURL(cl *cluster, members []*db.ClusterNode, am *db.ClusterNode, targetURL string) (string, error) {
+	req := strings.TrimRight(strings.TrimSpace(targetURL), "/")
+	if req == "" {
+		if pub := strings.TrimRight(strings.TrimSpace(cl.PublicAPIURL), "/"); pub != "" {
+			return pub, nil
+		}
+		return strings.TrimRight(strings.TrimSpace(am.APIAddr), "/"), nil
+	}
+	if pub := strings.TrimRight(strings.TrimSpace(cl.PublicAPIURL), "/"); pub != "" && req == pub {
+		return pub, nil
+	}
+	for _, m := range members {
+		if api := strings.TrimRight(strings.TrimSpace(m.APIAddr), "/"); api != "" && req == api {
+			return api, nil
+		}
+		if adv := strings.TrimRight(strings.TrimSpace(m.AdvertiseAddr), "/"); adv != "" && req == adv {
+			return adv, nil
+		}
+	}
+	return "", badRequest("目标地址不属于当前 Vault 集群")
 }
 
 // RevokeToken revokes a caller-supplied Vault token against the active node.

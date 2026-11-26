@@ -159,7 +159,11 @@ func IsInvalidKey(err error) bool {
 // Request performs an API call against /v1/<path>. body may be nil, an
 // io.Reader (sent raw) or any JSON-encodable value; out may be nil.
 func (c *Client) Request(ctx context.Context, method, path string, body, out any) error {
-	resp, err := c.send(ctx, method, path, body)
+	return c.requestWithHeaders(ctx, method, path, nil, body, out)
+}
+
+func (c *Client) requestWithHeaders(ctx context.Context, method, path string, headers map[string]string, body, out any) error {
+	resp, err := c.sendWithHeaders(ctx, method, path, headers, body)
 	if err != nil {
 		return err
 	}
@@ -182,6 +186,10 @@ func (c *Client) Request(ctx context.Context, method, path string, body, out any
 }
 
 func (c *Client) send(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	return c.sendWithHeaders(ctx, method, path, nil, body)
+}
+
+func (c *Client) sendWithHeaders(ctx context.Context, method, path string, headers map[string]string, body any) (*http.Response, error) {
 	var rdr io.Reader
 	contentType := ""
 	switch b := body.(type) {
@@ -206,6 +214,9 @@ func (c *Client) send(ctx context.Context, method, path string, body any) (*http
 	}
 	if c.Token != "" {
 		req.Header.Set("X-Vault-Token", c.Token)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	req.Header.Set("X-Vault-Request", "true")
 	return c.HTTP.Do(req)
@@ -543,6 +554,37 @@ func (c *Client) CreateOrphanToken(ctx context.Context, policies []string, perio
 		return "", 0, errors.New("vault returned no token")
 	}
 	return r.Auth.ClientToken, time.Duration(r.Auth.LeaseDuration) * time.Second, nil
+}
+
+// CreateWrappedUIToken creates a short-lived token wrapped in a single-use
+// response-wrapping envelope suitable for Vault UI ?wrapped_token= login.
+func (c *Client) CreateWrappedUIToken(ctx context.Context, ttl, wrapTTL, displayName string) (string, error) {
+	var r struct {
+		WrapInfo struct {
+			Token string `json:"token"`
+		} `json:"wrap_info"`
+	}
+	err := c.requestWithHeaders(
+		ctx,
+		http.MethodPost,
+		"auth/token/create",
+		map[string]string{"X-Vault-Wrap-TTL": wrapTTL},
+		map[string]any{
+			"policies":          []string{"root"},
+			"ttl":               ttl,
+			"display_name":      displayName,
+			"no_default_policy": false,
+			"renewable":         true,
+		},
+		&r,
+	)
+	if err != nil {
+		return "", err
+	}
+	if r.WrapInfo.Token == "" {
+		return "", errors.New("vault did not return a wrapping token")
+	}
+	return r.WrapInfo.Token, nil
 }
 
 // LookupSelf returns the calling token's metadata.

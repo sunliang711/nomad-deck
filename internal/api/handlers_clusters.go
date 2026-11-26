@@ -928,6 +928,26 @@ func (a *API) vaultRevokeRootToken(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (a *API) vaultUILogin(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		CurrentPassword string `json:"current_password"`
+		TargetURL       string `json:"target_url"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if _, ok := a.vaultCluster(w, r); !ok || !a.verifyPassword(w, r, in.CurrentPassword) {
+		return
+	}
+	link, err := a.Vault.CreateWrappedUILogin(r.Context(), a.actor(r), chi.URLParam(r, "id"), in.TargetURL)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, link)
+}
+
 func (a *API) vaultRekey(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		vault.RekeyInput

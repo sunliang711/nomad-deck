@@ -31,6 +31,7 @@ interface ClusterOpsSectionProps {
   onDoctor: () => Promise<unknown> | void;
   onReconcile: () => Promise<unknown> | void;
   onRevealRootToken?: () => Promise<unknown> | void;
+  onOpenWebUI?: (targetUrl: string, label?: string) => void;
   onUninstall?: () => Promise<unknown> | void;
   onOpenJoin: () => void;
   onOpenLogs: (node: any) => void;
@@ -66,6 +67,7 @@ export function ClusterOpsSection({
   onDoctor,
   onReconcile,
   onRevealRootToken,
+  onOpenWebUI,
   onUninstall,
   onOpenJoin,
   onOpenLogs,
@@ -352,7 +354,20 @@ export function ClusterOpsSection({
                 <dt className="text-slate-500">统一入口</dt>
                 <dd className="min-w-0 break-all">
                   {cluster.public_api_url ? (
-                    <ExternalUrlLink url={cluster.public_api_url} />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <ExternalUrlLink url={cluster.public_api_url} />
+                      {isVault && isAdmin && initialized && onOpenWebUI && /^https?:\/\//i.test(cluster.public_api_url) && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenWebUI(cluster.public_api_url, '统一入口')}
+                          title="验证管理员密码后生成 1 小时有效的 Vault 免密登录链接"
+                          className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
+                        >
+                          <KeyRound className="h-3 w-3" />
+                          <span>免密进 UI</span>
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <span className="text-xs text-slate-500">未配置，直接使用下方节点地址</span>
                   )}
@@ -475,8 +490,19 @@ export function ClusterOpsSection({
                       <tr key={n.node_id}>
                         <td className="py-3 pr-4">
                           <div className="font-medium text-slate-900 dark:text-slate-100">{n.name}</div>
-                          <div>
+                          <div className="flex flex-wrap items-center gap-2">
                             <ExternalUrlLink url={n.api_addr || n.advertise_addr} />
+                            {isVault && isAdmin && initialized && nodeInstalled && onOpenWebUI && /^https?:\/\//i.test(String(n.api_addr || n.advertise_addr || '')) && (
+                              <button
+                                type="button"
+                                onClick={() => onOpenWebUI(String(n.api_addr || n.advertise_addr), n.name)}
+                                title="验证管理员密码后生成 1 小时有效的 Vault 免密登录链接"
+                                className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
+                              >
+                                <KeyRound className="h-3 w-3" />
+                                <span>免密进 UI</span>
+                              </button>
+                            )}
                           </div>
                         </td>
                         <td className="py-3 pr-4">

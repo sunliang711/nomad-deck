@@ -5,7 +5,6 @@ import { useAuth } from '../lib/auth';
 import { useToast } from '../components/Toast';
 import { useConfirm, type BeforeNavigateDetail } from '../components/ConfirmDialog';
 import {
-  Badge,
   Button,
   Card,
   ErrorAlert,
@@ -89,7 +88,6 @@ export function SettingsPage() {
     use_for_self_update: false,
   });
   const [savedProxySnap, setSavedProxySnap] = useState('');
-  const [proxyTest, setProxyTest] = useState<any>(null);
   const [masterKey, setMasterKey] = useState<any>(null);
   const [showRotatePw, setShowRotatePw] = useState(false);
   const [err, setErr] = useState('');
@@ -261,7 +259,6 @@ export function SettingsPage() {
             'proxy.use_for_self_update': false,
           }),
         ]);
-        setProxyTest(null);
         toast.success('已切换为直连模式（已关闭下载代理）');
       } else {
         await Promise.all([
@@ -301,7 +298,6 @@ export function SettingsPage() {
           'proxy.use_for_self_update': false,
         }),
       ]);
-      setProxyTest(null);
       toast.success('已清空下载代理配置');
       await load();
     } catch (ex: any) {
@@ -316,9 +312,40 @@ export function SettingsPage() {
     setTestingProxy(true);
     try {
       const res = await apiPost('/api/v1/settings/proxy/test', proxyPayload(true));
-      setProxyTest(res.report);
+      const rep = res.report || {};
+      const results = (rep.results || []) as Array<{
+        name: string;
+        ok: boolean;
+        status_code?: number;
+        latency_ms?: number;
+        error?: string;
+      }>;
+      const okCount = results.filter((r) => r.ok).length;
+      const details = results.map((r) =>
+        r.ok
+          ? `✓ ${r.name} · HTTP ${r.status_code ?? 200}${typeof r.latency_ms === 'number' ? ` (${r.latency_ms}ms)` : ''}`
+          : `✕ ${r.name} · ${r.error || '连接失败'}`,
+      );
+      if (rep.exit_ip) {
+        details.unshift(`出口 IP：${rep.exit_ip}`);
+      }
+      const title =
+        results.length === 0
+          ? '代理测试完成'
+          : okCount === results.length
+          ? `代理测试通过 (${okCount}/${results.length})`
+          : okCount > 0
+          ? `代理部分连通 (${okCount}/${results.length})`
+          : `代理测试失败 (0/${results.length})`;
+      if (okCount === results.length && results.length > 0) {
+        toast.success(title, { position: 'top-right', durationMs: 3000, details });
+      } else if (okCount > 0) {
+        toast.info(title, { position: 'top-right', durationMs: 3000, details });
+      } else {
+        toast.error(title, { position: 'top-right', durationMs: 3000, details });
+      }
     } catch (ex: any) {
-      toast.error(ex?.message || '代理测试失败');
+      toast.error(ex?.message || '代理测试失败', { position: 'top-right', durationMs: 3000 });
     } finally {
       setTestingProxy(false);
     }
@@ -442,178 +469,187 @@ export function SettingsPage() {
               title="下载代理（HTTP / HTTPS / SOCKS5）"
               actions={<StatusBadge value={proxy.configured ? 'enabled' : 'disabled'} label={proxy.configured ? '已启用自定义代理' : '直连'} />}
             >
-              <form onSubmit={saveProxy} className="space-y-5 text-xs">
-                <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+              <form onSubmit={saveProxy} className="space-y-6 max-w-4xl">
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                   作用于控制面拉取 Nomad / Vault 官方安装包、控制面 GitHub Release 自更新以及版本检查请求，保存后立即生效。
                 </p>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">出站模式</label>
-                  <div className="inline-flex rounded-lg border border-slate-300 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800">
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">出站方式</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button
                       type="button"
                       disabled={!isAdmin}
                       onClick={() => switchProxyMode('direct')}
-                      className={`px-4 py-2 text-xs font-medium transition border-r border-slate-300 dark:border-slate-700 ${
+                      className={`text-left rounded-xl border p-3.5 transition ${
                         proxy.mode === 'direct'
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-400 dark:bg-indigo-500/15'
+                          : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700'
                       }`}
                     >
-                      直连
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">直连网络</span>
+                        <span className={`h-2.5 w-2.5 rounded-full ${proxy.mode === 'direct' ? 'bg-indigo-600 dark:bg-indigo-400' : 'bg-slate-200 dark:bg-slate-700'}`} />
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">控制面直接访问官方下载源与 GitHub，适合出网畅通的环境。</p>
                     </button>
                     <button
                       type="button"
                       disabled={!isAdmin}
                       onClick={() => switchProxyMode('custom')}
-                      className={`px-4 py-2 text-xs font-medium transition ${
+                      className={`text-left rounded-xl border p-3.5 transition ${
                         proxy.mode === 'custom'
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-400 dark:bg-indigo-500/15'
+                          : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700'
                       }`}
                     >
-                      自定义下载代理
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">自定义下载代理</span>
+                        <span className={`h-2.5 w-2.5 rounded-full ${proxy.mode === 'custom' ? 'bg-indigo-600 dark:bg-indigo-400' : 'bg-slate-200 dark:bg-slate-700'}`} />
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">通过 HTTP / HTTPS / SOCKS5 代理出站，可单独测试连通性。</p>
                     </button>
                   </div>
                 </div>
 
                 {proxy.mode === 'custom' && (
-                  <>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">代理协议</label>
-                        <div className="inline-flex rounded-lg border border-slate-300 dark:border-slate-700 overflow-hidden bg-slate-50 dark:bg-slate-800 w-full">
-                          {(['http', 'https', 'socks5'] as const).map((proto) => (
-                            <button
-                              key={proto}
-                              type="button"
-                              disabled={!isAdmin}
-                              onClick={() => setProxy({ ...proxy, type: proto })}
-                              className={`flex-1 px-2.5 py-2 text-xs font-medium uppercase transition border-r last:border-r-0 border-slate-300 dark:border-slate-700 ${
-                                proxy.type === proto
-                                  ? 'bg-indigo-600 text-white'
-                                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
-                              }`}
-                            >
-                              {proto}
-                            </button>
-                          ))}
+                  <div className="space-y-5">
+                    <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/30 p-4 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">1. 代理服务器地址</span>
+                        <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                          可直接粘贴 <code className="font-mono">http://user:pass@host:port</code> 自动拆分
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5 items-end">
+                        <div className="sm:col-span-3">
+                          <Select
+                            label="协议"
+                            disabled={!isAdmin}
+                            value={proxy.type}
+                            onChange={(e) => setProxy({ ...proxy, type: e.target.value })}
+                          >
+                            <option value="http">HTTP</option>
+                            <option value="https">HTTPS</option>
+                            <option value="socks5">SOCKS5</option>
+                          </Select>
+                        </div>
+                        <div className="sm:col-span-6">
+                          <Input
+                            label="主机地址"
+                            required
+                            disabled={!isAdmin}
+                            placeholder="proxy.example.com 或粘贴完整代理 URL"
+                            value={proxy.host}
+                            onPaste={(e) => {
+                              const text = e.clipboardData?.getData('text') || '';
+                              if (pasteProxyURL(text)) e.preventDefault();
+                            }}
+                            onChange={(e) => setProxy({ ...proxy, host: e.target.value })}
+                          />
+                        </div>
+                        <div className="sm:col-span-3">
+                          <Input
+                            label="端口"
+                            type="number"
+                            required
+                            disabled={!isAdmin}
+                            placeholder="3128"
+                            value={proxy.port}
+                            onChange={(e) => setProxy({ ...proxy, port: Number(e.target.value) })}
+                          />
                         </div>
                       </div>
-                      <Input
-                        label="主机（支持直接粘贴 http://user:pass@host:port）"
-                        required
-                        disabled={!isAdmin}
-                        placeholder="proxy.example.com"
-                        value={proxy.host}
-                        onPaste={(e) => {
-                          const text = e.clipboardData?.getData('text') || '';
-                          if (pasteProxyURL(text)) e.preventDefault();
-                        }}
-                        onChange={(e) => setProxy({ ...proxy, host: e.target.value })}
-                      />
-                      <Input
-                        label="端口"
-                        type="number"
-                        required
-                        disabled={!isAdmin}
-                        value={proxy.port}
-                        onChange={(e) => setProxy({ ...proxy, port: Number(e.target.value) })}
-                      />
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <Input
-                        label="用户名（可选）"
-                        disabled={!isAdmin}
-                        value={proxy.username}
-                        onChange={(e) => setProxy({ ...proxy, username: e.target.value })}
-                      />
-                      <SecretInput
-                        label="密码（可选）"
-                        disabled={!isAdmin}
-                        value={proxy.password}
-                        hasStoredValue={Boolean(proxy.password_set)}
-                        resetKey={proxy.password_set}
-                        onChangeValue={(v) => setProxy({ ...proxy, password: v })}
-                        onRevealStored={
-                          isAdmin
-                            ? async () => {
-                                const r = await apiPost('/api/v1/settings/proxy/reveal', {});
-                                return r.password || '';
-                              }
-                            : undefined
-                        }
-                      />
-                    </div>
-                    <Input
-                      label={<TermLabel term="no_proxy（逗号分隔）" tip="不经过代理直连的主机名、IP 或 CIDR，多个值用英文逗号分隔。" />}
-                      disabled={!isAdmin}
-                      value={proxy.no_proxy}
-                      onChange={(e) => setProxy({ ...proxy, no_proxy: e.target.value })}
-                    />
 
-                    <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/50 p-3.5 space-y-2.5">
-                      <div className="font-medium text-slate-700 dark:text-slate-200">默认适用范围</div>
-                      <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-                        <div className="flex items-center gap-2.5">
+                    <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/30 p-4 space-y-4">
+                      <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">2. 身份认证与直连例外（可选）</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <Input
+                          label="用户名"
+                          disabled={!isAdmin}
+                          placeholder="无需认证可留空"
+                          value={proxy.username}
+                          onChange={(e) => setProxy({ ...proxy, username: e.target.value })}
+                        />
+                        <SecretInput
+                          label="密码"
+                          disabled={!isAdmin}
+                          value={proxy.password}
+                          hasStoredValue={Boolean(proxy.password_set)}
+                          resetKey={proxy.password_set}
+                          onChangeValue={(v) => setProxy({ ...proxy, password: v })}
+                          onRevealStored={
+                            isAdmin
+                              ? async () => {
+                                  const r = await apiPost('/api/v1/settings/proxy/reveal', {});
+                                  return r.password || '';
+                                }
+                              : undefined
+                          }
+                        />
+                      </div>
+                      <Input
+                        label={<TermLabel term="直连例外（no_proxy）" tip="不经过代理直连的主机名、IP 或 CIDR，多个值用英文逗号分隔。" />}
+                        disabled={!isAdmin}
+                        placeholder="localhost,127.0.0.1,10.0.0.0/8,.corp.local"
+                        value={proxy.no_proxy}
+                        onChange={(e) => setProxy({ ...proxy, no_proxy: e.target.value })}
+                      />
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/30 p-4 space-y-3">
+                      <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">3. 默认适用范围</div>
+                      <div className="divide-y divide-slate-200/70 dark:divide-slate-800/80">
+                        <div className="flex items-center justify-between gap-4 py-2 first:pt-0">
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-slate-800 dark:text-slate-200">集群部署 / 升级与版本列表</div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">拉取 Nomad、Vault 与 Docker 官方安装包及版本清单时默认走代理</div>
+                          </div>
                           <Switch
                             checked={Boolean(proxy.use_for_releases)}
                             disabled={!isAdmin}
                             onChange={(v) => setProxy({ ...proxy, use_for_releases: v })}
                             label="默认用于集群部署 / 升级 / 版本列表"
                           />
-                          <span className="text-slate-600 dark:text-slate-300">默认用于集群部署 / 升级与版本列表</span>
                         </div>
-                        <div className="flex items-center gap-2.5">
+                        <div className="flex items-center justify-between gap-4 py-2 last:pb-0">
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-slate-800 dark:text-slate-200">控制面自更新与版本检查</div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">控制面检测新版本并从 GitHub Release 下载二进制包时默认走代理</div>
+                          </div>
                           <Switch
                             checked={Boolean(proxy.use_for_self_update)}
                             disabled={!isAdmin}
                             onChange={(v) => setProxy({ ...proxy, use_for_self_update: v })}
                             label="默认用于控制面自更新"
                           />
-                          <span className="text-slate-600 dark:text-slate-300">默认用于控制面自更新与检查</span>
                         </div>
                       </div>
                     </div>
-                  </>
+                  </div>
                 )}
 
                 {isAdmin && (
-                  <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200 dark:border-slate-800">
                     <span role="status" className={`text-xs ${proxyDirty ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400'}`}>
-                      {proxyDirty ? '代理配置有未保存更改' : '当前无未保存更改'}
+                      {proxyDirty ? '代理配置有未保存更改' : '已与服务器配置同步'}
                     </span>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       {proxy.configured && (
                         <Button variant="danger" loading={clearingProxy} onClick={() => void clearProxy()}>
                           清空代理
                         </Button>
                       )}
                       {proxy.mode === 'custom' && (
-                        <Button onClick={() => void testProxy()} loading={testingProxy}>
-                          {testingProxy ? '测试中...' : '用当前表单测试'}
+                        <Button type="button" onClick={() => void testProxy()} loading={testingProxy}>
+                          {testingProxy ? '测试中...' : '测试代理'}
                         </Button>
                       )}
                       <Button type="submit" variant="primary" loading={savingProxy} disabled={!proxyDirty && proxy.mode !== 'direct'}>
                         {savingProxy ? '保存中...' : '保存代理'}
                       </Button>
                     </div>
-                  </div>
-                )}
-
-                {proxyTest && (
-                  <div className="space-y-1.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200/70 dark:border-slate-800 p-3.5">
-                    <div>
-                      出口 IP：<span className="font-mono font-medium">{proxyTest.exit_ip || '-'}</span>
-                    </div>
-                    {(proxyTest.results || []).map((c: any, i: number) => (
-                      <div key={i} className="flex items-center justify-between gap-2">
-                        <span>
-                          {c.name} ({c.url})
-                        </span>
-                        <Badge tone={c.ok ? 'green' : 'red'}>{c.ok ? `OK (${c.status_code})` : c.error}</Badge>
-                      </div>
-                    ))}
                   </div>
                 )}
               </form>

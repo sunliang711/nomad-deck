@@ -2,10 +2,18 @@ import React, { createContext, useCallback, useContext, useState } from 'react';
 import { CheckCircle2, Info, X, XCircle } from 'lucide-react';
 
 type ToastKind = 'success' | 'error' | 'info';
+type ToastPosition = 'bottom-right' | 'top-right';
 
 export interface ToastAction {
   label: string;
   onClick: () => void;
+}
+
+export interface ToastOptions {
+  action?: ToastAction;
+  details?: string[];
+  durationMs?: number;
+  position?: ToastPosition;
 }
 
 interface ToastItem {
@@ -13,17 +21,29 @@ interface ToastItem {
   kind: ToastKind;
   text: string;
   action?: ToastAction;
+  details?: string[];
+  position: ToastPosition;
 }
 
+type ToastArg = ToastAction | ToastOptions;
+
 interface ToastContextValue {
-  success: (text: string, action?: ToastAction) => void;
-  error: (text: string, action?: ToastAction) => void;
-  info: (text: string, action?: ToastAction) => void;
+  success: (text: string, arg?: ToastArg) => void;
+  error: (text: string, arg?: ToastArg) => void;
+  info: (text: string, arg?: ToastArg) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
 let nextToastId = 1;
+
+function normalizeToastArg(arg?: ToastArg): ToastOptions {
+  if (!arg) return {};
+  if ('label' in arg && 'onClick' in arg) {
+    return { action: arg };
+  }
+  return arg;
+}
 
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [items, setItems] = useState<ToastItem[]>([]);
@@ -33,11 +53,16 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   const push = useCallback(
-    (kind: ToastKind, text: string, action?: ToastAction) => {
+    (kind: ToastKind, text: string, arg?: ToastArg) => {
       if (!text) return;
+      const opts = normalizeToastArg(arg);
+      const position: ToastPosition = opts.position || 'bottom-right';
       const id = nextToastId++;
-      setItems((prev) => [...prev.slice(-4), { id, kind, text, action }]);
-      const duration = kind === 'error' ? 6000 : 4000;
+      setItems((prev) => [
+        ...prev.slice(-4),
+        { id, kind, text, action: opts.action, details: opts.details, position },
+      ]);
+      const duration = opts.durationMs ?? (kind === 'error' ? 6000 : 4000);
       window.setTimeout(() => {
         dismiss(id);
       }, duration);
@@ -46,20 +71,21 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
 
   const value: ToastContextValue = {
-    success: useCallback((text: string, action?: ToastAction) => push('success', text, action), [push]),
-    error: useCallback((text: string, action?: ToastAction) => push('error', text, action), [push]),
-    info: useCallback((text: string, action?: ToastAction) => push('info', text, action), [push]),
+    success: useCallback((text: string, arg?: ToastArg) => push('success', text, arg), [push]),
+    error: useCallback((text: string, arg?: ToastArg) => push('error', text, arg), [push]),
+    info: useCallback((text: string, arg?: ToastArg) => push('info', text, arg), [push]),
   };
 
-  return (
-    <ToastContext.Provider value={value}>
-      {children}
+  const renderSlot = (position: ToastPosition, positionClass: string) => {
+    const slotItems = items.filter((item) => item.position === position);
+    if (slotItems.length === 0) return null;
+    return (
       <div
         aria-live="polite"
         aria-relevant="additions"
-        className="fixed bottom-4 right-4 sm:bottom-5 sm:right-5 z-[100] flex flex-col gap-2 max-w-md w-[calc(100vw-2rem)] pointer-events-none"
+        className={`fixed ${positionClass} z-[110] flex flex-col gap-2 max-w-md w-[calc(100vw-2rem)] pointer-events-none`}
       >
-        {items.map((item) => {
+        {slotItems.map((item) => {
           const style =
             item.kind === 'success'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/95 dark:border-emerald-800 dark:text-emerald-100'
@@ -82,7 +108,16 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             >
               {icon}
               <div className="flex-1 min-w-0 break-words">
-                <span>{item.text}</span>
+                <div className="font-medium">{item.text}</div>
+                {item.details && item.details.length > 0 && (
+                  <ul className="mt-1 space-y-0.5 text-xs opacity-90">
+                    {item.details.map((line, idx) => (
+                      <li key={idx} className="truncate font-mono">
+                        {line}
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {item.action && (
                   <button
                     type="button"
@@ -90,7 +125,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                       item.action?.onClick();
                       dismiss(item.id);
                     }}
-                    className="ml-2.5 inline-flex items-center font-semibold underline underline-offset-2 hover:opacity-80"
+                    className="mt-1 inline-flex items-center font-semibold underline underline-offset-2 hover:opacity-80"
                   >
                     {item.action.label}
                   </button>
@@ -108,6 +143,14 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           );
         })}
       </div>
+    );
+  };
+
+  return (
+    <ToastContext.Provider value={value}>
+      {children}
+      {renderSlot('top-right', 'top-4 right-4 sm:top-5 sm:right-5')}
+      {renderSlot('bottom-right', 'bottom-4 right-4 sm:bottom-5 sm:right-5')}
     </ToastContext.Provider>
   );
 };

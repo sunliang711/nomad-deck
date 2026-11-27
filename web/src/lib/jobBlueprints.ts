@@ -188,6 +188,8 @@ EOT
           "local/traefik.yml:/etc/traefik/traefik.yml",
           "local/dynamic.yml:/etc/traefik/dynamic.yml",
           "local/acme:/acme",
+          # 启用 providers.nomad 时如需严格校验 Nomad TLS，可取消下方注释挂载 Nomad 节点 CA：
+          # "/opt/nomad-deck/nomad/etc/nomad.d/tls/ca.pem:/etc/ssl/nomad-ca.pem:ro",
         ]
       }
 
@@ -245,7 +247,8 @@ providers:
   #   endpoint:
   #     address: "https://127.0.0.1:4646"
   #     tls:
-  #       insecureSkipVerify: true
+  #       ca: /etc/ssl/nomad-ca.pem
+  #       # 若未挂载 Nomad CA，可改用 insecureSkipVerify: true
 
 # 开启阿里云 DNS-01 自动申请通配符证书（需注入 ALICLOUD_ACCESS_KEY / ALICLOUD_SECRET_KEY）：
 # certificatesResolvers:
@@ -672,7 +675,11 @@ EOT
         image      = "neilpang/acme.sh:latest"
         entrypoint = ["/bin/sh"]
         args       = ["/local/sync.sh"]
-        volumes    = ["local/acme-home:/acme.sh"]
+        volumes = [
+          "local/acme-home:/acme.sh",
+          # 联动后控制面已自动将 Vault CA 分发到 Nomad 节点此路径；如使用非 TLS 测试 Vault 请移除此行
+          "/opt/nomad-deck/nomad/etc/nomad.d/tls/vault-ca.crt:/etc/ssl/vault-ca.crt:ro",
+        ]
       }
 
       vault {
@@ -700,7 +707,7 @@ Ali_Secret={{ or .Data.data.ali_secret "" | toJSON }}
 EOT
       }
 
-      # 若 Vault 使用自建 CA，请将 vault_cacert 存入 secret/data/certs/dns，下方自动写入并校验。
+      # 默认已挂载 Nomad 节点下发的 /etc/ssl/vault-ca.crt；若需覆写 CA，也可在 secret/data/certs/dns 填入 vault_cacert。
       template {
         destination = "secrets/vault-ca.crt"
         perms       = "0644"
@@ -767,6 +774,8 @@ if [ "$VAULT_SKIP_VERIFY" = "true" ]; then
   CURL_TLS="-k"
 elif [ -s /secrets/vault-ca.crt ]; then
   CURL_TLS="--cacert /secrets/vault-ca.crt"
+elif [ -s /etc/ssl/vault-ca.crt ]; then
+  CURL_TLS="--cacert /etc/ssl/vault-ca.crt"
 fi
 
 BASE_URL=$(printf '%s' "$VAULT_ADDR" | sed 's:/*$::')

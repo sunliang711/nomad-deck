@@ -40,6 +40,7 @@ type clusterView struct {
 	MaintenanceReason string          `json:"maintenance_reason"`
 	HealthStatus      string          `json:"health_status"`
 	CAExpiresAt       any             `json:"ca_expires_at"`
+	CACertPEM         string          `json:"ca_cert_pem,omitempty"`
 	Settings          json.RawMessage `json:"settings"`
 	CreatedAt         any             `json:"created_at"`
 }
@@ -47,8 +48,8 @@ type clusterView struct {
 func clusterOf(c *db.Cluster) clusterView {
 	return clusterView{ID: c.ID, Name: c.Name, Type: c.Type, Mode: c.Mode, TLSEnabled: c.TLSEnabled, PublicAPIURL: c.PublicAPIURL,
 		InitState: c.InitState, MaintenanceMode: c.MaintenanceMode, MaintenanceReason: c.MaintenanceReason,
-		HealthStatus: c.HealthStatus, CAExpiresAt: fmtTime(c.CAExpiresAt), Settings: sanitizeClusterSettings(c.ConfigJSON),
-		CreatedAt: fmtTime(c.CreatedAt)}
+		HealthStatus: c.HealthStatus, CAExpiresAt: fmtTime(c.CAExpiresAt), CACertPEM: c.CACertPEM,
+		Settings: sanitizeClusterSettings(c.ConfigJSON), CreatedAt: fmtTime(c.CreatedAt)}
 }
 
 func sanitizeClusterSettings(raw string) json.RawMessage {

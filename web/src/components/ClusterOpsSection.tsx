@@ -1,11 +1,13 @@
 import React, { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, ArrowUpCircle, CheckCircle2, Circle, KeyRound, Loader2, Server, ShieldAlert, ShieldCheck, SlidersHorizontal, Terminal, Trash2, Wrench } from 'lucide-react';
+import { AlertTriangle, ArrowRight, ArrowUpCircle, CheckCircle2, Circle, Copy, Download, KeyRound, Loader2, Server, ShieldAlert, ShieldCheck, SlidersHorizontal, Terminal, Trash2, Wrench } from 'lucide-react';
 import { apiGet, fmtTime } from '../lib/api';
+import { copyText } from '../lib/clipboard';
 import { useI18n } from '../lib/i18n';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { isTaskActiveStatus } from '../lib/actionLabels';
 import { useConfirm } from './ConfirmDialog';
+import { useToast } from './Toast';
 import { Badge, Button, Card, ExternalUrlLink, Input, Modal, Select, StatusBadge, TermLabel } from './UI';
 
 interface ClusterOpsSectionProps {
@@ -85,11 +87,13 @@ export function ClusterOpsSection({
 }: ClusterOpsSectionProps) {
   const { locale, tr } = useI18n();
   const askConfirm = useConfirm();
+  const toast = useToast();
   const [availableVersions, setAvailableVersions] = useState<string[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
   const [busyKey, setBusyKey] = useState('');
   const [removeTarget, setRemoveTarget] = useState<any | null>(null);
   const [forceRemove, setForceRemove] = useState(false);
+  const [showCACert, setShowCACert] = useState(false);
   const busyRef = useRef(false);
   const { tasks, openTask } = useOpsDrawer();
   const activeTask = tasks.find((task) => task.target_id === cluster.id && isTaskActiveStatus(task.status));
@@ -390,7 +394,21 @@ export function ClusterOpsSection({
                 <dt className="text-slate-500">{isVault ? tr('Active 主节点', 'Active Node') : tr('Leader 主节点', 'Leader Node')}</dt>
                 <dd className="font-mono text-xs break-all">{status?.active_node || status?.leader || (isVaultAwaitInit ? tr('初始化后自动选主', 'Elected after init') : tr('等待集群就绪', 'Waiting for cluster'))}</dd>
                 <dt className="text-slate-500">{tr('CA 证书到期', 'CA Expires')}</dt>
-                <dd className="text-xs">{fmtTime(cluster.ca_expires_at, locale)}</dd>
+                <dd className="text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span>{fmtTime(cluster.ca_expires_at, locale)}</span>
+                    {cluster.tls_enabled && cluster.ca_cert_pem && (
+                      <button
+                        type="button"
+                        onClick={() => setShowCACert(true)}
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] font-medium text-slate-700 hover:border-indigo-300 hover:text-indigo-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-indigo-500/50 dark:hover:text-indigo-300"
+                      >
+                        <ShieldCheck className="h-3 w-3" />
+                        <span>{tr('查看 / 下载 CA', 'View / Download CA')}</span>
+                      </button>
+                    )}
+                  </div>
+                </dd>
                 <dt className="text-slate-500">{tr('统一入口', 'Public Endpoint')}</dt>
                 <dd className="min-w-0 break-all">
                   {cluster.public_api_url ? (
@@ -898,6 +916,64 @@ export function ClusterOpsSection({
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        open={showCACert}
+        title={tr(`集群根 CA 证书：${cluster?.name || ''}`, `Cluster Root CA Certificate: ${cluster?.name || ''}`)}
+        size="lg"
+        onClose={() => setShowCACert(false)}
+        footer={
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  if (!cluster?.ca_cert_pem) return;
+                  void copyText(cluster.ca_cert_pem)
+                    .then(() => toast.success(tr('CA 证书已复制到剪贴板', 'CA certificate copied')))
+                    .catch(() => onError(tr('复制失败，请手动全选复制', 'Failed to copy CA certificate')));
+                }}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                <span>{tr('复制 PEM', 'Copy PEM')}</span>
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  if (!cluster?.ca_cert_pem) return;
+                  const blob = new Blob([cluster.ca_cert_pem], { type: 'application/x-pem-file' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${cluster.name || product}-ca.crt`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>{tr('下载 .crt', 'Download .crt')}</span>
+              </Button>
+            </div>
+            <Button type="button" variant="primary" onClick={() => setShowCACert(false)}>
+              {tr('关闭', 'Close')}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3 text-xs">
+          <p className="text-slate-600 dark:text-slate-300">
+            {tr(
+              '这是公开的集群根 CA 证书链（不含私钥），可用于客户端、脚本或容器校验集群的 HTTPS / TLS 服务身份。',
+              'Public cluster root CA bundle (no private keys), used by clients, scripts, or containers to verify cluster HTTPS/TLS endpoints.',
+            )}
+          </p>
+          <pre className="max-h-80 overflow-auto rounded-xl border border-slate-200 bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100 select-all dark:border-slate-800">
+            {cluster?.ca_cert_pem || ''}
+          </pre>
+        </div>
       </Modal>
     </div>
   );

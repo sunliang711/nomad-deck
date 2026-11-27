@@ -45,9 +45,14 @@ func TestClusterOfStripsDockerProxyPassword(t *testing.T) {
 		ID:         "c1",
 		Name:       "nomad-prod",
 		Type:       "nomad",
+		TLSEnabled: true,
+		CACertPEM:  "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
 		ConfigJSON: `{"docker_defaults":{"pull_proxy":{"mode":"custom","url":"http://proxy.internal:3128","username":"u","password_encrypted":"k1:secret-cipher"}}}`,
 	}
 	view := clusterOf(c)
+	if view.CACertPEM != c.CACertPEM {
+		t.Fatalf("expected ca_cert_pem to be exposed, got %q", view.CACertPEM)
+	}
 	var settings map[string]any
 	if err := json.Unmarshal(view.Settings, &settings); err != nil {
 		t.Fatal(err)

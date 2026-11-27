@@ -3,11 +3,12 @@ import { Link } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowUp,
-  Box,
+  Boxes,
   Check,
   ChevronDown,
   ChevronRight,
   Code2,
+  Container,
   Copy,
   Cpu,
   Database,
@@ -27,6 +28,7 @@ import {
   Settings2,
   Shield,
   SlidersHorizontal,
+  SquareTerminal,
   Trash2,
   TreePine,
   Undo2,
@@ -461,8 +463,10 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
   const sourceRef = useRef(source);
   sourceRef.current = source;
-  const lastRenderedRef = useRef<string | null>(null);
+  const emittedSourcesRef = useRef<Set<string>>(new Set());
+  const lastClusterRef = useRef<string>(clusterId);
   const docRef = useRef<HCLDocument | null>(null);
+  const formPanelRef = useRef<HTMLDivElement>(null);
   const requestRef = useRef(0);
   const mountedRef = useRef(true);
   const callbacks = useRef({ onSourceChange, onValidityChange });
@@ -471,8 +475,6 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
   const pickInitialSelection = (doc: HCLDocument): NodePath => {
     const jobIdx = doc.nodes.findIndex((n) => n.kind === 'block' && n.name === 'job');
     if (jobIdx < 0) return [];
-    // If there is a single task inside the first group, starting on Job gives clean overview;
-    // selecting Job root makes the blueprint tree immediately understandable.
     return [jobIdx];
   };
 
@@ -483,7 +485,8 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
     try {
       const result = await apiPost<BuilderResult>(`/api/v1/nomad/${clusterId}/job-ops/hcl-tree-render`, doc);
       if (mountedRef.current && request === requestRef.current) {
-        lastRenderedRef.current = result.hcl;
+        if (emittedSourcesRef.current.size > 16) emittedSourcesRef.current.clear();
+        emittedSourcesRef.current.add(result.hcl);
         setLiveHcl(result.hcl);
         callbacks.current.onSourceChange(result.hcl);
         callbacks.current.onValidityChange(result.valid);
@@ -538,13 +541,16 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
   // Parse HCL into AST on mount, cluster change, or external source change (e.g. picking a starter template)
   useEffect(() => {
-    if (docRef.current && lastRenderedRef.current !== null && source === lastRenderedRef.current) {
+    const sameCluster = lastClusterRef.current === clusterId;
+    if (sameCluster && docRef.current && emittedSourcesRef.current.has(source)) {
       return;
     }
+    lastClusterRef.current = clusterId;
     mountedRef.current = true;
     let active = true;
     docRef.current = null;
-    lastRenderedRef.current = null;
+    emittedSourcesRef.current.clear();
+    emittedSourcesRef.current.add(source);
     setDocument(null);
     setLiveHcl(source);
     setUndo([]);
@@ -651,6 +657,14 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
   const selectInForm = (path: NodePath) => {
     setSelected(path);
     setViewMode('form');
+    window.requestAnimationFrame(() => {
+      const el = formPanelRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.top < 72 || rect.top > window.innerHeight - 120) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
   };
 
   // Determine the active form entity (Job, Group, or Task). If user had a deep AST node selected,
@@ -870,7 +884,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         </SectionBox>
 
         <SectionBox
-          icon={<Box className="h-4 w-4" />}
+          icon={<Boxes className="h-4 w-4" />}
           title={`包含的任务组 (${groups.length})`}
           description="点击任意任务组即可配置副本数、端口映射与具体运行容器"
           actions={
@@ -1146,7 +1160,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2 min-w-0">
             <span className="rounded-lg bg-sky-50 p-1.5 text-sky-600 dark:bg-sky-500/15 dark:text-sky-300">
-              <Box className="h-4 w-4" />
+              <Boxes className="h-4 w-4" />
             </span>
             <div className="min-w-0">
               <div className="flex items-center gap-1 text-[11px] text-slate-400">
@@ -1369,7 +1383,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         </SectionBox>
 
         <SectionBox
-          icon={<Layers className="h-4 w-4" />}
+          icon={<Container className="h-4 w-4" />}
           title={`组内任务 (${tasks.length})`}
           description="点击任务卡片进入容器镜像、资源配额、环境变量与 Vault 密钥配置"
           actions={
@@ -1804,7 +1818,11 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2 min-w-0">
             <span className="rounded-lg bg-emerald-50 p-1.5 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300">
-              <Cpu className="h-4 w-4" />
+              {driver === 'exec' || driver === 'raw_exec' ? (
+                <SquareTerminal className="h-4 w-4" />
+              ) : (
+                <Container className="h-4 w-4" />
+              )}
             </span>
             <div className="min-w-0">
               <div className="flex items-center gap-1 text-[11px] text-slate-400">
@@ -1855,7 +1873,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         </div>
 
         {/* 1. Identity & Driver */}
-        <SectionBox icon={<Box className="h-4 w-4" />} title="任务标识与运行环境">
+        <SectionBox icon={<Container className="h-4 w-4" />} title="任务标识与运行环境">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Input
               label="任务名称 (task)"
@@ -3214,21 +3232,27 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     return (
                       <div key={grp.path.join('.')} className="space-y-1.5">
                         <div
-                          className={`group rounded-xl border p-2 transition ${
+                          role="button"
+                          tabIndex={0}
+                          aria-pressed={grpSelected}
+                          onClick={() => selectInForm(grp.path)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              selectInForm(grp.path);
+                            }
+                          }}
+                          className={`group cursor-pointer select-none rounded-xl border p-2.5 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/50 ${
                             grpSelected
-                              ? 'border-indigo-500 bg-indigo-50 text-indigo-950 dark:border-indigo-400 dark:bg-indigo-500/20 dark:text-indigo-100'
-                              : 'border-slate-200/90 bg-white text-slate-700 hover:border-indigo-300 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200'
+                              ? 'border-indigo-500 bg-indigo-50 text-indigo-950 shadow-sm dark:border-indigo-400 dark:bg-indigo-500/20 dark:text-indigo-100'
+                              : 'border-slate-200/90 bg-white text-slate-700 hover:border-indigo-300 hover:bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800/60'
                           }`}
                         >
                           <div className="flex items-center justify-between gap-1">
-                            <button
-                              type="button"
-                              onClick={() => selectInForm(grp.path)}
-                              className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                            >
-                              <Box className="h-3.5 w-3.5 shrink-0 text-sky-500" />
+                            <span className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+                              <Boxes className="h-4 w-4 shrink-0 text-sky-500" />
                               <span className="truncate font-mono text-xs font-semibold">{grp.label || 'group'}</span>
-                            </button>
+                            </span>
                             <div className="flex items-center gap-1 shrink-0">
                               <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                                 ×{count}
@@ -3238,19 +3262,20 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                                   type="button"
                                   title="向此任务组添加新任务"
                                   aria-label={`向 ${grp.label} 添加任务`}
-                                  onClick={() => {
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     const res = addReadyTask(document, grp.path);
                                     commit(res.document, res.path);
                                   }}
                                   className="rounded p-0.5 text-slate-400 hover:bg-indigo-100 hover:text-indigo-600 dark:hover:bg-indigo-500/20"
                                 >
-                                  <Plus className="h-3 w-3" />
+                                  <Plus className="h-3.5 w-3.5" />
                                 </button>
                               )}
                             </div>
                           </div>
                           {grpPorts.length > 0 && (
-                            <div className="mt-1 flex flex-wrap gap-1">
+                            <div className="mt-1.5 flex flex-wrap gap-1">
                               {grpPorts.slice(0, 3).map((p) => (
                                 <span
                                   key={p.path.join('.')}
@@ -3273,6 +3298,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                             const cpu = resBlk ? parseLiteralNumber(getAttrExpr(document, resBlk.path, 'cpu')) : undefined;
                             const mem = resBlk ? parseLiteralNumber(getAttrExpr(document, resBlk.path, 'memory')) : undefined;
                             const hasVault = Boolean(findChildBlock(document, tk.path, 'vault'));
+                            const isShellDriver = drv === 'exec' || drv === 'raw_exec';
                             return (
                               <button
                                 key={tk.path.join('.')}
@@ -3280,13 +3306,17 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                                 onClick={() => selectInForm(tk.path)}
                                 className={`w-full rounded-lg border px-2.5 py-2 text-left transition ${
                                   tkSelected
-                                    ? 'border-indigo-500 bg-indigo-50 text-indigo-950 dark:border-indigo-400 dark:bg-indigo-500/20 dark:text-indigo-100'
-                                    : 'border-slate-200/80 bg-white/90 text-slate-700 hover:border-indigo-300 dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-200'
+                                    ? 'border-indigo-500 bg-indigo-50 text-indigo-950 shadow-sm dark:border-indigo-400 dark:bg-indigo-500/20 dark:text-indigo-100'
+                                    : 'border-slate-200/80 bg-white/90 text-slate-700 hover:border-indigo-300 hover:bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-200 dark:hover:bg-slate-800/60'
                                 }`}
                               >
                                 <div className="flex items-center justify-between gap-1">
                                   <span className="inline-flex items-center gap-1.5 min-w-0">
-                                    <Cpu className="h-3 w-3 shrink-0 text-emerald-500" />
+                                    {isShellDriver ? (
+                                      <SquareTerminal className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                                    ) : (
+                                      <Container className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                                    )}
                                     <span className="truncate font-mono text-xs font-medium">{tk.label || 'task'}</span>
                                   </span>
                                   <span className="font-mono text-[10px] text-slate-400 shrink-0">{drv}</span>
@@ -3324,7 +3354,10 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               </div>
 
               {/* Right: Focused Property Workspace */}
-              <div className="min-w-0 rounded-xl border border-slate-200/90 bg-slate-50/40 p-4 dark:border-slate-800 dark:bg-slate-950/30">
+              <div
+                ref={formPanelRef}
+                className="min-w-0 scroll-mt-20 rounded-xl border border-slate-200/90 bg-slate-50/40 p-4 dark:border-slate-800 dark:bg-slate-950/30"
+              >
                 {formTarget.kind === 'job' && renderJobForm(formTarget.path)}
                 {formTarget.kind === 'group' && renderGroupForm(formTarget.path)}
                 {formTarget.kind === 'task' && formTarget.groupPath && renderTaskForm(formTarget.path, formTarget.groupPath)}

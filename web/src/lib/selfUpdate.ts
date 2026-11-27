@@ -1,3 +1,5 @@
+import { getLocale, type Locale } from './locale.ts';
+
 /** 升级阶段：前五个来自后台任务上报，confirm 是页面等待重启后的服务报告新版本，done 表示全部完成。 */
 export type UpgradeStage = 'resolve' | 'download' | 'verify' | 'install' | 'restart' | 'confirm' | 'done';
 
@@ -37,6 +39,22 @@ export function formatDurationZh(seconds: number): string {
     return rem > 0 ? `${m} 分钟 ${rem} 秒` : `${m} 分钟`;
   }
   return `${s} 秒`;
+}
+
+export function formatDuration(seconds: number, locale: Locale = getLocale()): string {
+  if (locale !== 'en') return formatDurationZh(seconds);
+  const s = Math.max(0, Math.round(seconds));
+  if (s >= 3600) {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  if (s >= 60) {
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
+  }
+  return `${s}s`;
 }
 
 export class VersionCheckTimeoutError extends Error {

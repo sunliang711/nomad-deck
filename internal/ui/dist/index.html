@@ -18,11 +18,16 @@
           var root = document.documentElement;
           root.classList.toggle('dark', theme === 'dark');
           root.style.colorScheme = theme;
+          var savedLocale = localStorage.getItem('nd_locale');
+          if (savedLocale === 'en') {
+            root.lang = 'en';
+            document.title = 'NomadDeck · Cluster Operations Control Plane';
+          }
         } catch (e) {}
       })();
     </script>
-    <script type="module" crossorigin src="/assets/index-CS1EGCUe.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CZSEVXTg.css">
+    <script type="module" crossorigin src="/assets/index-B8ntCxE4.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BLd52cGS.css">
   </head>
   <body class="bg-[#f5f7fb] text-slate-800 dark:bg-[#0b1120] dark:text-slate-100 antialiased">
     <div id="root"></div>

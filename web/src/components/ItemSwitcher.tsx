@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Search } from 'lucide-react';
+import { useI18n } from '../lib/i18n';
 import { StatusBadge } from './UI';
 
 export interface SwitcherItem {
@@ -14,7 +15,7 @@ export function ItemSwitcher({
   items,
   selectedId,
   onSelect,
-  label = '对象',
+  label,
   disabled = false,
 }: {
   items: SwitcherItem[];
@@ -23,6 +24,8 @@ export function ItemSwitcher({
   label?: string;
   disabled?: boolean;
 }) {
+  const { tr } = useI18n();
+  const resolvedLabel = label ?? tr('对象', 'Item');
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
@@ -78,11 +81,11 @@ export function ItemSwitcher({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`切换${label}`}
+        aria-label={tr(`切换${resolvedLabel}`, `Switch ${resolvedLabel}`)}
         onClick={() => { if (!disabled) setOpen((v) => !v); }}
         className="inline-flex h-[42px] max-w-full items-center gap-2 rounded-xl border border-[#e3e8f1] bg-white px-3.5 text-xs font-medium text-slate-800 shadow-[0_2px_8px_rgba(15,23,42,0.02)] transition hover:border-indigo-300 hover:bg-slate-50/80 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-700 dark:hover:bg-slate-800/80"
       >
-        <span className="text-slate-400 dark:text-slate-500 shrink-0">{label}</span>
+        <span className="text-slate-400 dark:text-slate-500 shrink-0">{resolvedLabel}</span>
         <span className="h-3.5 w-px bg-slate-200 dark:bg-slate-700 shrink-0" aria-hidden="true" />
         <span className="truncate font-semibold max-w-[180px]">{selected?.name || '-'}</span>
         {selected && <StatusBadge value={selected.status} label={selected.statusLabel} />}
@@ -97,7 +100,7 @@ export function ItemSwitcher({
       {open && (
         <div
           role="listbox"
-          aria-label={`${label}列表`}
+          aria-label={tr(`${resolvedLabel}列表`, `${resolvedLabel} list`)}
           className="absolute left-0 z-40 mt-1.5 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900"
         >
           {showSearch && (
@@ -108,14 +111,14 @@ export function ItemSwitcher({
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder={`搜索${label}名称…`}
+                placeholder={tr(`搜索${resolvedLabel}名称…`, `Search ${resolvedLabel}...`)}
                 className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
               />
             </div>
           )}
           <div className="max-h-64 space-y-0.5 overflow-y-auto">
             {filtered.length === 0 ? (
-              <div className="px-2.5 py-4 text-center text-xs text-slate-400">未找到匹配的{label}</div>
+              <div className="px-2.5 py-4 text-center text-xs text-slate-400">{tr(`未找到匹配的${resolvedLabel}`, `No matching ${resolvedLabel}`)}</div>
             ) : (
               filtered.map((item) => {
                 const isSelected = item.id === selectedId;

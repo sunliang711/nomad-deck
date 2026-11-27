@@ -4,6 +4,7 @@ import { ArrowLeft, Check, Copy, ExternalLink, RefreshCw, Terminal as TerminalIc
 import { apiGet, fmtTime, openSSE } from './api';
 import { useAuth } from './auth';
 import { copyText } from './clipboard';
+import { useI18n } from './i18n';
 import { formatActionLabel, formatTaskDuration, isTaskActiveStatus, isTaskFailureStatus } from './actionLabels';
 import { Drawer } from '../components/Drawer';
 import { Button, EmptyState, StatusBadge } from '../components/UI';
@@ -60,6 +61,7 @@ const Ctx = createContext<OpsDrawerCtx>({
 
 export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
   const { user, authenticated } = useAuth();
+  const { locale, tr } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
 
@@ -161,13 +163,16 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
           }
           const label = formatActionLabel(item.action);
           const viewAction = {
-            label: '查看详情',
+            label: tr('查看详情', 'View Details'),
             onClick: () => setTarget({ kind: 'task', taskId: item.id, title: label }),
           };
           if (isTaskFailureStatus(item.status)) {
-            toast.error(`${label}失败${item.error_message ? `：${item.error_message}` : ''}`, viewAction);
+            toast.error(
+              tr(`${label}失败${item.error_message ? `：${item.error_message}` : ''}`, `${label} failed${item.error_message ? `: ${item.error_message}` : ''}`),
+              viewAction,
+            );
           } else {
-            toast.success(`${label}已完成`, viewAction);
+            toast.success(tr(`${label}已完成`, `${label} completed`), viewAction);
           }
         }
       }
@@ -270,7 +275,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
               prev ? { ...prev, status: doneStatus || prev.status, error_message: data.error || prev.error_message, finished_at: new Date().toISOString() } : prev,
             );
             if (data.error) {
-              setLogs((prev) => prev + `\n[完成: ${doneStatus}] ${data.error}\n`);
+              setLogs((prev) => prev + `\n[${tr('完成', 'Done')}: ${doneStatus}] ${data.error}\n`);
             }
             void refreshTasks();
             stop?.();
@@ -286,20 +291,20 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
               setLogs((prev) => prev + data.data);
             } else if (ev === 'done') {
               if (data?.error) {
-                setLogs((prev) => prev + `\n[流结束] ${data.error}\n`);
+                setLogs((prev) => prev + `\n[${tr('流结束', 'Stream ended')}] ${data.error}\n`);
               }
               stop?.();
             }
           },
           onError: () => {
-            setLogs((prev) => prev + '\n[连接已关闭]\n');
+            setLogs((prev) => prev + `\n[${tr('连接已关闭', 'Connection closed')}]\n`);
           },
         },
       );
     }
 
     return () => stop?.();
-  }, [markRead, refreshTasks, target]);
+  }, [markRead, refreshTasks, target, tr]);
 
   useEffect(() => {
     if (autoScroll && logRef.current) {
@@ -350,10 +355,10 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
     try {
       await copyText(logs);
       setCopied(true);
-      toast.success('日志已复制到剪贴板');
+      toast.success(tr('日志已复制到剪贴板', 'Logs copied to clipboard'));
       window.setTimeout(() => setCopied(false), 1500);
     } catch (ex: any) {
-      toast.error(ex?.message || '复制失败');
+      toast.error(ex?.message || tr('复制失败', 'Copy failed'));
     }
   };
 
@@ -361,29 +366,29 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
     target?.kind === 'list' ? (
       <>
         <TerminalIcon className="h-4 w-4 text-indigo-500 shrink-0" />
-        <span>后台运维任务</span>
+        <span>{tr('后台运维任务', 'Background Tasks')}</span>
       </>
     ) : target?.kind === 'task' ? (
       <>
         <TerminalIcon className="h-4 w-4 text-indigo-500 shrink-0" />
-        <span className="truncate">{target.title || formatActionLabel(detailTask?.action || '')}</span>
+        <span className="truncate">{target.title || formatActionLabel(detailTask?.action || '', locale)}</span>
         {taskStatus && <StatusBadge value={taskStatus} />}
       </>
     ) : (
       <>
         <TerminalIcon className="h-4 w-4 text-indigo-500 shrink-0" />
-        <span className="truncate">{target?.title || '节点实时服务日志'}</span>
+        <span className="truncate">{target?.title || tr('节点实时服务日志', 'Live Node Service Logs')}</span>
       </>
     );
 
   const drawerSubtitle =
     target?.kind === 'list'
       ? runningCount > 0
-        ? `${runningCount} 个任务正在后台执行，切走页面不会中断`
-        : '当前没有运行中的后台任务，展示最近任务记录'
+        ? tr(`${runningCount} 个任务正在后台执行，切走页面不会中断`, `${runningCount} task(s) running in the background; navigating away will not interrupt them`)
+        : tr('当前没有运行中的后台任务，展示最近任务记录', 'No active background tasks; showing recent task records')
       : target?.kind === 'task'
-      ? `任务 ID: ${target.taskId}${detailTask ? ` · 耗时 ${formatTaskDuration(detailTask.started_at, detailTask.finished_at, detailTask.created_at, nowMs)}` : ''}`
-      : '实时流式输出（SSH journalctl）';
+      ? `${tr('任务 ID', 'Task ID')}: ${target.taskId}${detailTask ? ` · ${tr('耗时', 'Duration')} ${formatTaskDuration(detailTask.started_at, detailTask.finished_at, detailTask.created_at, nowMs, locale)}` : ''}`
+      : tr('实时流式输出（SSH journalctl）', 'Live streaming output (SSH journalctl)');
 
   return (
     <Ctx.Provider
@@ -413,17 +418,17 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
             target.kind === 'list' ? (
               <Button size="sm" onClick={() => void refreshTasks()} loading={loadingTasks}>
                 {!loadingTasks && <RefreshCw className="w-3.5 h-3.5" />}
-                <span>刷新</span>
+                <span>{tr('刷新', 'Refresh')}</span>
               </Button>
             ) : target.kind === 'task' ? (
               <div className="flex items-center gap-1.5">
                 <Button size="sm" onClick={openTaskList}>
                   <ArrowLeft className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">任务列表</span>
+                  <span className="hidden sm:inline">{tr('任务列表', 'Task List')}</span>
                 </Button>
                 <label className="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 mx-1">
                   <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} />
-                  <span>自动滚动</span>
+                  <span>{tr('自动滚动', 'Auto-scroll')}</span>
                 </label>
                 <button
                   type="button"
@@ -432,14 +437,14 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40"
                 >
                   {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copied ? '已复制' : '复制日志'}</span>
+                  <span>{copied ? tr('已复制', 'Copied') : tr('复制日志', 'Copy Logs')}</span>
                 </button>
               </div>
             ) : (
               <div className="flex items-center gap-1.5">
                 <label className="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 mr-1">
                   <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} />
-                  <span>自动滚动</span>
+                  <span>{tr('自动滚动', 'Auto-scroll')}</span>
                 </label>
                 <button
                   type="button"
@@ -448,7 +453,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40"
                 >
                   {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copied ? '已复制' : '复制日志'}</span>
+                  <span>{copied ? tr('已复制', 'Copied') : tr('复制日志', 'Copy Logs')}</span>
                 </button>
               </div>
             )
@@ -464,12 +469,12 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                 }}
                 className="inline-flex items-center gap-1 text-indigo-600 hover:underline dark:text-indigo-400 font-medium"
               >
-                <span>前往审计日志</span>
+                <span>{tr('前往审计日志', 'Go to Audit Logs')}</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </button>
               {target.kind === 'list' && unreadIds.length > 0 && (
                 <Button size="sm" onClick={markAllRead}>
-                  异常提醒全部已读
+                  {tr('异常提醒全部已读', 'Mark All Alerts Read')}
                 </Button>
               )}
             </div>
@@ -477,7 +482,10 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
         >
           {target.kind === 'list' ? (
             tasks.length === 0 ? (
-              <EmptyState title="暂无运维任务记录" description="发起集群部署、升级或节点维护操作后，这里会实时展示任务进度。" />
+              <EmptyState
+                title={tr('暂无运维任务记录', 'No Operations Tasks Yet')}
+                description={tr('发起集群部署、升级或节点维护操作后，这里会实时展示任务进度。', 'Live task progress will appear here after you start a cluster deployment, upgrade, or node maintenance operation.')}
+              />
             ) : (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 px-3 py-2">
@@ -491,7 +499,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                           : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
                       }`}
                     >
-                      全部 ({tasks.length})
+                      {tr('全部', 'All')} ({tasks.length})
                     </button>
                     <button
                       type="button"
@@ -502,7 +510,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                           : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
                       }`}
                     >
-                      <span>未读异常</span>
+                      <span>{tr('未读异常', 'Unread Errors')}</span>
                       {unreadIds.length > 0 && (
                         <span className="inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[10px] font-semibold">
                           {unreadIds.length}
@@ -512,20 +520,20 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                   </div>
                   {unreadIds.length > 0 ? (
                     <Button size="sm" onClick={markAllRead}>
-                      全部标为已读 ({unreadIds.length})
+                      {tr('全部标为已读', 'Mark All Read')} ({unreadIds.length})
                     </Button>
                   ) : (
-                    <span className="text-[11px] text-slate-400 dark:text-slate-500">所有异常已阅</span>
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500">{tr('所有异常已阅', 'All errors read')}</span>
                   )}
                 </div>
 
                 {displayedTasks.length === 0 ? (
                   <EmptyState
-                    title="没有未读异常任务"
-                    description="所有失败或待核对任务均已阅读，点击「全部」可查看历史记录。"
+                    title={tr('没有未读异常任务', 'No Unread Error Tasks')}
+                    description={tr('所有失败或待核对任务均已阅读，点击「全部」可查看历史记录。', 'All failed or pending-reconcile tasks have been read. Switch to "All" to view history.')}
                     action={
                       <Button size="sm" onClick={() => setListFilter('all')}>
-                        查看全部任务
+                        {tr('查看全部任务', 'View All Tasks')}
                       </Button>
                     }
                   />
@@ -534,7 +542,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                     {displayedTasks.map((t) => {
                       const failed = isTaskFailureStatus(t.status);
                       const isUnread = failed && !readIds.has(t.id);
-                      const label = formatActionLabel(t.action);
+                      const label = formatActionLabel(t.action, locale);
                       return (
                         <div
                           key={t.id}
@@ -560,11 +568,11 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                                     (isUnread ? (
                                       <span className="inline-flex items-center gap-1 shrink-0 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
                                         <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
-                                        未读
+                                        {tr('未读', 'Unread')}
                                       </span>
                                     ) : (
                                       <span className="inline-flex items-center shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                                        已读
+                                        {tr('已读', 'Read')}
                                       </span>
                                     ))}
                                 </div>
@@ -575,9 +583,9 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                               <StatusBadge value={t.status} />
                             </div>
                             <div className="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap gap-x-3 gap-y-0.5">
-                              <span>触发人：{t.triggered_by || '-'}</span>
-                              <span>开始：{fmtTime(t.started_at || t.created_at)}</span>
-                              <span>耗时：{formatTaskDuration(t.started_at, t.finished_at, t.created_at, nowMs)}</span>
+                              <span>{tr('触发人：', 'Triggered by: ')}{t.triggered_by || '-'}</span>
+                              <span>{tr('开始：', 'Started: ')}{fmtTime(t.started_at || t.created_at, locale)}</span>
+                              <span>{tr('耗时：', 'Duration: ')}{formatTaskDuration(t.started_at, t.finished_at, t.created_at, nowMs, locale)}</span>
                             </div>
                             {t.error_message && (
                               <div className="text-xs text-rose-600 dark:text-rose-400 line-clamp-2 break-words">
@@ -593,7 +601,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                                 className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100/80 dark:text-rose-300 dark:hover:bg-rose-500/20 transition"
                               >
                                 <Check className="w-3 h-3" />
-                                <span>标为已读</span>
+                                <span>{tr('标为已读', 'Mark as Read')}</span>
                               </button>
                             </div>
                           )}
@@ -630,7 +638,7 @@ export function OpsDrawerProvider({ children }: { children: React.ReactNode }) {
                 ref={logRef}
                 className="flex-1 overflow-auto bg-slate-950 p-5 font-mono text-xs leading-relaxed text-slate-100 whitespace-pre-wrap break-all"
               >
-                {logs || '任务正在后台执行，等待实时日志输出...'}
+                {logs || tr('任务正在后台执行，等待实时日志输出...', 'Task is running in the background, waiting for live logs...')}
               </pre>
             </>
           )}

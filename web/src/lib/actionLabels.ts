@@ -1,4 +1,6 @@
-export const ACTION_LABELS: Record<string, string> = {
+import { getLocale, trText, type Locale } from './locale.ts';
+
+export const ACTION_LABELS_ZH: Record<string, string> = {
   // 异步运维任务
   'cluster.deploy': '部署集群',
   'cluster.upgrade': '滚动升级集群',
@@ -147,7 +149,153 @@ export const ACTION_LABELS: Record<string, string> = {
   'self_update.rollback': '回退控制面版本',
 };
 
-export const RESOURCE_LABELS: Record<string, string> = {
+export const ACTION_LABELS_EN: Record<string, string> = {
+  'cluster.deploy': 'Deploy Cluster',
+  'cluster.upgrade': 'Rolling Upgrade Cluster',
+  'cluster.node_join': 'Scale Out Cluster Node',
+  'cluster.node_remove': 'Scale In Cluster Node',
+  'cluster.node_service': 'Control Node Service',
+  'cluster.node_config': 'Update Node Config',
+  'cluster.host_volume_add': 'Create Host Volume',
+  'cluster.certs_renew': 'Renew Cluster Certs',
+  'cluster.cert_renew': 'Renew Cluster Certs',
+  'cluster.ca_rotate': 'Rotate Cluster CA',
+  'cluster.gossip_rotate': 'Rotate Gossip Key',
+  'cluster.snapshot': 'Create Raft Snapshot',
+  'cluster.snapshot_delete': 'Delete Raft Snapshot',
+  'cluster.snapshot_download': 'Download Raft Snapshot',
+  'cluster.snapshot_restore': 'Restore Raft Snapshot',
+  'cluster.snapshot_upload': 'Upload Raft Snapshot',
+  'cluster.restore': 'Restore Raft Snapshot',
+  'snapshot.restore': 'Restore Snapshot',
+  'cluster.rollback_generation': 'Rollback Node Config Gen',
+  'cluster.config_rollback': 'Rollback Node Config',
+  'cluster.uninstall': 'Uninstall Cluster',
+  'system.self_update': 'Control Plane Self-Update',
+  'system.self_update_confirmed': 'Confirm Control Plane Self-Update',
+  'system.self_update_rollback': 'Control Plane Rollback',
+  'system.self_update_schedule_create': 'Schedule Self-Update',
+  'system.self_update_schedule_cancel': 'Cancel Scheduled Self-Update',
+  'system.master_key_rotate': 'Rotate Master Key',
+  'cron.run': 'Run Cron Job',
+  'docker.install': 'Install Docker',
+  'docker.upgrade': 'Upgrade Docker',
+  'docker.cluster_upgrade': 'Rolling Upgrade Cluster Docker',
+  'docker.adopt': 'Adopt External Docker',
+  'docker.config': 'Update Docker Config',
+  'docker.defaults': 'Update Cluster Docker Defaults',
+  'docker.proxy_test': 'Test Docker Proxy',
+  'integration.sync': 'Sync Cluster Integration',
+  'integration.delete': 'Delete Cluster Integration',
+  'integration.vault_ca_rollout': 'Sync Vault CA to Nomad',
+
+  'auth.setup': 'System Setup',
+  'auth.login': 'Admin Login',
+  'auth.logout': 'Logout',
+  'auth.password_change': 'Change Password',
+  'auth.session_revoke': 'Revoke Session',
+  'admin.create': 'Create Console Account',
+  'admin.update': 'Update Console Account',
+  'admin.rename': 'Rename Account',
+  'admin.role_change': 'Change Account Role',
+  'admin.reset_password': 'Reset Account Password',
+  'admin.reset_password_local': 'Local CLI Password Reset',
+  'admin.disable': 'Disable Account',
+  'admin.enable': 'Enable Account',
+
+  'ssh_key.generate': 'Generate SSH Key',
+  'ssh_key.import': 'Import SSH Key',
+  'ssh_key.set_default': 'Set Default SSH Key',
+  'ssh_key.delete': 'Delete SSH Key',
+  'node.create': 'Add Host Node',
+  'node.update': 'Update Host Node',
+  'node.delete': 'Delete Host Node',
+  'node.test': 'Probe Host Environment',
+  'node.push_key': 'Push SSH Public Key',
+  'node.reset_fingerprint': 'Reset Host Fingerprint',
+  'node.reset_machine_id': 'Regenerate Node ID',
+  'node.set_aliases': 'Set Host Aliases',
+
+  'cluster.create': 'Create Cluster Config',
+  'cluster.update': 'Update Cluster Config',
+  'cluster.delete': 'Delete Cluster Config',
+  'cluster.add_nodes': 'Add Cluster Nodes',
+  'cluster.join_node': 'Join Node to Cluster',
+  'cluster.remove_node': 'Remove Node from Cluster',
+  'cluster.maintenance': 'Toggle Maintenance Mode',
+  'cluster.reconcile': 'Reconcile Cluster State',
+  'cluster.settings': 'Update Cluster Settings',
+  'cluster.settings_rollout': 'Rollout Cluster Config',
+  'cluster.credentials': 'Update Access Credentials',
+  'cluster.credentials_supply': 'Supply Managed Credentials',
+  'cluster.proxy_update': 'Update Cluster Proxy Settings',
+  'nomad.install': 'Deploy Nomad Cluster',
+  'nomad.management_token_reveal': 'Reveal Nomad Management Token',
+  'vault.init': 'Initialize Vault Custody',
+  'vault.init_reset': 'Reset Vault Init State',
+  'vault.unseal': 'Unseal Vault Cluster',
+  'vault.seal': 'Seal Vault Cluster',
+  'vault.rekey': 'Rekey Vault',
+  'vault.recover_token': 'Recover Vault Ops Token',
+  'vault.token_renew': 'Renew Vault Ops Token',
+  'vault.custody_update': 'Update Vault Custody Policy',
+  'vault.custody_backup': 'Export Vault Custody Backup',
+  'vault.root_token': 'Generate Temp Root Token',
+  'vault.root_token_generate': 'Generate Temp Root Token',
+  'vault.root_token_revoke': 'Revoke Temp Root Token',
+  'vault.root_token_revoke_manual': 'Manually Revoke Root Token',
+  'vault.auth_enable': 'Enable Vault Auth',
+  'vault.auth_disable': 'Disable Vault Auth',
+  'vault.policy_put': 'Save Vault Policy',
+  'vault.policy_delete': 'Delete Vault Policy',
+  'vault.kv_mount_enable': 'Enable Vault KV Engine',
+  'vault.kv_write': 'Write Vault KV Secret',
+  'vault.kv_read': 'Read Vault KV Secret',
+  'vault.kv_delete': 'Delete Vault KV Secret',
+
+  'integration.create': 'Create Integration',
+  'integration.update': 'Update Integration',
+  'integration.apply': 'Apply Integration',
+  'integration.doctor': 'Diagnose Integration',
+  'integration.role_put': 'Configure Integration Role',
+  'integration.role_delete': 'Delete Integration Role',
+  'integration.delete_config': 'Delete Integration Config',
+  'nomad.job_workbench': 'Submit Nomad Job (Workbench)',
+  'nomad.job_visual': 'Submit Nomad Job (Visual)',
+  'nomad.job_compose': 'Submit Job (Compose Import)',
+  'nomad.job_json': 'Submit Nomad Job (JSON)',
+  'nomad.job_apply': 'Submit Nomad Job',
+  'nomad.job_edit_source': 'Edit Job Source',
+  'nomad.job_export': 'Export Nomad Job',
+  'nomad.job_restart': 'Restart Nomad Job',
+  'nomad.job_stop': 'Stop Nomad Job',
+  'nomad.job_purge': 'Purge Nomad Job',
+  'nomad.job_template_put': 'Save Job Template',
+  'nomad.job_template_delete': 'Delete Job Template',
+  'nomad.job_variables_reveal': 'Reveal Job Variable Secret',
+  'cron.create': 'Create Cron Job',
+  'cron.update': 'Update Cron Job',
+  'cron.delete': 'Delete Cron Job',
+  'settings.update': 'Update System Settings',
+  'settings.proxy_update': 'Update System Proxy',
+  'settings.proxy_test': 'Test System Proxy',
+  'settings.proxy_password_reveal': 'Reveal Proxy Password',
+  'settings.master_key_rotate': 'Rotate Master Key',
+  'backup.config_update': 'Update Backup Config',
+  'backup.run': 'Run Control Plane Backup',
+  'backup.target_test': 'Test Backup Target',
+  'backup.secret_reveal': 'Reveal Backup Secret',
+  'migration.export': 'Export Migration Bundle',
+  'migration.import': 'Import Migration Bundle',
+  'migration.preview': 'Preview Migration Bundle',
+  'migration.activate': 'Activate Control Plane',
+  'self_update.start': 'Start Control Plane Self-Update',
+  'self_update.rollback': 'Rollback Control Plane Version',
+};
+
+export const ACTION_LABELS = ACTION_LABELS_ZH;
+
+export const RESOURCE_LABELS_ZH: Record<string, string> = {
   admin: '管理员',
   session: '会话',
   ssh_key: 'SSH 密钥',
@@ -164,8 +312,41 @@ export const RESOURCE_LABELS: Record<string, string> = {
   system: '控制面系统',
 };
 
-export function formatActionLabel(action: string): string {
-  return ACTION_LABELS[action] || action || '运维任务';
+export const RESOURCE_LABELS_EN: Record<string, string> = {
+  admin: 'Admin',
+  session: 'Session',
+  ssh_key: 'SSH Key',
+  node: 'Linux Host',
+  cluster: 'Cluster',
+  vault: 'Vault',
+  integration: 'Integration',
+  nomad_job: 'Nomad Job',
+  job_template: 'Job Template',
+  cron_job: 'Cron Job',
+  settings: 'Settings',
+  backup: 'DR Backup',
+  migration: 'Migration',
+  system: 'Control Plane',
+};
+
+export const RESOURCE_LABELS = RESOURCE_LABELS_ZH;
+
+export function getActionLabels(locale: Locale = getLocale()): Record<string, string> {
+  return locale === 'en' ? ACTION_LABELS_EN : ACTION_LABELS_ZH;
+}
+
+export function getResourceLabels(locale: Locale = getLocale()): Record<string, string> {
+  return locale === 'en' ? RESOURCE_LABELS_EN : RESOURCE_LABELS_ZH;
+}
+
+export function formatActionLabel(action: string, locale: Locale = getLocale()): string {
+  const labels = getActionLabels(locale);
+  return labels[action] || action || trText('运维任务', 'Operations Task', locale);
+}
+
+export function formatResourceLabel(resourceType: string, locale: Locale = getLocale()): string {
+  const labels = getResourceLabels(locale);
+  return labels[resourceType] || resourceType || trText('系统', 'System', locale);
 }
 
 export function isTaskActiveStatus(status: string): boolean {
@@ -176,7 +357,13 @@ export function isTaskFailureStatus(status: string): boolean {
   return status === 'failed' || status === 'needs_reconcile' || status === 'interrupted';
 }
 
-export function formatTaskDuration(startedAt?: string | null, finishedAt?: string | null, createdAt?: string | null, nowMs = Date.now()): string {
+export function formatTaskDuration(
+  startedAt?: string | null,
+  finishedAt?: string | null,
+  createdAt?: string | null,
+  nowMs = Date.now(),
+  locale: Locale = getLocale(),
+): string {
   const startRaw = startedAt || createdAt;
   if (!startRaw) return '—';
   const start = Date.parse(startRaw);
@@ -184,6 +371,11 @@ export function formatTaskDuration(startedAt?: string | null, finishedAt?: strin
   const end = finishedAt ? Date.parse(finishedAt) : nowMs;
   if (!Number.isFinite(end)) return '—';
   const seconds = Math.max(0, Math.floor((end - start) / 1000));
+  if (locale === 'en') {
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  }
   if (seconds < 60) return `${seconds} 秒`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
   return `${Math.floor(seconds / 3600)} 小时 ${Math.floor((seconds % 3600) / 60)} 分`;

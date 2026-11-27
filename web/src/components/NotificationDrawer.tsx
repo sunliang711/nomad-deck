@@ -2,23 +2,26 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, Check, CheckCircle2, Copy, Info, Trash2, XCircle } from 'lucide-react';
 import { copyText } from '../lib/clipboard';
+import { useI18n } from '../lib/i18n';
+import { type Locale } from '../lib/locale';
 import { Drawer } from './Drawer';
 import { Button, EmptyState } from './UI';
 import { allowNavigation } from './ConfirmDialog';
 import { useToast, type ToastHistoryItem } from './Toast';
 
-function formatHistoryTime(ts: number): string {
+function formatHistoryTime(ts: number, locale: Locale): string {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return '-';
+  const loc = locale === 'en' ? 'en-US' : 'zh-CN';
   const now = new Date();
   const sameDay =
     d.getFullYear() === now.getFullYear() &&
     d.getMonth() === now.getMonth() &&
     d.getDate() === now.getDate();
   if (sameDay) {
-    return d.toLocaleTimeString('zh-CN', { hour12: false });
+    return d.toLocaleTimeString(loc, { hour12: false });
   }
-  return `${d.getMonth() + 1}/${d.getDate()} ${d.toLocaleTimeString('zh-CN', { hour12: false })}`;
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.toLocaleTimeString(loc, { hour12: false })}`;
 }
 
 export function NotificationDrawer({
@@ -26,8 +29,9 @@ export function NotificationDrawer({
   labelForPath,
 }: {
   onClose: () => void;
-  labelForPath: (path: string) => string;
+  labelForPath: (path: string, locale?: Locale) => string;
 }) {
+  const { locale, tr } = useI18n();
   const navigate = useNavigate();
   const { history, unreadCount, markHistoryRead, clearHistory, removeHistoryItem } = useToast();
   const [filter, setFilter] = useState<'all' | 'error'>('all');
@@ -59,29 +63,29 @@ export function NotificationDrawer({
       title={
         <>
           <Bell className="h-4 w-4 text-indigo-500 shrink-0" />
-          <span>消息历史</span>
+          <span>{tr('消息历史', 'Notification History')}</span>
         </>
       }
-      subtitle="仅保存在当前浏览器本地（最多 80 条），退出登录后自动清除。"
+      subtitle={tr('仅保存在当前浏览器本地（最多 80 条），退出登录后自动清除。', 'Stored locally in this browser only (up to 80 items) and cleared on sign out.')}
       width="md"
       onClose={onClose}
       headerExtra={
         <div className="flex items-center gap-1.5">
           {unreadCount > 0 && (
             <Button size="sm" onClick={markHistoryRead}>
-              全部已读
+              {tr('全部已读', 'Mark All Read')}
             </Button>
           )}
           {history.length > 0 && (
             <Button size="sm" onClick={clearHistory}>
-              清空
+              {tr('清空', 'Clear')}
             </Button>
           )}
         </div>
       }
       footer={
         <Button size="sm" variant="primary" onClick={onClose}>
-          关闭
+          {tr('关闭', 'Close')}
         </Button>
       }
     >
@@ -96,7 +100,7 @@ export function NotificationDrawer({
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
             }`}
           >
-            全部 ({history.length})
+            {tr('全部', 'All')} ({history.length})
           </button>
           <button
             type="button"
@@ -107,18 +111,18 @@ export function NotificationDrawer({
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
             }`}
           >
-            仅异常 ({errorCount})
+            {tr('仅异常', 'Errors Only')} ({errorCount})
           </button>
         </div>
 
         {visible.length === 0 ? (
           <EmptyState
             icon={<Bell className="h-6 w-6" />}
-            title={filter === 'error' ? '暂无异常消息' : '暂无历史消息'}
+            title={filter === 'error' ? tr('暂无异常消息', 'No Error Alerts') : tr('暂无历史消息', 'No Notification History')}
             description={
               filter === 'error'
-                ? '当前本地缓存中没有记录到错误提示。'
-                : '主机探测、集群操作和接口反馈的提示消息会自动缓存在这里。'
+                ? tr('当前本地缓存中没有记录到错误提示。', 'No error alerts are recorded in local browser history.')
+                : tr('主机探测、集群操作和接口反馈的提示消息会自动缓存在这里。', 'Host probes, cluster operations, and API alerts are cached here automatically.')
             }
           />
         ) : (
@@ -148,7 +152,7 @@ export function NotificationDrawer({
                         <div className="font-medium text-slate-900 dark:text-slate-100 break-words leading-5">
                           {!item.read && (
                             <span
-                              aria-label="未读"
+                              aria-label={tr('未读', 'Unread')}
                               className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-indigo-500 align-middle"
                             />
                           )}
@@ -157,7 +161,7 @@ export function NotificationDrawer({
                         <button
                           type="button"
                           onClick={() => removeHistoryItem(item.id)}
-                          aria-label="删除此条消息"
+                          aria-label={tr('删除此条消息', 'Delete alert')}
                           className="rounded p-1 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200 shrink-0"
                         >
                           <Trash2 className="h-3 w-3" />
@@ -174,14 +178,14 @@ export function NotificationDrawer({
 
                       <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
                         <div className="flex items-center gap-2">
-                          <span className="font-mono">{formatHistoryTime(item.createdAt)}</span>
+                          <span className="font-mono">{formatHistoryTime(item.createdAt, locale)}</span>
                           <span>·</span>
                           <button
                             type="button"
                             onClick={() => void handleJump(item.path)}
                             className="text-indigo-600 hover:underline dark:text-indigo-400"
                           >
-                            {labelForPath(item.path)}
+                            {labelForPath(item.path, locale)}
                           </button>
                         </div>
                         <button
@@ -192,12 +196,12 @@ export function NotificationDrawer({
                           {copiedId === item.id ? (
                             <>
                               <Check className="h-3 w-3 text-emerald-500" />
-                              <span>已复制</span>
+                              <span>{tr('已复制', 'Copied')}</span>
                             </>
                           ) : (
                             <>
                               <Copy className="h-3 w-3" />
-                              <span>复制</span>
+                              <span>{tr('复制', 'Copy')}</span>
                             </>
                           )}
                         </button>

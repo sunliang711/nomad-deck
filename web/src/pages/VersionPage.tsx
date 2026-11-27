@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2, RefreshCw, RotateCcw } from 'lucide-react';
-import { api, apiDelete, apiGet, apiPost, apiPut, fmtTime } from '../lib/api';
+import { api, apiDelete, apiGet, apiPost, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { useI18n } from '../lib/i18n';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import {
-  formatDurationZh,
+  formatDuration,
   upgradeStage,
   VersionCheckTimeoutError,
   waitForVersion,
@@ -33,6 +34,7 @@ const hasTime = (value?: string | null) => Boolean(value && !value.startsWith('0
 
 export function VersionPage() {
   const { isAdmin } = useAuth();
+  const { locale, isEn, tr } = useI18n();
   const { openTask, openTaskList } = useOpsDrawer();
   const toast = useToast();
   const askConfirm = useConfirm();
@@ -92,12 +94,12 @@ export function VersionPage() {
         setCheckedAt(new Date());
       } catch (ex: any) {
         setCheckedAt(new Date());
-        setCheckError(ex?.message || '检查新版本失败');
+        setCheckError(ex?.message || tr('检查新版本失败', 'Failed to check for updates'));
       } finally {
         setChecking(false);
       }
     },
-    [clearUpgradeSchedule, isAdmin],
+    [clearUpgradeSchedule, isAdmin, tr],
   );
 
   const loadSchedule = useCallback(async () => {
@@ -143,7 +145,7 @@ export function VersionPage() {
           void checkUpdate();
         }
       } catch (ex: any) {
-        if (mounted) setCheckError(ex?.message || '获取版本信息失败');
+        if (mounted) setCheckError(ex?.message || tr('获取版本信息失败', 'Failed to fetch version info'));
       }
     })();
 
@@ -217,15 +219,15 @@ export function VersionPage() {
           if (ctrl.signal.aborted || probeCtrlRef.current !== ctrl) return;
           probeCtrlRef.current = null;
           if (cause instanceof VersionCheckTimeoutError) {
-            setUpdateError(`等待 ${targetVersion} 启动超时，请检查服务状态后手动刷新页面`);
+            setUpdateError(tr(`等待 ${targetVersion} 启动超时，请检查服务状态后手动刷新页面`, `Timed out waiting for ${targetVersion} to start; verify service health and refresh manually`));
             setUpdatePhase('timeout');
           } else {
-            setUpdateError('检查更新结果失败，请手动刷新页面');
+            setUpdateError(tr('检查更新结果失败，请手动刷新页面', 'Failed to verify update result; please refresh manually'));
             setUpdatePhase('failed');
           }
         });
     },
-    [stopUpdateMonitor],
+    [stopUpdateMonitor, tr],
   );
 
   // 立即更新模态窗的任务进度订阅
@@ -239,7 +241,7 @@ export function VersionPage() {
       if (updatePhase === 'complete') return;
       if (status && status !== 'success' && status !== 'succeeded') {
         stopUpdateMonitor();
-        setUpdateError(errMsg || '更新任务失败，请查看任务日志');
+        setUpdateError(errMsg || tr('更新任务失败，请查看任务日志', 'Update task failed; check task logs'));
         setUpdatePhase('failed');
       } else if (updateTarget) {
         setUpdatePhase('restarting');
@@ -289,30 +291,33 @@ export function VersionPage() {
   const updateModalClosable = ['failed', 'timeout', 'unknown'].includes(updatePhase);
   const updateModalTitle = {
     idle: '',
-    submitting: `更新到 ${updateTarget}`,
-    unknown: '更新状态待确认',
-    updating: `更新到 ${updateTarget}`,
-    restarting: `更新到 ${updateTarget}`,
-    verifying: `更新到 ${updateTarget}`,
-    complete: '更新完成',
-    failed: '更新失败',
-    timeout: '确认更新超时',
+    submitting: tr(`更新到 ${updateTarget}`, `Updating to ${updateTarget}`),
+    unknown: tr('更新状态待确认', 'Update Status Uncertain'),
+    updating: tr(`更新到 ${updateTarget}`, `Updating to ${updateTarget}`),
+    restarting: tr(`更新到 ${updateTarget}`, `Updating to ${updateTarget}`),
+    verifying: tr(`更新到 ${updateTarget}`, `Updating to ${updateTarget}`),
+    complete: tr('更新完成', 'Update Complete'),
+    failed: tr('更新失败', 'Update Failed'),
+    timeout: tr('确认更新超时', 'Update Verification Timed Out'),
   }[updatePhase];
 
   const runImmediateUpdate = async () => {
     const latestVer = info?.latest?.version;
     if (!info?.update_available || !latestVer || updateBusy) return;
     if (scheduleActive) {
-      setCheckError('请先取消正在进行的预约升级');
+      setCheckError(tr('请先取消正在进行的预约升级', 'Please cancel the active scheduled upgrade first'));
       return;
     }
     if (!info.available) {
-      setCheckError(info.unavailable_reason || '当前环境不支持原地自更新');
+      setCheckError(info.unavailable_reason || tr('当前环境不支持原地自更新', 'In-place self-update is not available in this environment'));
       return;
     }
     const ok = await askConfirm(
-      `下载并校验 ${latestVer} 后将自动备份数据库、替换程序并重启控制面，页面会短暂断开，托管中的 Nomad / Vault 集群不受影响。继续？`,
-      { title: `更新到 ${latestVer}`, confirmText: '立即更新' },
+      tr(
+        `下载并校验 ${latestVer} 后将自动备份数据库、替换程序并重启控制面，页面会短暂断开，托管中的 Nomad / Vault 集群不受影响。继续？`,
+        `After downloading and verifying ${latestVer}, the database will be backed up, the binary replaced, and the control plane restarted. The UI will briefly disconnect; managed Nomad / Vault clusters are unaffected. Continue?`,
+      ),
+      { title: tr(`更新到 ${latestVer}`, `Update to ${latestVer}`), confirmText: tr('立即更新', 'Update Now') },
     );
     if (!ok) return;
 
@@ -342,7 +347,7 @@ export function VersionPage() {
       if (ex instanceof TypeError) {
         setUpdatePhase('unknown');
       } else {
-        setUpdateError(ex?.message || '发起更新失败');
+        setUpdateError(ex?.message || tr('发起更新失败', 'Failed to start update'));
         setUpdatePhase('failed');
       }
     }
@@ -361,7 +366,7 @@ export function VersionPage() {
       prevScheduleActiveRef.current = true;
       setScheduleModalOpen(false);
     } catch (ex: any) {
-      setScheduleError(ex?.message || '预约升级失败');
+      setScheduleError(ex?.message || tr('预约升级失败', 'Failed to schedule upgrade'));
     } finally {
       setScheduleBusy(false);
     }
@@ -374,7 +379,7 @@ export function VersionPage() {
       setSchedule(res.schedule);
       prevScheduleActiveRef.current = false;
     } catch (ex: any) {
-      setCheckError(ex?.message || '取消预约升级失败');
+      setCheckError(ex?.message || tr('取消预约升级失败', 'Failed to cancel scheduled upgrade'));
     } finally {
       setScheduleBusy(false);
     }
@@ -383,9 +388,9 @@ export function VersionPage() {
   const handleManualRollback = async () => {
     const target = info?.manual_rollback?.target_version;
     if (!target) return;
-    const ok = await askConfirm(`确认将控制面回退到上一版本 ${target} 吗？`, {
-      title: '确认版本回退',
-      confirmText: '确认回退',
+    const ok = await askConfirm(tr(`确认将控制面回退到上一版本 ${target} 吗？`, `Roll back the control plane to previous version ${target}?`), {
+      title: tr('确认版本回退', 'Confirm Version Rollback'),
+      confirmText: tr('确认回退', 'Rollback'),
       danger: true,
     });
     if (!ok) return;
@@ -400,7 +405,7 @@ export function VersionPage() {
       setUpdatePhase('restarting');
       startUpdateMonitor(target);
     } catch (ex: any) {
-      toast.error(ex?.message || '版本回退失败');
+      toast.error(ex?.message || tr('版本回退失败', 'Version rollback failed'));
     } finally {
       setRollbackBusy(false);
     }
@@ -427,30 +432,30 @@ export function VersionPage() {
         return {
           border: 'border-l-indigo-500',
           tone: 'blue' as const,
-          label: isLatest ? '等待新版本发布' : `等待 ${schedule.target_version} 发布`,
+          label: isLatest ? tr('等待新版本发布', 'Waiting for new release') : tr(`等待 ${schedule.target_version} 发布`, `Waiting for ${schedule.target_version}`),
         };
       case 'upgrading':
         return {
           border: 'border-l-indigo-500',
           tone: 'blue' as const,
-          label: `正在升级到 ${ver}`,
+          label: tr(`正在升级到 ${ver}`, `Upgrading to ${ver}`),
         };
       case 'completed':
         return {
           border: 'border-l-emerald-500',
           tone: 'green' as const,
-          label: `已升级到 ${ver}`,
+          label: tr(`已升级到 ${ver}`, `Upgraded to ${ver}`),
         };
       case 'timed_out':
         return isLatest
-          ? { border: 'border-l-indigo-500', tone: 'blue' as const, label: '等待结束，没有发布新版本' }
-          : { border: 'border-l-amber-500', tone: 'amber' as const, label: `等待结束，${schedule.target_version} 没有发布` };
+          ? { border: 'border-l-indigo-500', tone: 'blue' as const, label: tr('等待结束，没有发布新版本', 'Timed out; no new release published') }
+          : { border: 'border-l-amber-500', tone: 'amber' as const, label: tr(`等待结束，${schedule.target_version} 没有发布`, `Timed out; ${schedule.target_version} not published`) };
       case 'cancelled':
-        return { border: 'border-l-slate-400', tone: 'neutral' as const, label: '已取消' };
+        return { border: 'border-l-slate-400', tone: 'neutral' as const, label: tr('已取消', 'Cancelled') };
       default:
-        return { border: 'border-l-rose-500', tone: 'red' as const, label: '升级失败' };
+        return { border: 'border-l-rose-500', tone: 'red' as const, label: tr('升级失败', 'Upgrade Failed') };
     }
-  }, [schedule]);
+  }, [schedule, tr]);
 
   const scheduleWaitPercent = useMemo(() => {
     if (!schedule || schedule.status !== 'waiting') return 0;
@@ -461,49 +466,49 @@ export function VersionPage() {
   }, [nowMs, schedule]);
 
   const scheduleRemaining = useMemo(() => {
-    if (!schedule?.deadline_at) return '0 秒';
+    if (!schedule?.deadline_at) return formatDuration(0, locale);
     const sec = Math.max(0, Math.round((Date.parse(schedule.deadline_at) - nowMs) / 1000));
-    return formatDurationZh(sec);
-  }, [nowMs, schedule?.deadline_at]);
+    return formatDuration(sec, locale);
+  }, [locale, nowMs, schedule?.deadline_at]);
 
   const scheduleNextCheck = useMemo(() => {
     if (!schedule?.next_check_at) return '';
     const next = Date.parse(schedule.next_check_at);
     if (!Number.isFinite(next) || next <= 0) return '';
     const sec = Math.round((next - nowMs) / 1000);
-    return sec > 0 ? `${sec} 秒后` : '马上';
-  }, [nowMs, schedule?.next_check_at]);
+    return sec > 0 ? tr(`${sec} 秒后`, `in ${sec}s`) : tr('马上', 'now');
+  }, [nowMs, schedule?.next_check_at, tr]);
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="版本与升级"
-        subtitle="检查 NomadDeck 控制面 Release 更新、实时进度升级、预约升级或回退上一版本"
+        title={tr('版本与升级', 'Version & Upgrade')}
+        subtitle={tr('检查 NomadDeck 控制面 Release 更新、实时进度升级、预约升级或回退上一版本', 'Check NomadDeck control plane releases, upgrade with live progress, schedule upgrades, or roll back')}
       />
 
-      <Card title="系统信息">
+      <Card title={tr('系统信息', 'System Info')}>
         {info ? (
           <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs sm:text-sm">
             <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/40">
-              <dt className="text-[11px] text-slate-500 dark:text-slate-400">构建提交</dt>
+              <dt className="text-[11px] text-slate-500 dark:text-slate-400">{tr('构建提交', 'Git Commit')}</dt>
               <dd className="mt-1 font-mono font-medium text-slate-800 dark:text-slate-200 truncate">{info.commit || 'dev'}</dd>
             </div>
             <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/40">
-              <dt className="text-[11px] text-slate-500 dark:text-slate-400">构建时间</dt>
+              <dt className="text-[11px] text-slate-500 dark:text-slate-400">{tr('构建时间', 'Build Date')}</dt>
               <dd className="mt-1 font-mono font-medium text-slate-800 dark:text-slate-200 truncate">{info.build_date || '-'}</dd>
             </div>
             <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/40">
-              <dt className="text-[11px] text-slate-500 dark:text-slate-400">运行环境</dt>
+              <dt className="text-[11px] text-slate-500 dark:text-slate-400">{tr('运行环境', 'Runtime')}</dt>
               <dd className="mt-1 font-mono font-medium text-slate-800 dark:text-slate-200 truncate">
                 {[info.go_version, info.platform].filter(Boolean).join(' · ') || '-'}
               </dd>
             </div>
             <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/40">
-              <dt className="text-[11px] text-slate-500 dark:text-slate-400">发布通道</dt>
+              <dt className="text-[11px] text-slate-500 dark:text-slate-400">{tr('发布通道', 'Release Channel')}</dt>
               <dd className="mt-1 flex flex-wrap items-center gap-2 text-slate-800 dark:text-slate-200">
-                <span className="font-medium">{info.channel === 'prerelease' ? '预发布' : '正式版 (stable)'}</span>
+                <span className="font-medium">{info.channel === 'prerelease' ? tr('预发布', 'Prerelease') : tr('正式版 (stable)', 'Stable')}</span>
                 <Link to="/settings" className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
-                  调整
+                  {tr('调整', 'Change')}
                 </Link>
               </dd>
             </div>
@@ -511,27 +516,27 @@ export function VersionPage() {
         ) : (
           <div className="flex items-center gap-2 py-4 text-xs text-slate-500">
             <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />
-            <span>正在加载系统信息…</span>
+            <span>{tr('正在加载系统信息…', 'Loading system info...')}</span>
           </div>
         )}
       </Card>
 
-      <Card title="版本与升级">
+      <Card title={tr('版本与升级', 'Version & Upgrade')}>
         <div className="space-y-4">
           {/* 双栏版本对比框 */}
           <div className="flex flex-col md:flex-row md:items-stretch gap-3">
             <div className="flex-1 rounded-xl border border-slate-200/80 bg-slate-50/70 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/60">
-              <span className="block text-xs text-slate-500 dark:text-slate-400">当前版本</span>
+              <span className="block text-xs text-slate-500 dark:text-slate-400">{tr('当前版本', 'Current Version')}</span>
               <div className="my-1 flex flex-wrap items-center gap-2 min-h-[30px]">
                 <strong className="text-lg font-mono font-semibold text-slate-900 dark:text-slate-100">
                   {info?.current_version ?? '…'}
                 </strong>
                 {info?.dev_mode ? (
-                  <Badge tone="amber">开发模式</Badge>
+                  <Badge tone="amber">{tr('开发模式', 'Dev Mode')}</Badge>
                 ) : info && !info.available ? (
-                  <Badge tone="amber">不可自更新</Badge>
+                  <Badge tone="amber">{tr('不可自更新', 'Self-Update Unavailable')}</Badge>
                 ) : info?.available ? (
-                  <Badge tone="green">支持自更新</Badge>
+                  <Badge tone="green">{tr('支持自更新', 'Self-Update Ready')}</Badge>
                 ) : null}
               </div>
             </div>
@@ -541,29 +546,29 @@ export function VersionPage() {
             </div>
 
             <div className="flex-1 rounded-xl border border-slate-200/80 bg-slate-50/70 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/60">
-              <span className="block text-xs text-slate-500 dark:text-slate-400">最新版本</span>
+              <span className="block text-xs text-slate-500 dark:text-slate-400">{tr('最新版本', 'Latest Version')}</span>
               <div className="my-1 flex flex-wrap items-center gap-2 min-h-[30px]">
                 {checking ? (
                   <span className="inline-flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />
-                    <span>正在检查…</span>
+                    <span>{tr('正在检查…', 'Checking...')}</span>
                   </span>
                 ) : checkError && !info?.latest ? (
-                  <span className="text-sm font-medium text-rose-600 dark:text-rose-400">检查失败</span>
+                  <span className="text-sm font-medium text-rose-600 dark:text-rose-400">{tr('检查失败', 'Check Failed')}</span>
                 ) : info?.latest ? (
                   <>
                     <strong className="text-lg font-mono font-semibold text-slate-900 dark:text-slate-100">
                       {info.latest.version}
                     </strong>
-                    {info.update_available ? <Badge tone="green">有新版本</Badge> : <Badge tone="neutral">已是最新</Badge>}
+                    {info.update_available ? <Badge tone="green">{tr('有新版本', 'Update Available')}</Badge> : <Badge tone="neutral">{tr('已是最新', 'Up to Date')}</Badge>}
                   </>
                 ) : (
-                  <span className="text-sm text-slate-400 dark:text-slate-500">未检查</span>
+                  <span className="text-sm text-slate-400 dark:text-slate-500">{tr('未检查', 'Not Checked')}</span>
                 )}
               </div>
               {checkedAt && !checking && (
                 <span className="block text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-                  检查于 {checkedAt.toLocaleTimeString('zh-CN', { hour12: false })}
+                  {tr('检查于 ', 'Checked at ')}{checkedAt.toLocaleTimeString(isEn ? 'en-US' : 'zh-CN', { hour12: false })}
                 </span>
               )}
             </div>
@@ -579,7 +584,7 @@ export function VersionPage() {
                   disabled={updateBusy || !info?.available || scheduleActive}
                   onClick={() => void runImmediateUpdate()}
                 >
-                  立即更新到 {info.latest.version}
+                  {tr(`立即更新到 ${info.latest.version}`, `Update to ${info.latest.version}`)}
                 </Button>
               )}
               <Button
@@ -588,7 +593,7 @@ export function VersionPage() {
                 onClick={() => void checkUpdate(scheduleFinished)}
               >
                 {!checking && <RefreshCw className="h-3.5 w-3.5" />}
-                <span>重新检查</span>
+                <span>{tr('重新检查', 'Check Again')}</span>
               </Button>
               {isAdmin && (
                 <Button
@@ -598,15 +603,15 @@ export function VersionPage() {
                     setScheduleModalOpen(true);
                   }}
                 >
-                  预约升级
+                  {tr('预约升级', 'Schedule Upgrade')}
                 </Button>
               )}
             </div>
 
             <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-              <span>GitHub 访问：{proxyEnabled ? '通过系统代理' : '直连'}</span>
+              <span>{tr('GitHub 访问：', 'GitHub access: ')}{proxyEnabled ? tr('通过系统代理', 'Via System Proxy') : tr('直连', 'Direct')}</span>
               <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">
-                前往下载代理设置
+                {tr('前往下载代理设置', 'Proxy Settings')}
               </Link>
             </div>
           </div>
@@ -615,7 +620,7 @@ export function VersionPage() {
 
           {info && !info.available && info.unavailable_reason && (
             <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-3.5 py-2.5 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-              {info.unavailable_reason}，「立即更新」和「预约升级」仅在正式部署环境中可用。
+              {info.unavailable_reason}{tr('，「立即更新」和「预约升级」仅在正式部署环境中可用。', '. Immediate and scheduled upgrades are only available in deployed environments.')}
             </div>
           )}
 
@@ -626,7 +631,7 @@ export function VersionPage() {
               className="rounded-xl border border-slate-200/80 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-950/60"
             >
               <summary className="cursor-pointer px-4 py-2.5 text-xs font-semibold text-slate-800 dark:text-slate-200 select-none">
-                {info.latest.version} 更新说明
+                {info.latest.version} {tr('更新说明', 'Release Notes')}
               </summary>
               <pre className="border-t border-slate-200/70 dark:border-slate-800 px-4 py-3 text-xs leading-relaxed whitespace-pre-wrap font-sans text-slate-700 dark:text-slate-300 max-h-60 overflow-auto">
                 {info.latest.notes}
@@ -640,21 +645,21 @@ export function VersionPage() {
               className={`rounded-xl border border-slate-200/90 border-l-[3px] ${scheduleView.border} bg-white px-4 py-3.5 space-y-2.5 dark:border-slate-800 dark:bg-slate-900/70`}
             >
               <div className="flex flex-wrap items-center gap-2">
-                <strong className="text-sm text-slate-900 dark:text-slate-100">预约升级</strong>
+                <strong className="text-sm text-slate-900 dark:text-slate-100">{tr('预约升级', 'Scheduled Upgrade')}</strong>
                 <Badge tone={scheduleView.tone}>{scheduleView.label}</Badge>
                 <div className="ml-auto flex items-center gap-3">
                   {isAdmin && schedule.status === 'waiting' && (
                     <Button size="sm" loading={scheduleBusy} onClick={() => void handleCancelSchedule()}>
-                      取消预约
+                      {tr('取消预约', 'Cancel Schedule')}
                     </Button>
                   )}
                   {schedule.task_id && (
                     <button
                       type="button"
-                      onClick={() => openTask(schedule.task_id, '预约自更新任务')}
+                      onClick={() => openTask(schedule.task_id, tr('预约自更新任务', 'Scheduled Self-Update Task'))}
                       className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
                     >
-                      查看任务
+                      {tr('查看任务', 'View Task')}
                     </button>
                   )}
                   {isAdmin && scheduleFinished && (
@@ -664,7 +669,7 @@ export function VersionPage() {
                       onClick={() => void clearUpgradeSchedule()}
                       className="text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
                     >
-                      清除
+                      {tr('清除', 'Clear')}
                     </button>
                   )}
                 </div>
@@ -679,21 +684,21 @@ export function VersionPage() {
                     />
                   </div>
                   <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-                    <span>目标：{schedule.target_version === 'latest' ? '最新正式版' : schedule.target_version}</span>
-                    <span>剩余 {scheduleRemaining}（截止 {fmtTime(schedule.deadline_at)}）</span>
+                    <span>{tr('目标：', 'Target: ')}{schedule.target_version === 'latest' ? tr('最新正式版', 'Latest Release') : schedule.target_version}</span>
+                    <span>{tr('剩余 ', 'Remaining ')}{scheduleRemaining}（{tr('截止 ', 'Deadline ')}{fmtTime(schedule.deadline_at, locale)}）</span>
                     <span>
-                      每 {formatDurationZh(schedule.interval_seconds)}检查一次
-                      {scheduleNextCheck ? `，下次 ${scheduleNextCheck}` : ''}
+                      {tr(`每 ${formatDuration(schedule.interval_seconds, locale)}检查一次`, `Every ${formatDuration(schedule.interval_seconds, locale)}`)}
+                      {scheduleNextCheck ? tr(`，下次 ${scheduleNextCheck}`, `, next ${scheduleNextCheck}`) : ''}
                     </span>
-                    {hasTime(schedule.last_checked_at) && <span>上次检查 {fmtTime(schedule.last_checked_at)}</span>}
+                    {hasTime(schedule.last_checked_at) && <span>{tr('上次检查 ', 'Last checked ')}{fmtTime(schedule.last_checked_at, locale)}</span>}
                   </div>
                   {schedule.resolved_version && schedule.target_version === 'latest' && (
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      目前最新为 {schedule.resolved_version}，不比当前版本新，继续等待。
+                      {tr(`目前最新为 ${schedule.resolved_version}，不比当前版本新，继续等待。`, `Current latest is ${schedule.resolved_version} (not newer than current); continuing to wait.`)}
                     </p>
                   )}
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    控制面在后台检查，不需要保持页面打开。
+                    {tr('控制面在后台检查，不需要保持页面打开。', 'Control plane checks in the background; you can close this page.')}
                   </p>
                 </>
               ) : schedule.status === 'upgrading' ? (
@@ -706,14 +711,14 @@ export function VersionPage() {
                   />
                   {scheduleUnreachable && (
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      控制面正在重启，恢复后页面自动刷新。
+                      {tr('控制面正在重启，恢复后页面自动刷新。', 'Control plane is restarting; page will refresh automatically once back.')}
                     </p>
                   )}
                 </>
               ) : (
                 <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-                  <span>目标：{schedule.target_version === 'latest' ? '最新正式版' : schedule.target_version}</span>
-                  {hasTime(schedule.finished_at) && <span>结束于 {fmtTime(schedule.finished_at)}</span>}
+                  <span>{tr('目标：', 'Target: ')}{schedule.target_version === 'latest' ? tr('最新正式版', 'Latest Release') : schedule.target_version}</span>
+                  {hasTime(schedule.finished_at) && <span>{tr('结束于 ', 'Finished at ')}{fmtTime(schedule.finished_at, locale)}</span>}
                 </div>
               )}
 
@@ -732,24 +737,28 @@ export function VersionPage() {
           )}
 
           <p className="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-            更新只替换控制面服务本身，托管中的 Nomad / Vault 集群不受影响。版本检查与下载是否使用系统代理，可在「<Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">系统设置 → 下载代理</Link>」中按需开启；替换前会校验 Ed25519 签名与 SHA-256、试运行新程序并在线备份数据库，保留上一版本。
+            {tr('更新只替换控制面服务本身，托管中的 Nomad / Vault 集群不受影响。版本检查与下载是否使用系统代理，可在「', 'Updating only replaces the control plane binary; managed Nomad / Vault clusters are unaffected. Proxy usage can be toggled in "')}
+            <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">
+              {tr('系统设置 → 下载代理', 'Settings → Download Proxy')}
+            </Link>
+            {tr('」中按需开启；替换前会校验 Ed25519 签名与 SHA-256、试运行新程序并在线备份数据库，保留上一版本。', '". Ed25519 signatures, SHA-256 checksums, binary dry-run, and online DB backup are performed prior to swap, keeping the previous version.')}
           </p>
         </div>
       </Card>
 
-      <Card title="上次自更新与手动回退">
+      <Card title={tr('上次自更新与手动回退', 'Last Self-Update & Manual Rollback')}>
         <div className="space-y-3 text-xs">
           {info?.last_result ? (
             <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5 space-y-2 dark:border-slate-800 dark:bg-slate-950/60">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-slate-500 dark:text-slate-400">状态：</span>
+                <span className="text-slate-500 dark:text-slate-400">{tr('状态：', 'Status: ')}</span>
                 <StatusBadge value={info.last_result.state} />
                 <span className="font-mono font-medium text-slate-800 dark:text-slate-200">
                   {info.last_result.from_version} → {info.last_result.to_version}
                 </span>
                 {info.last_result.finished_at && (
                   <span className="text-slate-400 dark:text-slate-500 tabular-nums">
-                    {fmtTime(info.last_result.finished_at)}
+                    {fmtTime(info.last_result.finished_at, locale)}
                   </span>
                 )}
               </div>
@@ -758,21 +767,21 @@ export function VersionPage() {
               )}
               {info.last_result.task_id && (
                 <div>
-                  <Button size="sm" onClick={() => openTask(info.last_result.task_id, '控制面自更新日志')}>
-                    查看该次任务日志
+                  <Button size="sm" onClick={() => openTask(info.last_result.task_id, tr('控制面自更新日志', 'Self-Update Logs'))}>
+                    {tr('查看该次任务日志', 'View Task Logs')}
                   </Button>
                 </div>
               )}
             </div>
           ) : (
-            <div className="text-slate-500 dark:text-slate-400">暂无自更新记录</div>
+            <div className="text-slate-500 dark:text-slate-400">{tr('暂无自更新记录', 'No self-update history')}</div>
           )}
 
           {isAdmin &&
             (info?.manual_rollback?.available ? (
               <Button variant="danger-outline" loading={rollbackBusy} onClick={() => void handleManualRollback()}>
                 <RotateCcw className="h-3.5 w-3.5" />
-                <span>回退到 {info.manual_rollback.target_version}</span>
+                <span>{tr(`回退到 ${info.manual_rollback.target_version}`, `Rollback to ${info.manual_rollback.target_version}`)}</span>
               </Button>
             ) : info?.manual_rollback?.unavailable_note ? (
               <div className="text-slate-500 dark:text-slate-400">{info.manual_rollback.unavailable_note}</div>
@@ -801,22 +810,22 @@ export function VersionPage() {
         footer={
           <div className="flex flex-wrap justify-end gap-2">
             {updateTaskId ? (
-              <Button size="sm" onClick={() => openTask(updateTaskId, '控制面自更新日志')}>
-                查看任务日志
+              <Button size="sm" onClick={() => openTask(updateTaskId, tr('控制面自更新日志', 'Self-Update Logs'))}>
+                {tr('查看任务日志', 'View Task Logs')}
               </Button>
             ) : updatePhase === 'unknown' ? (
               <Button size="sm" onClick={openTaskList}>
-                打开后台任务
+                {tr('打开后台任务', 'Open Tasks')}
               </Button>
             ) : null}
             {(updatePhase === 'unknown' || updatePhase === 'failed' || updatePhase === 'timeout') && (
               <Button size="sm" onClick={() => window.location.reload()}>
-                刷新页面
+                {tr('刷新页面', 'Refresh Page')}
               </Button>
             )}
             {updateModalClosable && (
               <Button size="sm" variant="primary" onClick={closeUpdateModal}>
-                关闭
+                {tr('关闭', 'Close')}
               </Button>
             )}
           </div>
@@ -825,7 +834,7 @@ export function VersionPage() {
         <div className="space-y-4">
           {updatePhase === 'unknown' ? (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/60 dark:text-amber-200 leading-relaxed">
-              没有收到提交结果，可能是网络中断或控制面正在重启。请在后台任务中确认是否已创建自更新任务，再决定是否重试。
+              {tr('没有收到提交结果，可能是网络中断或控制面正在重启。请在后台任务中确认是否已创建自更新任务，再决定是否重试。', 'No response received; the network may have dropped or the control plane is restarting. Check Background Tasks before retrying.')}
             </div>
           ) : (
             <>
@@ -838,7 +847,7 @@ export function VersionPage() {
               />
               {updatePhase === 'complete' && (
                 <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-200">
-                  已更新到 {updateTarget}，正在刷新页面…
+                  {tr(`已更新到 ${updateTarget}，正在刷新页面…`, `Updated to ${updateTarget}; refreshing page...`)}
                 </div>
               )}
               {updateError && (

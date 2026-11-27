@@ -13,6 +13,7 @@ import {
   Shield,
   Sparkles,
 } from 'lucide-react';
+import { useI18n } from '../lib/i18n';
 
 export function GettingStarted({
   hasHosts,
@@ -27,6 +28,7 @@ export function GettingStarted({
   hasVault: boolean;
   hasReadyVault?: boolean;
 }) {
+  const { tr } = useI18n();
   const nomadReady = hasReadyNomad ?? hasNomad;
   const vaultReady = hasReadyVault ?? hasVault;
   const allInfraReady = hasHosts && nomadReady;
@@ -34,40 +36,40 @@ export function GettingStarted({
 
   const steps = [
     {
-      title: '接入 Linux 主机',
-      description: '确认 SSH 密钥与连通性，只需 1 台主机即可单机体验。',
+      title: tr('接入 Linux 主机', 'Connect Linux Hosts'),
+      description: tr('确认 SSH 密钥与连通性，只需 1 台主机即可单机体验。', 'Verify SSH keys and connectivity; just 1 host is enough for single-node mode.'),
       to: '/infra',
       icon: Server,
       done: hasHosts,
       optional: false,
-      cta: '前往接入主机',
+      cta: tr('前往接入主机', 'Add Hosts'),
     },
     {
-      title: '搭建 Nomad',
-      description: '选择主机与角色，部署后即可调度和运行任务。',
+      title: tr('搭建 Nomad', 'Deploy Nomad'),
+      description: tr('选择主机与角色，部署后即可调度和运行任务。', 'Select hosts and roles, then deploy to schedule and run workloads.'),
       to: '/nomad',
       icon: Boxes,
       done: nomadReady,
       optional: false,
-      cta: hasNomad ? '完成 Nomad 部署' : '新建 Nomad 集群',
+      cta: hasNomad ? tr('完成 Nomad 部署', 'Finish Nomad Deploy') : tr('新建 Nomad 集群', 'New Nomad Cluster'),
     },
     {
-      title: '搭建 Vault',
-      description: '安全托管密码、证书与密钥，支持自动解封与联动。',
+      title: tr('搭建 Vault', 'Deploy Vault'),
+      description: tr('安全托管密码、证书与密钥，支持自动解封与联动。', 'Securely store passwords, certs, and secrets with auto-unseal and integrations.'),
       to: '/vault',
       icon: Shield,
       done: vaultReady,
       optional: true,
-      cta: hasVault ? '完成 Vault 初始化' : '新建 Vault 集群',
+      cta: hasVault ? tr('完成 Vault 初始化', 'Initialize Vault') : tr('新建 Vault 集群', 'New Vault Cluster'),
     },
     {
-      title: '运行第一个 Job',
-      description: '使用内置模板或可视化积木，校验、预览计划并提交运行。',
+      title: tr('运行第一个 Job', 'Run Your First Job'),
+      description: tr('使用内置模板或可视化积木，校验、预览计划并提交运行。', 'Use built-in templates or the visual builder to validate, plan, and submit.'),
       to: '/jobs',
       icon: FileCode2,
       done: false,
       optional: false,
-      cta: '前往 Job 中心',
+      cta: tr('前往 Job 中心', 'Open Job Center'),
     },
   ];
 
@@ -80,10 +82,10 @@ export function GettingStarted({
             <Sparkles className="h-3.5 w-3.5" />
           </span>
           <span className="font-semibold text-slate-900 dark:text-slate-100">
-            {vaultReady ? 'Nomad 与 Vault 集群均已就绪' : 'Nomad 集群已就绪'}
+            {vaultReady ? tr('Nomad 与 Vault 集群均已就绪', 'Nomad & Vault Clusters Ready') : tr('Nomad 集群已就绪', 'Nomad Cluster Ready')}
           </span>
           <span className="hidden md:inline text-slate-500 dark:text-slate-400">
-            · 常用快捷入口
+            · {tr('常用快捷入口', 'Quick Shortcuts')}
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -92,14 +94,14 @@ export function GettingStarted({
             className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 font-medium text-white hover:bg-indigo-700 transition shadow-xs"
           >
             <FileCode2 className="h-3.5 w-3.5" />
-            <span>编排 Job</span>
+            <span>{tr('编排 Job', 'Build Job')}</span>
           </Link>
           <Link
             to="/integrations"
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200 dark:hover:border-indigo-500/40 dark:hover:text-indigo-300 transition"
           >
             <Link2 className="h-3.5 w-3.5" />
-            <span>集群联动</span>
+            <span>{tr('集群联动', 'Integrations')}</span>
           </Link>
           {vaultReady ? (
             <Link
@@ -107,7 +109,7 @@ export function GettingStarted({
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200 dark:hover:border-indigo-500/40 dark:hover:text-indigo-300 transition"
             >
               <Shield className="h-3.5 w-3.5" />
-              <span>管理密钥</span>
+              <span>{tr('管理密钥', 'Manage Secrets')}</span>
             </Link>
           ) : (
             <Link
@@ -115,16 +117,16 @@ export function GettingStarted({
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-medium text-slate-700 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200 dark:hover:border-indigo-500/40 dark:hover:text-indigo-300 transition"
             >
               <Shield className="h-3.5 w-3.5" />
-              <span>搭建 Vault</span>
+              <span>{tr('搭建 Vault', 'Deploy Vault')}</span>
             </Link>
           )}
           <button
             type="button"
             onClick={() => setExpanded(true)}
             className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 transition"
-            title="展开搭建引导"
+            title={tr('展开搭建引导', 'Expand onboarding guide')}
           >
-            <span className="hidden sm:inline">引导</span>
+            <span className="hidden sm:inline">{tr('引导', 'Guide')}</span>
             <ChevronDown className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -141,18 +143,18 @@ export function GettingStarted({
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="min-w-0">
           <div className="inline-flex items-center gap-2 text-xs font-medium text-indigo-600 dark:text-indigo-300">
-            <span>{allInfraReady ? '集群控制面就绪' : '快速开始 · 新手引导'}</span>
+            <span>{allInfraReady ? tr('集群控制面就绪', 'Control Plane Ready') : tr('快速开始 · 新手引导', 'Quick Start · Onboarding')}</span>
             <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-mono text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">
               {doneCount}/4
             </span>
           </div>
           <h2 className="mt-1 text-lg font-semibold text-slate-900 dark:text-slate-100">
-            {allInfraReady ? '核心服务已就绪，开始编排工作负载' : '4 步搭建你的第一个集群'}
+            {allInfraReady ? tr('核心服务已就绪，开始编排工作负载', 'Core Services Ready — Start Deploying Workloads') : tr('4 步搭建你的第一个集群', '4 Steps to Launch Your First Cluster')}
           </h2>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {allInfraReady
-              ? '可直接进入 Job 中心提交任务，或管理 Vault 密钥与集群联动。'
-              : '按顺序完成以下几步，即可从空白主机快速上线 Nomad 与 Vault。'}
+              ? tr('可直接进入 Job 中心提交任务，或管理 Vault 密钥与集群联动。', 'Head to the Job Center to submit workloads, or manage Vault secrets and integrations.')
+              : tr('按顺序完成以下几步，即可从空白主机快速上线 Nomad 与 Vault。', 'Follow these steps in order to spin up Nomad and Vault from bare Linux hosts.')}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -162,7 +164,7 @@ export function GettingStarted({
               onClick={() => setExpanded(false)}
               className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 transition"
             >
-              <span>收起</span>
+              <span>{tr('收起', 'Collapse')}</span>
               <ChevronUp className="h-3.5 w-3.5" />
             </button>
           )}
@@ -202,11 +204,11 @@ export function GettingStarted({
                 {step.done ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
                     <CheckCircle2 className="h-3 w-3" />
-                    已完成
+                    {tr('已完成', 'Done')}
                   </span>
                 ) : isCurrent ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200">
-                    当前推荐
+                    {tr('当前推荐', 'Next Step')}
                   </span>
                 ) : (
                   <ArrowUpRight className="h-4 w-4 text-slate-400" />
@@ -214,7 +216,7 @@ export function GettingStarted({
               </div>
               <div className="mt-3 text-sm font-semibold text-slate-800 dark:text-slate-100">
                 {index + 1}. {step.title}
-                {step.optional && <span className="ml-1.5 text-[11px] font-normal text-slate-400">可选</span>}
+                {step.optional && <span className="ml-1.5 text-[11px] font-normal text-slate-400">{tr('可选', 'Optional')}</span>}
               </div>
               <p className="mt-1.5 text-xs leading-5 text-slate-500 dark:text-slate-400">{step.description}</p>
             </Link>

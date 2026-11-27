@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './lib/auth';
+import { useI18n } from './lib/i18n';
 import { OpsDrawerProvider } from './lib/opsDrawer';
 import { Layout } from './components/Layout';
 import { LoadingState } from './components/UI';
@@ -19,10 +20,11 @@ import { VersionPage } from './pages/VersionPage';
 
 function AppRoutes() {
   const { loading, authenticated, sessionExpired } = useAuth();
+  const { tr } = useI18n();
   if (loading) {
     return (
       <div className="min-h-screen grid place-items-center bg-[#f5f7fb] dark:bg-[#0b1120]">
-        <LoadingState label="正在加载 NomadDeck 控制面..." />
+        <LoadingState label={tr('正在加载 NomadDeck 控制面...', 'Loading NomadDeck Control Plane...')} />
       </div>
     );
   }

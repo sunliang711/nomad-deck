@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { useI18n } from '../lib/i18n';
 import { isTopDialog, registerDialog } from './dialogLayers';
 
 interface DrawerProps {
@@ -33,6 +34,7 @@ export function Drawer({
   children,
   bodyClassName = 'px-6 py-5 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200',
 }: DrawerProps) {
+  const { tr } = useI18n();
   const root = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
   const blocked = useRef(false);
@@ -93,7 +95,7 @@ export function Drawer({
         ref={root}
         role="dialog"
         aria-modal="true"
-        aria-label={typeof title === 'string' ? title : '详情抽屉'}
+        aria-label={typeof title === 'string' ? title : tr('详情抽屉', 'Details drawer')}
         aria-busy={busy}
         tabIndex={-1}
         className={`drawer-panel ${widthClasses[width]}`}
@@ -113,7 +115,7 @@ export function Drawer({
               type="button"
               onClick={onClose}
               disabled={busy}
-              aria-label="关闭抽屉"
+              aria-label={tr('关闭抽屉', 'Close drawer')}
               className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40"
             >
               <X className="w-4 h-4" />

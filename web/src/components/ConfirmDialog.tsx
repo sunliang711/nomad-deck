@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, X } from 'lucide-react';
+import { useI18n } from '../lib/i18n';
 import { isTopDialog, registerDialog } from './dialogLayers';
 
 interface ConfirmOptions {
@@ -13,6 +14,7 @@ type Confirm = (message: string, options?: ConfirmOptions) => Promise<boolean>;
 const ConfirmContext = createContext<Confirm | null>(null);
 
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
+  const { tr } = useI18n();
   const descriptionId = useId();
   const [request, setRequest] = useState<({ message: string } & ConfirmOptions) | null>(null);
   const pending = useRef<((confirmed: boolean) => void) | null>(null);
@@ -44,9 +46,9 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
       {children}
       {request && (
         <ConfirmDialogModal
-          title={request.title || '操作确认'}
+          title={request.title || tr('操作确认', 'Confirm Action')}
           message={request.message}
-          confirmText={request.confirmText || '确认'}
+          confirmText={request.confirmText || tr('确认', 'Confirm')}
           danger={Boolean(request.danger)}
           descriptionId={descriptionId}
           onClose={() => settle(false)}
@@ -74,6 +76,7 @@ function ConfirmDialogModal({
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  const { tr } = useI18n();
   const root = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -127,7 +130,7 @@ function ConfirmDialogModal({
         className="modal-container max-w-md"
       >
         <div className="relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 space-y-5">
-          <button type="button" onClick={onClose} aria-label="关闭确认框" className="modal-close absolute right-3 top-3">
+          <button type="button" onClick={onClose} aria-label={tr('关闭确认框', 'Close confirmation dialog')} className="modal-close absolute right-3 top-3">
             <X className="w-4 h-4" />
           </button>
           <div className="flex items-start gap-3 pr-5">
@@ -154,7 +157,7 @@ function ConfirmDialogModal({
               onClick={onClose}
               className="px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
             >
-              取消
+              {tr('取消', 'Cancel')}
             </button>
             <button
               type="button"

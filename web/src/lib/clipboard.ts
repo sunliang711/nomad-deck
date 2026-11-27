@@ -1,3 +1,5 @@
+import { trText } from './locale.ts';
+
 // Clipboard API may fail or be unavailable on plain HTTP LAN pages; fallback to execCommand copy.
 export async function copyText(text: string): Promise<void> {
   try {
@@ -19,7 +21,7 @@ export async function copyText(text: string): Promise<void> {
     input.select();
     input.setSelectionRange(0, text.length);
     if (!document.execCommand('copy')) {
-      throw new Error('当前浏览器环境不支持自动复制，请手动复制');
+      throw new Error(trText('当前浏览器环境不支持自动复制，请手动复制', 'Clipboard copy is not supported in this browser; please copy manually'));
     }
   } finally {
     input.remove();

@@ -5,6 +5,7 @@ import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, f
 import { copyText } from '../lib/clipboard';
 import { buildTemplateData, parseKVPath } from '../lib/vaultHelpers';
 import { useAuth } from '../lib/auth';
+import { useI18n } from '../lib/i18n';
 import {
   readStoredSelection,
   resolveClusterSelection,
@@ -54,6 +55,7 @@ function generateRandomSecret(length = 24): string {
 
 export function VaultPage() {
   const { isAdmin } = useAuth();
+  const { locale, isEn, tr } = useI18n();
   const { openTask, openNodeLogs, tasks } = useOpsDrawer();
   const toast = useToast();
   const askConfirm = useConfirm();
@@ -149,11 +151,11 @@ export function VaultPage() {
         resolveClusterSelection(list, queryId, prev, readStoredSelection(VAULT_CLUSTER_KEY)),
       );
     } catch (ex: any) {
-      setErr(ex?.message || '加载 Vault 集群列表失败');
+      setErr(ex?.message || tr('加载 Vault 集群列表失败', 'Failed to load Vault clusters'));
     } finally {
       setLoadingList(false);
     }
-  }, [queryId]);
+  }, [queryId, tr]);
 
   const loadDetail = useCallback(async () => {
     if (!selectedId) return;
@@ -178,9 +180,9 @@ export function VaultPage() {
       setGens(gRes.generations || []);
     } catch (ex: any) {
       if (selectionRef.current !== selectedId) return;
-      setErr(ex?.message || '加载 Vault 集群详情失败');
+      setErr(ex?.message || tr('加载 Vault 集群详情失败', 'Failed to load Vault cluster details'));
     }
-  }, [selectedId]);
+  }, [selectedId, tr]);
 
   const selectPolicy = useCallback(async (name: string) => {
     if (!selectedId || !name) return;
@@ -191,18 +193,20 @@ export function VaultPage() {
       const r = await apiGet(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(name)}`);
       setPolicyEdit({ name, rules: r.policy?.rules || r.policy || '' });
     } catch (ex: any) {
-      setErr(ex?.message || '读取 Policy 内容失败');
+      setErr(ex?.message || tr('读取 Policy 内容失败', 'Failed to load policy rules'));
     } finally {
       setPolicyLoading(false);
     }
-  }, [selectedId]);
+  }, [selectedId, tr]);
 
   const startNewPolicy = () => {
     setPolicyIsNew(true);
     setSelectedPolicy('');
     setPolicyEdit({
       name: '',
-      rules: `# 示例：允许只读指定 KV v2 密钥（请按需修改路径）\npath "secret/data/apps/demo" {\n  capabilities = ["read"]\n}\n`,
+      rules: isEn
+        ? `# Example: grant read-only access to a KV v2 secret (adjust path as needed)\npath "secret/data/apps/demo" {\n  capabilities = ["read"]\n}\n`
+        : `# 示例：允许只读指定 KV v2 密钥（请按需修改路径）\npath "secret/data/apps/demo" {\n  capabilities = ["read"]\n}\n`,
     });
   };
 
@@ -223,12 +227,12 @@ export function VaultPage() {
         setKvListedDir(normalizedDir);
         setKvKeys([]);
       } else {
-        setErr(ex?.message || '读取密钥目录失败');
+        setErr(ex?.message || tr('读取密钥目录失败', 'Failed to list secret directory'));
       }
     } finally {
       setKvListing(false);
     }
-  }, [selectedId]);
+  }, [selectedId, tr]);
 
   const openKVEditor = (item: { path: string; data: string; cas: number }) => {
     setKvErr('');
@@ -268,8 +272,11 @@ export function VaultPage() {
     if (!selectedId || !kvMount || !cleanTarget || kvSaving) return;
     if (
       !(await askConfirm(
-        `确认彻底删除 Secret「${kvMount.replace(/\/+$/, '')}/${cleanTarget}」及其所有历史版本吗？删除后不可恢复。`,
-        { title: '删除 KV Secret', confirmText: '确认删除', danger: true },
+        tr(
+          `确认彻底删除 Secret「${kvMount.replace(/\/+$/, '')}/${cleanTarget}」及其所有历史版本吗？删除后不可恢复。`,
+          `Permanently delete secret "${kvMount.replace(/\/+$/, '')}/${cleanTarget}" and all its history? This cannot be undone.`,
+        ),
+        { title: tr('删除 KV Secret', 'Delete KV Secret'), confirmText: tr('确认删除', 'Delete'), danger: true },
       ))
     ) {
       return;
@@ -280,7 +287,7 @@ export function VaultPage() {
       await apiDelete(
         `/api/v1/vault/${selectedId}/kv/item?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(cleanTarget)}&mode=delete-metadata`,
       );
-      toast.success(`Secret「${cleanTarget}」已删除`);
+      toast.success(tr(`Secret「${cleanTarget}」已删除`, `Secret "${cleanTarget}" deleted`));
       if (kvItem && kvItem.path.trim().replace(/^\/+|\/+$/g, '') === cleanTarget) {
         setKvItem(null);
       }
@@ -288,7 +295,7 @@ export function VaultPage() {
       setKvPath(parentDir);
       await listKVKeys(kvMount, parentDir);
     } catch (ex: any) {
-      const msg = ex?.message || '删除 Secret 失败';
+      const msg = ex?.message || tr('删除 Secret 失败', 'Failed to delete secret');
       if (kvItem) {
         setKvErr(msg);
       } else {
@@ -321,9 +328,9 @@ export function VaultPage() {
         void selectPolicy(first);
       }
     } catch (ex: any) {
-      setErr(ex?.message || '加载 Vault 管理数据失败');
+      setErr(ex?.message || tr('加载 Vault 管理数据失败', 'Failed to load Vault management data'));
     }
-  }, [selectedId, kvMount, kvPath, listKVKeys, policyIsNew, selectedPolicy, selectPolicy]);
+  }, [selectedId, kvMount, kvPath, listKVKeys, policyIsNew, selectedPolicy, selectPolicy, tr]);
 
   useEffect(() => {
     void loadList();
@@ -388,7 +395,7 @@ export function VaultPage() {
 
   const handleIssueRootToken = () => {
     setPwAction({
-      title: '签发临时 Root Token（使用托管解封密钥重建）',
+      title: tr('签发临时 Root Token（使用托管解封密钥重建）', 'Issue Temporary Root Token (reconstructed from custodied unseal keys)'),
       run: async (pw) => {
         const r = await apiPost(`/api/v1/vault/${selectedId}/root-token`, { current_password: pw });
         setRootToken(r.root_token || '');
@@ -398,7 +405,7 @@ export function VaultPage() {
 
   const handleOpenWebUI = (targetUrl: string, label?: string) => {
     setPwAction({
-      title: `免密登录 Vault Web UI${label ? ` · ${label}` : ''}`,
+      title: tr(`免密登录 Vault Web UI${label ? ` · ${label}` : ''}`, `SSO Login to Vault Web UI${label ? ` · ${label}` : ''}`),
       run: async (pw) => {
         const r = await apiPost(`/api/v1/vault/${selectedId}/ui-login`, {
           current_password: pw,
@@ -420,9 +427,9 @@ export function VaultPage() {
       cluster.init_state === 'uninitialized' && clusterNodes.every((n: any) => n.install_state === 'pending');
     if (canDeleteUndeployed) {
       if (
-        !(await askConfirm(`确认删除未部署集群「${cluster.name}」吗？仅清除控制面记录，不会改动主机。`, {
-          title: '删除未部署集群',
-          confirmText: '确认删除',
+        !(await askConfirm(tr(`确认删除未部署集群「${cluster.name}」吗？仅清除控制面记录，不会改动主机。`, `Delete undeployed cluster "${cluster.name}"? Only the control-plane record is removed; hosts are untouched.`), {
+          title: tr('删除未部署集群', 'Delete Undeployed Cluster'),
+          confirmText: tr('确认删除', 'Delete'),
           danger: true,
         }))
       ) {
@@ -430,12 +437,12 @@ export function VaultPage() {
       }
       try {
         await apiDelete(`/api/v1/clusters/${selectedId}`);
-        toast.success('集群记录已删除');
+        toast.success(tr('集群记录已删除', 'Cluster record deleted'));
         await loadList();
         return;
       } catch (ex: any) {
         if (!String(ex?.message || '').includes('已部署')) {
-          setErr(ex?.message || '删除集群失败');
+          setErr(ex?.message || tr('删除集群失败', 'Failed to delete cluster'));
           return;
         }
       }
@@ -444,27 +451,27 @@ export function VaultPage() {
       const r = await apiPost(`/api/v1/clusters/${selectedId}/uninstall/plan`, {});
       setUninstallPlan(r.plan || { warnings: [] });
     } catch (ex: any) {
-      setErr(ex?.message || '获取卸载计划失败');
+      setErr(ex?.message || tr('获取卸载计划失败', 'Failed to load uninstall plan'));
     }
   };
 
-  if (loadingList) return <LoadingState label="正在加载 Vault 集群…" />;
+  if (loadingList) return <LoadingState label={tr('正在加载 Vault 集群…', 'Loading Vault clusters...')} />;
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Vault 集群"
-        subtitle="管理 Raft HA Vault 集群、Shamir 密钥托管解封、Raft 快照与 Auth/Policy/KV"
+        title={tr('Vault 集群', 'Vault Clusters')}
+        subtitle={tr('管理 Raft HA Vault 集群、Shamir 密钥托管解封、Raft 快照与 Auth/Policy/KV', 'Manage Raft HA Vault clusters, Shamir key custody & auto-unseal, Raft snapshots, and Auth/Policy/KV')}
         actions={
           <>
-            <Button title="每 30 秒自动刷新" onClick={() => void loadDetail()}>
+            <Button title={tr('每 30 秒自动刷新', 'Auto-refreshes every 30s')} onClick={() => void loadDetail()}>
               <RefreshCw className="h-4 w-4" />
-              <span>刷新</span>
+              <span>{tr('刷新', 'Refresh')}</span>
             </Button>
             {isAdmin && (
               <Button variant="primary" onClick={() => setShowCreate(true)}>
                 <Plus className="h-4 w-4" />
-                <span>新建 Vault 集群</span>
+                <span>{tr('新建 Vault 集群', 'New Vault Cluster')}</span>
               </Button>
             )}
           </>
@@ -475,13 +482,13 @@ export function VaultPage() {
 
       {!cluster ? (
         <Card>
-          <EmptyState icon={<Shield className="w-6 h-6" />} title="暂无 Vault 集群" description="Vault 负责安全存储密钥与凭据。先接入主机，再选择节点、创建配置并部署服务。" action={isAdmin && <Button variant="primary" onClick={() => setShowCreate(true)}>创建第一个 Vault 集群</Button>} />
+          <EmptyState icon={<Shield className="w-6 h-6" />} title={tr('暂无 Vault 集群', 'No Vault Clusters')} description={tr('Vault 负责安全存储密钥与凭据。先接入主机，再选择节点、创建配置并部署服务。', 'Vault securely stores secrets and credentials. Enroll hosts first, then select nodes, create a config, and deploy.')} action={isAdmin && <Button variant="primary" onClick={() => setShowCreate(true)}>{tr('创建第一个 Vault 集群', 'Create First Vault Cluster')}</Button>} />
         </Card>
       ) : (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <ItemSwitcher
-              label="Vault 集群"
+              label={tr('Vault 集群', 'Vault Cluster')}
               selectedId={selectedId}
               onSelect={setSelectedId}
               items={clusters.map((c) => {
@@ -496,16 +503,16 @@ export function VaultPage() {
                   id: c.id,
                   name: c.name,
                   status: awaitInit ? 'sealed' : c.init_state === 'uninitialized' ? 'uninitialized' : c.health_status,
-                  statusLabel: awaitInit ? '已安装 · 待初始化' : undefined,
+                  statusLabel: awaitInit ? tr('已安装 · 待初始化', 'Installed · Awaiting Init') : undefined,
                 };
               })}
             />
             <SectionTabs
               tabs={[
-                { id: 'status', label: '集群状态详情' },
-                { id: 'custody', label: '初始化与密钥托管', title: '控制面托管 Vault Unseal Key（Shamir 门限分片）与短时效运维 Token，支持自动解封、Rekey 轮换及签发临时 Root Token' },
-                { id: 'snapshots', label: 'Raft 快照', badge: snapshots.length, title: '对 Vault Integrated Storage (Raft) 后端状态执行一致性快照备份与在线恢复' },
-                { id: 'manage', label: 'Auth / Policy / KV', title: '管理 Vault 认证挂载（Userpass/JWT/AppRole）、HCL 权限策略（Policy）以及 KV v2 密钥引擎' },
+                { id: 'status', label: tr('集群状态详情', 'Cluster Status') },
+                { id: 'custody', label: tr('初始化与密钥托管', 'Init & Key Custody'), title: tr('控制面托管 Vault Unseal Key（Shamir 门限分片）与短时效运维 Token，支持自动解封、Rekey 轮换及签发临时 Root Token', 'Control plane custodies Shamir unseal shares and short-lived admin tokens for auto-unseal, rekeying, and emergency root tokens') },
+                { id: 'snapshots', label: tr('Raft 快照', 'Raft Snapshots'), badge: snapshots.length, title: tr('对 Vault Integrated Storage (Raft) 后端状态执行一致性快照备份与在线恢复', 'Take consistent Raft storage snapshots and perform online restores') },
+                { id: 'manage', label: 'Auth / Policy / KV', title: tr('管理 Vault 认证挂载（Userpass/JWT/AppRole）、HCL 权限策略（Policy）以及 KV v2 密钥引擎', 'Manage Vault Auth methods, HCL policies, and KV v2 secret engines') },
               ]}
               active={tab}
               onChange={(t) => {
@@ -532,53 +539,53 @@ export function VaultPage() {
                 setConfirmSwap={setDeployConfirmSwap}
                 onDeploy={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', confirm_swap: deployConfirmSwap })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, '部署 Vault'); })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('部署 Vault', 'Deploy Vault')); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onInitVault={() =>
                   apiPost(`/api/v1/vault/${selectedId}/init`, { key_shares: 5, key_threshold: 3 })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, '初始化 Vault 托管'); })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('初始化 Vault 托管', 'Initialize Vault Custody')); })
                     .catch((ex) => setErr(ex.message))
                 }
                 quickActions={
                   <Link to="/integrations" className="primary-button">
                     <Link2 className="h-3.5 w-3.5" />
-                    <span>配置集群联动</span>
+                    <span>{tr('配置集群联动', 'Configure Integrations')}</span>
                   </Link>
                 }
                 onUpgrade={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', confirm: true })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, '滚动升级 Vault'); })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('滚动升级 Vault', 'Rolling Upgrade Vault')); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onRenewCerts={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, '续期 Vault 证书'); })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('续期 Vault 证书', 'Renew Vault Certificates')); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onRotateCA={() => {
                   setPwAction({
-                    title: '确认轮换 Vault 集群 CA',
+                    title: tr('确认轮换 Vault 集群 CA', 'Rotate Vault Cluster CA'),
                     run: async (pw) => {
                       const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
-                      if (r.task?.id) openTask(r.task.id, '轮换 Vault CA');
+                      if (r.task?.id) openTask(r.task.id, tr('轮换 Vault CA', 'Rotate Vault CA'));
                     },
                   });
                 }}
                 onDoctor={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
-                    .then((r) => toast.info(r.report?.summary || 'Doctor 完成'))
+                    .then((r) => toast.info(r.report?.summary || tr('Doctor 完成', 'Doctor finished')))
                     .catch((ex) => setErr(ex.message))
                 }
                 onReconcile={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
-                    .then((r) => { toast.success(r.report?.message || '已核对'); return loadDetail(); })
+                    .then((r) => { toast.success(r.report?.message || tr('已核对', 'Reconciled')); return loadDetail(); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onOpenWebUI={handleOpenWebUI}
                 onUninstall={handleUninstall}
                 onOpenJoin={() => { setJoinNodeId(''); setJoinAdvertiseAddr(''); setConfirmSwap(false); setShowJoin(true); }}
-                onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Vault 日志: ${n.name}`)}
+                onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, tr(`Vault 日志: ${n.name}`, `Vault Logs: ${n.name}`))}
                 onCheckGate={(n) =>
                   apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
                     .then((r) => setGateView(r.gate))
@@ -586,12 +593,12 @@ export function VaultPage() {
                 }
                 onRestartNode={(n) =>
                   apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, `重启节点: ${n.name}`); })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`重启节点: ${n.name}`, `Restart Node: ${n.name}`)); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onRemoveNode={(n, force) =>
                   apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, { force })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, `${force ? '强制移出' : '缩容'}节点: ${n.name}`); })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`${force ? '强制移出' : '缩容'}节点: ${n.name}`, `${force ? 'Force Remove' : 'Remove'} Node: ${n.name}`)); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onError={setErr}
@@ -603,27 +610,27 @@ export function VaultPage() {
             const isInitialized = (status?.init_state || cluster.init_state) === 'initialized';
             return (
               <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-                <Card title="托管状态与日常解封">
+                <Card title={tr('托管状态与日常解封', 'Custody Status & Unsealing')}>
                   <div className="space-y-5 text-xs">
                     <dl className="grid grid-cols-[auto_1fr] items-center gap-x-6 gap-y-3 rounded-xl border border-slate-200/80 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-950/40">
                       <dt className="text-slate-500">
-                        <TermLabel term="当前代际" tip="每次执行 Rekey 会生成新的密钥代际（Generation），旧代际历史仅保留审计轨迹。" />
+                        <TermLabel term={tr('当前代际', 'Generation')} tip={tr('每次执行 Rekey 会生成新的密钥代际（Generation），旧代际历史仅保留审计轨迹。', 'Each Rekey produces a new key generation; prior generations remain for audit trail only.')} />
                       </dt>
                       <dd className="font-mono font-semibold text-slate-900 dark:text-slate-100">
-                        {custody.seal_generation ? `#${custody.seal_generation}` : '尚未初始化'}
+                        {custody.seal_generation ? `#${custody.seal_generation}` : tr('尚未初始化', 'Not initialized')}
                       </dd>
                       <dt className="text-slate-500">
-                        <TermLabel term="自动解封" tip="开启后控制面在巡检发现 Vault 节点被密封时自动下发托管分片完成 Unseal。" />
+                        <TermLabel term={tr('自动解封', 'Auto-Unseal')} tip={tr('开启后控制面在巡检发现 Vault 节点被密封时自动下发托管分片完成 Unseal。', 'When enabled, the control plane automatically submits custodied unseal shares when a Vault node seals.')} />
                       </dt>
                       <dd className="flex items-center gap-2.5">
                         {isAdmin ? (
                           <Switch
                             checked={Boolean(custody.auto_unseal_by_deck)}
-                            label="自动解封开关"
+                            label={tr('自动解封开关', 'Auto-Unseal Toggle')}
                             onChange={(next) =>
                               void apiPut(`/api/v1/vault/${selectedId}/custody`, { auto_unseal_by_deck: next })
                                 .then(() => {
-                                  toast.success(next ? '已开启自动解封' : '已关闭自动解封');
+                                  toast.success(next ? tr('已开启自动解封', 'Auto-unseal enabled') : tr('已关闭自动解封', 'Auto-unseal disabled'));
                                   return loadDetail();
                                 })
                                 .catch((ex) => setErr(ex.message))
@@ -631,24 +638,24 @@ export function VaultPage() {
                           />
                         ) : null}
                         <Badge tone={custody.auto_unseal_by_deck ? 'green' : 'amber'}>
-                          {custody.auto_unseal_by_deck ? '已开启' : '已关闭'}
+                          {custody.auto_unseal_by_deck ? tr('已开启', 'Enabled') : tr('已关闭', 'Disabled')}
                         </Badge>
                       </dd>
                       <dt className="text-slate-500">
-                        <TermLabel term="运维 Token 到期" tip="控制面持有的定期续期管理员 Token（非永久 Root Token），用于日常策略/KV 管理。" />
+                        <TermLabel term={tr('运维 Token 到期', 'Admin Token Expiry')} tip={tr('控制面持有的定期续期管理员 Token（非永久 Root Token），用于日常策略/KV 管理。', 'Renewable operational admin token held by the control plane for day-to-day policy/KV operations.')} />
                       </dt>
-                      <dd className="text-slate-700 dark:text-slate-200">{fmtTime(custody.admin_token_expires_at)}</dd>
+                      <dd className="text-slate-700 dark:text-slate-200">{fmtTime(custody.admin_token_expires_at, locale)}</dd>
                     </dl>
 
                     {custody.unseal_suppressed_reason && (
                       <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-800 dark:border-amber-500/30 dark:bg-amber-950/50 dark:text-amber-200">
-                        <span>抑制原因：{custody.unseal_suppressed_reason}</span>
+                        <span>{tr('抑制原因：', 'Suppressed: ')}{custody.unseal_suppressed_reason}</span>
                         {isAdmin && (
                           <Button
                             size="sm"
                             onClick={() =>
                               setPwAction({
-                                title: '解除自动解封抑制',
+                                title: tr('解除自动解封抑制', 'Clear Auto-Unseal Suppression'),
                                 run: async (pw) => {
                                   await apiPut(`/api/v1/vault/${selectedId}/custody`, { clear_suppression: true, current_password: pw });
                                   await loadDetail();
@@ -656,7 +663,7 @@ export function VaultPage() {
                               })
                             }
                           >
-                            解除抑制
+                            {tr('解除抑制', 'Clear Suppression')}
                           </Button>
                         )}
                       </div>
@@ -665,53 +672,53 @@ export function VaultPage() {
                     {isAdmin && (
                       <div className="space-y-4">
                         <div className="space-y-2">
-                          <div className="font-semibold text-slate-800 dark:text-slate-100">初始化与密封控制</div>
+                          <div className="font-semibold text-slate-800 dark:text-slate-100">{tr('初始化与密封控制', 'Initialization & Seal Controls')}</div>
                           <div className="flex flex-wrap gap-2">
                             {!isInitialized && (
                               <Button
                                 variant="primary"
                                 onClick={() =>
                                   void apiPost(`/api/v1/vault/${selectedId}/init`, { key_shares: 5, key_threshold: 3 })
-                                    .then((r) => r.task?.id && openTask(r.task.id, '初始化 Vault 托管'))
+                                    .then((r) => r.task?.id && openTask(r.task.id, tr('初始化 Vault 托管', 'Initialize Vault Custody')))
                                     .catch((ex) => setErr(ex.message))
                                 }
                               >
-                                一键初始化托管
+                                {tr('一键初始化托管', 'Initialize & Custody')}
                               </Button>
                             )}
                             <Button
                               disabled={!isInitialized}
                               onClick={() =>
                                 void apiPost(`/api/v1/vault/${selectedId}/unseal`, {})
-                                  .then((r) => r.task?.id && openTask(r.task.id, '解封 Vault 集群'))
+                                  .then((r) => r.task?.id && openTask(r.task.id, tr('解封 Vault 集群', 'Unseal Vault Cluster')))
                                   .catch((ex) => setErr(ex.message))
                               }
                             >
-                              <Unlock className="h-3.5 w-3.5" /> 全集群解封
+                              <Unlock className="h-3.5 w-3.5" /> {tr('全集群解封', 'Unseal Cluster')}
                             </Button>
                             <Button
                               variant="danger-outline"
                               disabled={!isInitialized}
                               onClick={async () => {
-                                if (!(await askConfirm('确定要安全封存整个 Vault 集群吗？封存后将暂停对外提供密钥读写服务。', { title: '封存 Vault 集群', confirmText: '确认封存', danger: true }))) return;
+                                if (!(await askConfirm(tr('确定要安全封存整个 Vault 集群吗？封存后将暂停对外提供密钥读写服务。', 'Seal the entire Vault cluster? Secret reads/writes will stop until unsealed.'), { title: tr('封存 Vault 集群', 'Seal Vault Cluster'), confirmText: tr('确认封存', 'Seal'), danger: true }))) return;
                                 void apiPost(`/api/v1/vault/${selectedId}/seal`, {})
-                                  .then((r) => r.task?.id && openTask(r.task.id, '封存 Vault 集群'))
+                                  .then((r) => r.task?.id && openTask(r.task.id, tr('封存 Vault 集群', 'Seal Vault Cluster')))
                                   .catch((ex) => setErr(ex.message));
                               }}
                             >
-                              <Lock className="h-3.5 w-3.5" /> 安全封存
+                              <Lock className="h-3.5 w-3.5" /> {tr('安全封存', 'Seal Cluster')}
                             </Button>
                           </div>
                         </div>
 
                         <div className="border-t border-slate-200 pt-3.5 space-y-2 dark:border-slate-800">
-                          <div className="font-semibold text-slate-800 dark:text-slate-100">密钥轮换与应急凭据</div>
+                          <div className="font-semibold text-slate-800 dark:text-slate-100">{tr('密钥轮换与应急凭据', 'Key Rotation & Emergency Credentials')}</div>
                           <div className="flex flex-wrap gap-2">
                             <Button
                               disabled={!isInitialized}
                               onClick={() =>
                                 setPwAction({
-                                  title: '确认执行 Vault Rekey 密钥轮换',
+                                  title: tr('确认执行 Vault Rekey 密钥轮换', 'Confirm Vault Rekey'),
                                   run: async (pw) => {
                                     const r = await apiPost(`/api/v1/vault/${selectedId}/rekey`, { current_password: pw });
                                     if (r.task?.id) openTask(r.task.id, 'Vault Rekey');
@@ -719,27 +726,27 @@ export function VaultPage() {
                                 })
                               }
                             >
-                              Rekey 轮换
+                              {tr('Rekey 轮换', 'Rekey Cluster')}
                             </Button>
                             <Button
                               disabled={!isInitialized}
                               onClick={() =>
                                 setPwAction({
-                                  title: '确认应急重签 Vault 运维 Token',
+                                  title: tr('确认应急重签 Vault 运维 Token', 'Recover Vault Admin Token'),
                                   run: async (pw) => {
                                     const r = await apiPost(`/api/v1/vault/${selectedId}/custody/recover-token`, { current_password: pw });
-                                    if (r.task?.id) openTask(r.task.id, '重签 Vault 运维 Token');
+                                    if (r.task?.id) openTask(r.task.id, tr('重签 Vault 运维 Token', 'Recover Vault Admin Token'));
                                   },
                                 })
                               }
                             >
-                              应急重签运维 Token
+                              {tr('应急重签运维 Token', 'Recover Admin Token')}
                             </Button>
                             <Button
                               disabled={!isInitialized}
                               onClick={handleIssueRootToken}
                             >
-                              签发临时 Root Token
+                              {tr('签发临时 Root Token', 'Issue Root Token')}
                             </Button>
                             <Button
                               disabled={!isInitialized}
@@ -748,14 +755,14 @@ export function VaultPage() {
                                 setDlPass('');
                                 setDlErr('');
                                 setDlModal({
-                                  title: '导出 Vault 离线紧急备份 (.ndvkb)',
+                                  title: tr('导出 Vault 离线紧急备份 (.ndvkb)', 'Export Vault Offline Recovery Backup (.ndvkb)'),
                                   run: async (pw, passphrase) => {
                                     await apiDownload(`/api/v1/vault/${selectedId}/custody/backup`, { current_password: pw, passphrase }, `${cluster.name}.ndvkb`);
                                   },
                                 });
                               }}
                             >
-                              导出离线备份
+                              {tr('导出离线备份', 'Export Offline Backup')}
                             </Button>
                           </div>
                         </div>
@@ -764,15 +771,17 @@ export function VaultPage() {
                   </div>
                 </Card>
 
-                <Card title="Unseal Key 代际历史">
+                <Card title={tr('Unseal Key 代际历史', 'Unseal Key Generations')}>
                   {gens.length === 0 ? (
-                    <EmptyState title="暂无密钥代际" description="完成首次初始化后，这里会记录每次生成或 Rekey 的密钥代际与门限。" />
+                    <EmptyState title={tr('暂无密钥代际', 'No Key Generations')} description={tr('完成首次初始化后，这里会记录每次生成或 Rekey 的密钥代际与门限。', 'Key generations and Shamir thresholds from initialization and rekeys appear here.')} />
                   ) : (
                     <div className="space-y-2 text-xs">
                       {gens.map((g) => (
                         <div key={g.generation} className="flex items-center justify-between rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                          <span className="font-medium text-slate-800 dark:text-slate-100">代际 #{g.generation}（门限 {g.key_threshold} / 共 {g.key_shares} 份）</span>
-                          <Badge tone={statusTone(g.state)}>{g.state === 'active' ? '当前生效' : g.state}</Badge>
+                          <span className="font-medium text-slate-800 dark:text-slate-100">
+                            {tr(`代际 #${g.generation}（门限 ${g.key_threshold} / 共 ${g.key_shares} 份）`, `Generation #${g.generation} (Threshold ${g.key_threshold} / ${g.key_shares} shares)`)}
+                          </span>
+                          <Badge tone={statusTone(g.state)}>{g.state === 'active' ? tr('当前生效', 'Active') : g.state}</Badge>
                         </div>
                       ))}
                     </div>
@@ -784,11 +793,11 @@ export function VaultPage() {
 
           {tab === 'snapshots' && (
             <Card
-              title="Raft 快照管理"
+              title={tr('Raft 快照管理', 'Raft Snapshots')}
               actions={
                 isAdmin && (
                   <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/snapshots`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>
-                    创建快照
+                    {tr('创建快照', 'Create Snapshot')}
                   </Button>
                 )
               }
@@ -804,9 +813,9 @@ export function VaultPage() {
                   }}
                   className="mb-4 flex flex-wrap items-end gap-2 border-b border-slate-200 pb-3 text-xs dark:border-slate-800"
                 >
-                  <SecretInput label="归档口令（未加密可留空）" value={snapPass} onChangeValue={setSnapPass} />
+                  <SecretInput label={tr('归档口令（未加密可留空）', 'Archive Passphrase (leave blank if unencrypted)')} value={snapPass} onChangeValue={setSnapPass} />
                   <input type="file" onChange={(e) => setSnapFile(e.target.files?.[0] || null)} />
-                  <Button type="submit">上传登记归档</Button>
+                  <Button type="submit">{tr('上传登记归档', 'Upload & Register')}</Button>
                 </form>
               )}
               <div className="space-y-2 text-xs">
@@ -815,7 +824,7 @@ export function VaultPage() {
                     <div>
                       <span className="font-mono font-semibold">{sn.id}</span>
                       <span className="ml-2 text-slate-500">
-                        {sn.product_version} · 代际 {sn.seal_generation ?? '-'} · {fmtBytes(sn.size_bytes)} · {fmtTime(sn.created_at)}
+                        {sn.product_version} · {tr('代际', 'Gen')} {sn.seal_generation ?? '-'} · {fmtBytes(sn.size_bytes)} · {fmtTime(sn.created_at, locale)}
                       </span>
                     </div>
                     {isAdmin && (
@@ -827,7 +836,7 @@ export function VaultPage() {
                             setDlPass('');
                             setDlErr('');
                             setDlModal({
-                              title: `下载快照 ${sn.id}`,
+                              title: tr(`下载快照 ${sn.id}`, `Download Snapshot ${sn.id}`),
                               run: async (pw, passphrase) => {
                                 await apiDownload(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}/download`, {
                                   current_password: pw,
@@ -837,37 +846,37 @@ export function VaultPage() {
                             });
                           }}
                         >
-                          下载
+                          {tr('下载', 'Download')}
                         </Button>
                         <Button
                           size="sm"
                           variant="danger-outline"
                           onClick={() =>
                             setPwAction({
-                              title: `恢复 Raft 快照 ${sn.id}`,
+                              title: tr(`恢复 Raft 快照 ${sn.id}`, `Restore Raft Snapshot ${sn.id}`),
                               run: async (pw) => {
                                 const res = await apiPost(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}/restore`, { current_password: pw });
-                                if (res.task?.id) openTask(res.task.id, '恢复 Vault 快照');
+                                if (res.task?.id) openTask(res.task.id, tr('恢复 Vault 快照', 'Restore Vault Snapshot'));
                               },
                             })
                           }
                         >
-                          恢复
+                          {tr('恢复', 'Restore')}
                         </Button>
                         <Button
                           size="sm"
                           variant="danger-outline"
                           onClick={async () => {
-                            if (!(await askConfirm(`确定要删除快照 ${sn.id} 吗？`, { title: '删除 Raft 快照', confirmText: '确认删除', danger: true }))) return;
+                            if (!(await askConfirm(tr(`确定要删除快照 ${sn.id} 吗？`, `Delete snapshot ${sn.id}?`), { title: tr('删除 Raft 快照', 'Delete Raft Snapshot'), confirmText: tr('确认删除', 'Delete'), danger: true }))) return;
                             void apiDelete(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}`)
                               .then(() => {
-                                toast.success('快照已删除');
+                                toast.success(tr('快照已删除', 'Snapshot deleted'));
                                 return loadDetail();
                               })
                               .catch((ex) => setErr(ex.message));
                           }}
                         >
-                          删除
+                          {tr('删除', 'Delete')}
                         </Button>
                       </div>
                     )}
@@ -883,29 +892,29 @@ export function VaultPage() {
                 <SectionTabs
                   variant="underline"
                   tabs={[
-                    { id: 'kv', label: '应用密钥 · KV v2', badge: mounts.length },
+                    { id: 'kv', label: tr('应用密钥 · KV v2', 'Secrets · KV v2'), badge: mounts.length },
                     { id: 'policies', label: 'ACL Policies', badge: policies.length },
-                    { id: 'auth', label: 'Auth 认证方法', badge: auths.length },
+                    { id: 'auth', label: tr('Auth 认证方法', 'Auth Methods'), badge: auths.length },
                   ]}
                   active={manageTab}
                   onChange={(next) => setManageTab(next as 'kv' | 'policies' | 'auth')}
                 />
                 <Button size="sm" onClick={() => void loadManage()}>
                   <RefreshCw className="h-3.5 w-3.5" />
-                  <span>刷新数据</span>
+                  <span>{tr('刷新数据', 'Refresh')}</span>
                 </Button>
               </div>
 
               {manageTab === 'kv' && (
                 <Card
-                  title="应用密钥 · KV v2"
-                  description="选择密钥存储空间（Mount）并浏览目录或新建应用 Secret，自动生成 Nomad Job 引用路径。"
+                  title={tr('应用密钥 · KV v2', 'Secrets · KV v2')}
+                  description={tr('选择密钥存储空间（Mount）并浏览目录或新建应用 Secret，自动生成 Nomad Job 引用路径。', 'Choose a KV v2 mount to browse paths or create application secrets with auto-generated Nomad template paths.')}
                   actions={
                     isAdmin && (
                       <div className="flex flex-wrap items-center gap-2">
                         <Button size="sm" onClick={() => setShowKVMount(true)}>
                           <Plus className="h-3.5 w-3.5" />
-                          <span>启用 KV v2 挂载</span>
+                          <span>{tr('启用 KV v2 挂载', 'Enable KV v2 Mount')}</span>
                         </Button>
                         <Button
                           size="sm"
@@ -917,7 +926,7 @@ export function VaultPage() {
                           }}
                         >
                           <Plus className="h-3.5 w-3.5" />
-                          <span>新建 Secret</span>
+                          <span>{tr('新建 Secret', 'New Secret')}</span>
                         </Button>
                       </div>
                     )
@@ -927,12 +936,12 @@ export function VaultPage() {
                     {mounts.length === 0 ? (
                       <EmptyState
                         icon={<KeyRound className="h-6 w-6" />}
-                        title="尚未启用 KV v2 密钥引擎"
-                        description="先启用一个 KV v2 存储空间（例如 secret），即可在其中分类存放数据库密码、API Key 等应用密钥。"
+                        title={tr('尚未启用 KV v2 密钥引擎', 'No KV v2 Engine Enabled')}
+                        description={tr('先启用一个 KV v2 存储空间（例如 secret），即可在其中分类存放数据库密码、API Key 等应用密钥。', 'Enable a KV v2 mount (e.g. secret) first to store database passwords, API keys, and application credentials.')}
                         action={
                           isAdmin && (
                             <Button variant="primary" onClick={() => setShowKVMount(true)}>
-                              启用第一个 KV v2 挂载
+                              {tr('启用第一个 KV v2 挂载', 'Enable First KV v2 Mount')}
                             </Button>
                           )
                         }
@@ -941,13 +950,13 @@ export function VaultPage() {
                       <>
                         <div className="grid gap-3 sm:grid-cols-[200px_minmax(0,1fr)_auto] sm:items-end">
                           <Select
-                            label="密钥存储空间（Mount）"
+                            label={tr('密钥存储空间（Mount）', 'Secrets Mount')}
                             value={kvMount}
                             onChange={(e) => {
                               const nextM = e.target.value;
                               setKvMount(nextM);
                               setKvPath('');
-    setKvListedDir('');
+                              setKvListedDir('');
                               void listKVKeys(nextM, '');
                             }}
                           >
@@ -956,8 +965,8 @@ export function VaultPage() {
                             ))}
                           </Select>
                           <Input
-                            label="密钥路径（目录或 Secret 名称）"
-                            placeholder="例如 apps/postgres；留空浏览根目录"
+                            label={tr('密钥路径（目录或 Secret 名称）', 'Secret Path (directory or key name)')}
+                            placeholder={tr('例如 apps/postgres；留空浏览根目录', 'e.g. apps/postgres; blank for root')}
                             value={kvPath}
                             onChange={(e) => setKvPath(e.target.value)}
                             onKeyDown={(e) => {
@@ -972,7 +981,7 @@ export function VaultPage() {
                             loading={kvListing}
                             onClick={() => void listKVKeys(kvMount, kvPath)}
                           >
-                            浏览 / 刷新
+                            {tr('浏览 / 刷新', 'Browse / Refresh')}
                           </Button>
                         </div>
 
@@ -982,7 +991,7 @@ export function VaultPage() {
                             type="button"
                             onClick={() => {
                               setKvPath('');
-    setKvListedDir('');
+                              setKvListedDir('');
                               void listKVKeys(kvMount, '');
                             }}
                             className="font-mono font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
@@ -1014,7 +1023,7 @@ export function VaultPage() {
 
                         {kvKeys.length === 0 ? (
                           <div className="rounded-xl border border-dashed border-slate-200 py-8 text-center text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                            {kvListing ? '正在读取目录…' : '当前路径下暂无密钥或子目录，可点击右上角「新建 Secret」创建。'}
+                            {kvListing ? tr('正在读取目录…', 'Listing directory...') : tr('当前路径下暂无密钥或子目录，可点击右上角「新建 Secret」创建。', 'No keys or subdirectories at this path yet. Click "New Secret" to create one.')}
                           </div>
                         ) : (
                           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -1057,13 +1066,13 @@ export function VaultPage() {
                                       )}
                                       <span className="font-mono font-medium text-slate-800 dark:text-slate-100 truncate">{k}</span>
                                     </div>
-                                    <span className="text-[11px] text-slate-400 shrink-0">{isDir ? '进入目录' : '查看/编辑'}</span>
+                                    <span className="text-[11px] text-slate-400 shrink-0">{isDir ? tr('进入目录', 'Open') : tr('查看/编辑', 'View / Edit')}</span>
                                   </button>
                                   {!isDir && isAdmin && (
                                     <button
                                       type="button"
-                                      aria-label={`删除 ${k}`}
-                                      title="删除 Secret"
+                                      aria-label={tr(`删除 ${k}`, `Delete ${k}`)}
+                                      title={tr('删除 Secret', 'Delete Secret')}
                                       disabled={kvSaving}
                                       onClick={() => void handleDeleteKVSecret(full)}
                                       className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40 dark:hover:bg-rose-950/50 dark:hover:text-rose-400"
@@ -1080,39 +1089,42 @@ export function VaultPage() {
                         {kvMount && kvPath.trim() && !kvPath.trim().endsWith('/') && (() => {
                           const cleanMount = kvMount.replace(/^\/+|\/+$/g, '');
                           const cleanPath = kvPath.trim().replace(/^\/+|\/+$/g, '');
-                          const parsed = parseKVPath(`${cleanMount}/${cleanPath}`, cleanMount);
+                          const parsed = parseKVPath(`${cleanMount}/${cleanPath}`, cleanMount, locale);
                           const envSnippet = buildTemplateData(parsed.templatePath, [], 'env');
                           return (
                             <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-3.5 space-y-2.5 dark:border-indigo-500/30 dark:bg-indigo-950/25">
                               <div className="flex flex-wrap items-center justify-between gap-2">
-                                <span className="font-semibold text-indigo-950 dark:text-indigo-100">用于 Nomad 联动（路径对照）</span>
+                                <span className="font-semibold text-indigo-950 dark:text-indigo-100">{tr('用于 Nomad 联动（路径对照）', 'Nomad Integration Path Reference')}</span>
                                 <Link to="/integrations" className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-300">
-                                  <span>去集群联动配置 Role</span>
+                                  <span>{tr('去集群联动配置 Role', 'Configure Role in Integrations')}</span>
                                   <ArrowRight className="h-3 w-3" />
                                 </Link>
                               </div>
                               <p className="text-[11px] leading-4 text-slate-600 dark:text-slate-300">
-                                在联动 Role 里授权填<strong>不带 data/</strong> 的路径；在 Nomad Job 的 <code className="font-mono">template</code> 里读 KV v2 必须多加一层 <code className="font-mono">/data/</code>。
+                                {tr(
+                                  <>在联动 Role 里授权填<strong>不带 data/</strong> 的路径；在 Nomad Job 的 <code className="font-mono">template</code> 里读 KV v2 必须多加一层 <code className="font-mono">/data/</code>。</>,
+                                  <>Use the path <strong>without data/</strong> when granting access in a Role; include <code className="font-mono">/data/</code> inside Nomad Job <code className="font-mono">template</code> blocks for KV v2.</>,
+                                )}
                               </p>
                               <div className="grid gap-2 md:grid-cols-2">
                                 <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
-                                  <span className="truncate text-[11px] text-slate-500">Role 权限路径：<code className="font-mono text-slate-900 dark:text-slate-100">{parsed.rolePath}</code></span>
+                                  <span className="truncate text-[11px] text-slate-500">{tr('Role 权限路径：', 'Role Policy Path: ')}<code className="font-mono text-slate-900 dark:text-slate-100">{parsed.rolePath}</code></span>
                                   <Button
                                     size="sm"
-                                    onClick={() => void copyText(parsed.rolePath).then(() => toast.success('已复制 Role 权限路径')).catch((ex) => toast.error(ex.message))}
+                                    onClick={() => void copyText(parsed.rolePath).then(() => toast.success(tr('已复制 Role 权限路径', 'Copied Role path'))).catch((ex) => toast.error(ex.message))}
                                   >
                                     <Copy className="h-3 w-3" />
-                                    <span>复制</span>
+                                    <span>{tr('复制', 'Copy')}</span>
                                   </Button>
                                 </div>
                                 <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
-                                  <span className="truncate text-[11px] text-slate-500">Job 模板读取路径：<code className="font-mono text-slate-900 dark:text-slate-100">{parsed.templatePath}</code></span>
+                                  <span className="truncate text-[11px] text-slate-500">{tr('Job 模板读取路径：', 'Job Template Path: ')}<code className="font-mono text-slate-900 dark:text-slate-100">{parsed.templatePath}</code></span>
                                   <Button
                                     size="sm"
-                                    onClick={() => void copyText(envSnippet).then(() => toast.success('已复制 template 读取片段')).catch((ex) => toast.error(ex.message))}
+                                    onClick={() => void copyText(envSnippet).then(() => toast.success(tr('已复制 template 读取片段', 'Copied template snippet'))).catch((ex) => toast.error(ex.message))}
                                   >
                                     <Copy className="h-3 w-3" />
-                                    <span>复制模板</span>
+                                    <span>{tr('复制模板', 'Copy Template')}</span>
                                   </Button>
                                 </div>
                               </div>
@@ -1127,13 +1139,13 @@ export function VaultPage() {
 
               {manageTab === 'policies' && (
                 <Card
-                  title="ACL Policies（权限规则）"
-                  description="选择左侧策略查看或编辑 HCL 规则；由「集群联动」自动维护的策略建议在联动页面修改。"
+                  title={tr('ACL Policies（权限规则）', 'ACL Policies')}
+                  description={tr('选择左侧策略查看或编辑 HCL 规则；由「集群联动」自动维护的策略建议在联动页面修改。', 'Select a policy to inspect or edit HCL rules. Policies managed by Integrations should be edited there.')}
                   actions={
                     isAdmin && (
                       <Button size="sm" variant={policyIsNew ? 'primary' : 'secondary'} onClick={startNewPolicy}>
                         <Plus className="h-3.5 w-3.5" />
-                        <span>新建 Policy</span>
+                        <span>{tr('新建 Policy', 'New Policy')}</span>
                       </Button>
                     )
                   }
@@ -1141,7 +1153,7 @@ export function VaultPage() {
                   <div className="grid grid-cols-1 gap-5 lg:grid-cols-[260px_minmax(0,1fr)] text-xs">
                     <div className="space-y-1.5 rounded-xl border border-slate-200/80 bg-slate-50/50 p-2.5 dark:border-slate-800 dark:bg-slate-950/40 max-h-[440px] overflow-y-auto">
                       {policies.length === 0 ? (
-                        <p className="px-2 py-4 text-center text-[11px] text-slate-500">暂无 Policy，可点击右上角新建。</p>
+                        <p className="px-2 py-4 text-center text-[11px] text-slate-500">{tr('暂无 Policy，可点击右上角新建。', 'No policies yet. Click "New Policy" above.')}</p>
                       ) : (
                         policies.map((p) => {
                           const active = !policyIsNew && selectedPolicy === p;
@@ -1161,12 +1173,12 @@ export function VaultPage() {
                               <span className="font-mono truncate">{p}</span>
                               {isBuiltin && (
                                 <span className="shrink-0 rounded bg-slate-200/80 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                                  内置
+                                  {tr('内置', 'Built-in')}
                                 </span>
                               )}
                               {isManaged && (
                                 <span className="shrink-0 rounded bg-indigo-100/90 px-1.5 py-0.5 text-[10px] text-indigo-700 dark:bg-indigo-500/25 dark:text-indigo-200">
-                                  联动
+                                  {tr('联动', 'Managed')}
                                 </span>
                               )}
                             </button>
@@ -1178,31 +1190,37 @@ export function VaultPage() {
                     <div className="space-y-3 min-w-0">
                       {!policyIsNew && selectedPolicy.startsWith('nomad-') && selectedPolicy !== 'nomad-deck-admin' && (
                         <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 px-3.5 py-2.5 text-[11px] text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-200">
-                          该策略由「集群联动」自动生成并维护，建议前往 <Link to="/integrations" className="font-semibold underline">集群联动</Link> 修改对应的 Role；在此手动改动会在下次「应用联动」时被覆盖。
+                          {tr(
+                            <>该策略由「集群联动」自动生成并维护，建议前往 <Link to="/integrations" className="font-semibold underline">集群联动</Link> 修改对应的 Role；在此手动改动会在下次「应用联动」时被覆盖。</>,
+                            <>This policy is managed by <Link to="/integrations" className="font-semibold underline">Integrations</Link>. Edit the corresponding Role there; manual changes here will be overwritten on the next Apply.</>,
+                          )}
                         </div>
                       )}
                       {!policyIsNew && selectedPolicy === 'root' && (
                         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                          <code className="font-mono">root</code> 为 Vault 内置最高权限策略，不可修改或删除。
+                          {tr(
+                            <><code className="font-mono">root</code> 为 Vault 内置最高权限策略，不可修改或删除。</>,
+                            <><code className="font-mono">root</code> is Vault&apos;s built-in superuser policy and cannot be modified or deleted.</>,
+                          )}
                         </div>
                       )}
 
                       <Input
-                        label={policyIsNew ? '新建 Policy 名称' : 'Policy 名称'}
-                        placeholder="例如 app-readonly"
+                        label={policyIsNew ? tr('新建 Policy 名称', 'New Policy Name') : tr('Policy 名称', 'Policy Name')}
+                        placeholder={tr('例如 app-readonly', 'e.g. app-readonly')}
                         disabled={!policyIsNew && Boolean(selectedPolicy)}
                         hint={
                           policyIsNew
-                            ? '填写英文名称后，在下方编写 HCL 权限规则并点击「保存 Policy」。'
+                            ? tr('填写英文名称后，在下方编写 HCL 权限规则并点击「保存 Policy」。', 'Enter a policy name, write HCL rules below, and click "Save Policy".')
                             : selectedPolicy
-                              ? '当前正在编辑左侧选中的 Policy；如需新增，请点右上角「新建 Policy」。'
-                              : '请在左侧选择任意 Policy，或点右上角「新建 Policy」。'
+                              ? tr('当前正在编辑左侧选中的 Policy；如需新增，请点右上角「新建 Policy」。', 'Editing selected policy; click "New Policy" above to create one.')
+                              : tr('请在左侧选择任意 Policy，或点右上角「新建 Policy」。', 'Select a policy on the left or click "New Policy".')
                         }
                         value={policyEdit.name}
                         onChange={(e) => setPolicyEdit({ ...policyEdit, name: e.target.value })}
                       />
                       <CodeEditor
-                        label={policyLoading ? '正在加载规则内容…' : 'Policy 规则（HCL）'}
+                        label={policyLoading ? tr('正在加载规则内容…', 'Loading policy rules...') : tr('Policy 规则（HCL）', 'Policy Rules (HCL)')}
                         value={policyEdit.rules}
                         onChange={(v) => setPolicyEdit({ ...policyEdit, rules: v })}
                         readOnly={!isAdmin || (!policyIsNew && selectedPolicy === 'root')}
@@ -1213,13 +1231,13 @@ export function VaultPage() {
                           <Button
                             variant="primary"
                             disabled={!policyEdit.name.trim() || (!policyIsNew && selectedPolicy === 'root') || policyLoading}
-                            title={!policyEdit.name.trim() ? '请先选择已有 Policy 或点击「新建 Policy」输入名称' : undefined}
+                            title={!policyEdit.name.trim() ? tr('请先选择已有 Policy 或点击「新建 Policy」输入名称', 'Select a policy or click "New Policy" first') : undefined}
                             onClick={() => {
                               const targetName = policyEdit.name.trim();
                               if (!targetName) return;
                               void apiPut(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(targetName)}`, { policy: policyEdit.rules })
                                 .then(async () => {
-                                  toast.success(`Policy「${targetName}」已保存`);
+                                  toast.success(tr(`Policy「${targetName}」已保存`, `Policy "${targetName}" saved`));
                                   setPolicyIsNew(false);
                                   setSelectedPolicy(targetName);
                                   await loadManage();
@@ -1227,24 +1245,24 @@ export function VaultPage() {
                                 .catch((ex) => setErr(ex.message));
                             }}
                           >
-                            保存 Policy
+                            {tr('保存 Policy', 'Save Policy')}
                           </Button>
                           {!policyIsNew && selectedPolicy && !['root', 'default', 'nomad-deck-admin'].includes(selectedPolicy) && (
                             <Button
                               variant="danger-outline"
                               onClick={async () => {
-                                if (!(await askConfirm(`确认删除 Policy「${selectedPolicy}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
+                                if (!(await askConfirm(tr(`确认删除 Policy「${selectedPolicy}」吗？`, `Delete policy "${selectedPolicy}"?`), { title: tr('删除 Policy', 'Delete Policy'), confirmText: tr('确认删除', 'Delete'), danger: true }))) return;
                                 void apiDelete(`/api/v1/vault/${selectedId}/policies/${encodeURIComponent(selectedPolicy)}`)
                                   .then(() => {
                                     setPolicyEdit({ name: '', rules: '' });
                                     setSelectedPolicy('');
-                                    toast.success('Policy 已删除');
+                                    toast.success(tr('Policy 已删除', 'Policy deleted'));
                                     return loadManage();
                                   })
                                   .catch((ex) => setErr(ex.message));
                               }}
                             >
-                              删除 Policy
+                              {tr('删除 Policy', 'Delete Policy')}
                             </Button>
                           )}
                         </div>
@@ -1256,28 +1274,28 @@ export function VaultPage() {
 
               {manageTab === 'auth' && (
                 <Card
-                  title="已启用的 Auth 认证方法"
-                  description="管理 Vault 登录认证挂载（例如 Token、JWT、Userpass、AppRole）。与 Nomad 联动相关的 JWT 挂载由集群联动自动维护。"
+                  title={tr('已启用的 Auth 认证方法', 'Enabled Auth Methods')}
+                  description={tr('管理 Vault 登录认证挂载（例如 Token、JWT、Userpass、AppRole）。与 Nomad 联动相关的 JWT 挂载由集群联动自动维护。', 'Manage Vault auth mounts (Token, JWT, Userpass, AppRole). JWT mounts for Nomad are managed by Integrations.')}
                   actions={
                     isAdmin && (
                       <Button size="sm" variant="primary" onClick={() => setShowAuth(true)}>
                         <Plus className="h-3.5 w-3.5" />
-                        <span>启用 Auth 方法</span>
+                        <span>{tr('启用 Auth 方法', 'Enable Auth Method')}</span>
                       </Button>
                     )
                   }
                 >
                   {auths.length === 0 ? (
-                    <EmptyState title="暂无 Auth 方法" description="Vault 初始化完成后将自动加载已启用的认证挂载。" />
+                    <EmptyState title={tr('暂无 Auth 方法', 'No Auth Methods')} description={tr('Vault 初始化完成后将自动加载已启用的认证挂载。', 'Enabled auth mounts load once Vault is initialized.')} />
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-xs">
                         <thead>
                           <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
-                            <th className="py-2.5 pr-4">挂载路径</th>
-                            <th className="py-2.5 pr-4">类型</th>
-                            <th className="py-2.5 pr-4">说明</th>
-                            <th className="py-2.5 text-right">操作</th>
+                            <th className="py-2.5 pr-4">{tr('挂载路径', 'Mount Path')}</th>
+                            <th className="py-2.5 pr-4">{tr('类型', 'Type')}</th>
+                            <th className="py-2.5 pr-4">{tr('说明', 'Description')}</th>
+                            <th className="py-2.5 text-right">{tr('操作', 'Actions')}</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1294,19 +1312,19 @@ export function VaultPage() {
                                     size="sm"
                                     variant="danger-outline"
                                     onClick={async () => {
-                                      if (!(await askConfirm(`确认停用 Auth 方法「${a.path}」吗？`, { title: '停用 Auth 方法', confirmText: '确认停用', danger: true }))) return;
+                                      if (!(await askConfirm(tr(`确认停用 Auth 方法「${a.path}」吗？`, `Disable auth method "${a.path}"?`), { title: tr('停用 Auth 方法', 'Disable Auth Method'), confirmText: tr('确认停用', 'Disable'), danger: true }))) return;
                                       void apiDelete(`/api/v1/vault/${selectedId}/auth?path=${encodeURIComponent(a.path)}`)
                                         .then(() => {
-                                          toast.success(`已停用 ${a.path}`);
+                                          toast.success(tr(`已停用 ${a.path}`, `Disabled ${a.path}`));
                                           return loadManage();
                                         })
                                         .catch((ex) => setErr(ex.message));
                                     }}
                                   >
-                                    停用
+                                    {tr('停用', 'Disable')}
                                   </Button>
                                 ) : (
-                                  <span className="text-slate-400">内置</span>
+                                  <span className="text-slate-400">{tr('内置', 'Built-in')}</span>
                                 )}
                               </td>
                             </tr>
@@ -1322,16 +1340,16 @@ export function VaultPage() {
         </div>
       )}
 
-      <Modal open={Boolean(gateView)} title="仲裁门禁预览" onClose={() => setGateView(null)}>
+      <Modal open={Boolean(gateView)} title={tr('仲裁门禁预览', 'Quorum Safety Gate Preview')} onClose={() => setGateView(null)}>
         {gateView && (
           <div className="space-y-4 text-xs">
             <div className="flex items-center gap-2">
-              <span className="text-slate-500">结果：</span>
-              <Badge tone={gateView.allowed ? 'green' : 'red'}>{gateView.allowed ? '允许' : '拦截'}</Badge>
+              <span className="text-slate-500">{tr('结果：', 'Result: ')}</span>
+              <Badge tone={gateView.allowed ? 'green' : 'red'}>{gateView.allowed ? tr('允许', 'Allowed') : tr('拦截', 'Blocked')}</Badge>
             </div>
             <p className="leading-5 text-slate-700 dark:text-slate-200">{gateView.reason}</p>
             <div className="flex justify-end">
-              <Button size="sm" variant="primary" onClick={() => setGateView(null)}>关闭</Button>
+              <Button size="sm" variant="primary" onClick={() => setGateView(null)}>{tr('关闭', 'Close')}</Button>
             </div>
           </div>
         )}
@@ -1339,7 +1357,7 @@ export function VaultPage() {
 
       <Modal
         open={Boolean(isAdmin && kvItem)}
-        title={kvItem?.cas === 0 ? '新建 KV Secret' : `编辑 KV Secret：${kvItem?.path || ''}`}
+        title={kvItem?.cas === 0 ? tr('新建 KV Secret', 'New KV Secret') : tr(`编辑 KV Secret：${kvItem?.path || ''}`, `Edit KV Secret: ${kvItem?.path || ''}`)}
         busy={kvSaving}
         onClose={() => { setKvItem(null); setKvErr(''); }}
         wide
@@ -1348,21 +1366,21 @@ export function VaultPage() {
           <div className="space-y-3.5 text-xs">
             <ErrorAlert message={kvErr} onClose={() => setKvErr('')} />
             <div className="flex flex-wrap items-center justify-between gap-2 text-slate-500">
-              <span className="font-mono">挂载：{kvMount}</span>
-              <span className="font-mono">{kvItem.cas === 0 ? '新 Secret（v1）' : `当前版本 v${kvItem.cas}`}</span>
+              <span className="font-mono">{tr('挂载：', 'Mount: ')}{kvMount}</span>
+              <span className="font-mono">{kvItem.cas === 0 ? tr('新 Secret（v1）', 'New Secret (v1)') : tr(`当前版本 v${kvItem.cas}`, `Version v${kvItem.cas}`)}</span>
             </div>
 
             {kvItem.cas === 0 ? (
               <Input
-                label="Secret 路径（不含挂载名与 data/）"
+                label={tr('Secret 路径（不含挂载名与 data/）', 'Secret Path (without mount or data/)')}
                 required
-                placeholder="例如 apps/postgres 或 apps/redis"
+                placeholder={tr('例如 apps/postgres 或 apps/redis', 'e.g. apps/postgres or apps/redis')}
                 value={kvItem.path}
                 onChange={(e) => setKvItem({ ...kvItem, path: e.target.value })}
               />
             ) : (
               <div className="rounded-lg border border-slate-200/80 bg-slate-50/70 px-3 py-2 font-mono text-slate-700 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-200">
-                路径：{kvItem.path}
+                {tr('路径：', 'Path: ')}{kvItem.path}
               </div>
             )}
 
@@ -1370,8 +1388,8 @@ export function VaultPage() {
               <SectionTabs
                 variant="underline"
                 tabs={[
-                  { id: 'form', label: '键值对表单' },
-                  { id: 'json', label: 'JSON 源码' },
+                  { id: 'form', label: tr('键值对表单', 'Key-Value Form') },
+                  { id: 'json', label: tr('JSON 源码', 'Raw JSON') },
                 ]}
                 active={kvEditMode}
                 onChange={(next) => {
@@ -1384,19 +1402,19 @@ export function VaultPage() {
                     try {
                       const parsed = JSON.parse(kvItem.data || '{}');
                       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                        setKvErr('JSON 顶层必须是键值对对象才能切换到表单模式');
+                        setKvErr(tr('JSON 顶层必须是键值对对象才能切换到表单模式', 'Top-level JSON must be a key-value object to switch to Form mode'));
                         return;
                       }
                       const entries = Object.entries(parsed);
                       const allFlat = entries.every(([, v]) => v === null || ['string', 'number', 'boolean'].includes(typeof v));
                       if (!allFlat) {
-                        setKvErr('包含嵌套对象或数组，请继续在 JSON 源码模式下编辑');
+                        setKvErr(tr('包含嵌套对象或数组，请继续在 JSON 源码模式下编辑', 'Contains nested objects or arrays; edit in Raw JSON mode'));
                         return;
                       }
                       setKvRows(entries.length ? entries.map(([k, v]) => ({ key: k, value: v == null ? '' : String(v) })) : [{ key: '', value: '' }]);
                       setKvEditMode('form');
                     } catch {
-                      setKvErr('当前 JSON 语法不合法，请修正后再切换到表单模式');
+                      setKvErr(tr('当前 JSON 语法不合法，请修正后再切换到表单模式', 'Invalid JSON syntax; fix errors before switching to Form mode'));
                     }
                   }
                 }}
@@ -1407,7 +1425,7 @@ export function VaultPage() {
                   onClick={() => setKvRows((prev) => [...prev, { key: '', value: '' }])}
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  <span>添加字段</span>
+                  <span>{tr('添加字段', 'Add Field')}</span>
                 </Button>
               )}
             </div>
@@ -1417,15 +1435,15 @@ export function VaultPage() {
                 {kvRows.map((row, idx) => (
                   <div key={idx} className="grid grid-cols-[minmax(120px,0.9fr)_minmax(0,1.5fr)_auto] items-center gap-2">
                     <input
-                      aria-label={`字段名 ${idx + 1}`}
-                      placeholder="键名，如 password"
+                      aria-label={tr(`字段名 ${idx + 1}`, `Key ${idx + 1}`)}
+                      placeholder={tr('键名，如 password', 'Key name, e.g. password')}
                       value={row.key}
                       onChange={(e) => setKvRows((prev) => prev.map((r, i) => (i === idx ? { ...r, key: e.target.value } : r)))}
                       className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                     />
                     <input
-                      aria-label={`字段值 ${idx + 1}`}
-                      placeholder="字段值"
+                      aria-label={tr(`字段值 ${idx + 1}`, `Value ${idx + 1}`)}
+                      placeholder={tr('字段值', 'Value')}
                       value={row.value}
                       onChange={(e) => setKvRows((prev) => prev.map((r, i) => (i === idx ? { ...r, value: e.target.value } : r)))}
                       className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
@@ -1433,8 +1451,8 @@ export function VaultPage() {
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
-                        title="生成 24 位随机强密码"
-                        aria-label="生成随机强密码"
+                        title={tr('生成 24 位随机强密码', 'Generate 24-char random password')}
+                        aria-label={tr('生成随机强密码', 'Generate random password')}
                         onClick={() => {
                           const pwd = generateRandomSecret(24);
                           setKvRows((prev) => prev.map((r, i) => (i === idx ? { ...r, value: pwd } : r)));
@@ -1445,8 +1463,8 @@ export function VaultPage() {
                       </button>
                       <button
                         type="button"
-                        title="删除字段"
-                        aria-label="删除字段"
+                        title={tr('删除字段', 'Remove field')}
+                        aria-label={tr('删除字段', 'Remove field')}
                         disabled={kvRows.length <= 1}
                         onClick={() => setKvRows((prev) => prev.filter((_, i) => i !== idx))}
                         className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-400 hover:border-rose-300 hover:text-rose-600 disabled:opacity-35 dark:border-slate-700 dark:bg-slate-900"
@@ -1458,14 +1476,14 @@ export function VaultPage() {
                 ))}
               </div>
             ) : (
-              <CodeEditor label="Secret 数据（JSON）" value={kvItem.data} onChange={(v) => setKvItem({ ...kvItem, data: v })} height="240px" />
+              <CodeEditor label={tr('Secret 数据（JSON）', 'Secret Data (JSON)')} value={kvItem.data} onChange={(v) => setKvItem({ ...kvItem, data: v })} height="240px" />
             )}
 
             {(() => {
               const cleanMount = kvMount.replace(/^\/+|\/+$/g, '') || 'secret';
               const cleanSecretPath = kvItem.path.trim().replace(/^\/+|\/+$/g, '');
               if (!cleanSecretPath) return null;
-              const parsed = parseKVPath(`${cleanMount}/${cleanSecretPath}`, cleanMount);
+              const parsed = parseKVPath(`${cleanMount}/${cleanSecretPath}`, cleanMount, locale);
               let keys: string[] = [];
               if (kvEditMode === 'form') {
                 keys = kvRows.map((r) => r.key.trim()).filter(Boolean);
@@ -1483,29 +1501,29 @@ export function VaultPage() {
               const fileSnippet = buildTemplateData(parsed.templatePath, keys, 'file');
               return (
                 <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-3 space-y-2 dark:border-indigo-500/30 dark:bg-indigo-950/25">
-                  <div className="font-semibold text-indigo-950 dark:text-indigo-100">在 Nomad Job 中引用此 Secret</div>
+                  <div className="font-semibold text-indigo-950 dark:text-indigo-100">{tr('在 Nomad Job 中引用此 Secret', 'Reference in Nomad Jobs')}</div>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">
-                      <span className="truncate text-[11px]">Role 授权路径：<code className="font-mono">{parsed.rolePath}</code></span>
-                      <Button size="sm" onClick={() => void copyText(parsed.rolePath).then(() => toast.success('已复制 Role 路径')).catch((ex) => toast.error(ex.message))}>
+                      <span className="truncate text-[11px]">{tr('Role 授权路径：', 'Role Policy Path: ')}<code className="font-mono">{parsed.rolePath}</code></span>
+                      <Button size="sm" onClick={() => void copyText(parsed.rolePath).then(() => toast.success(tr('已复制 Role 路径', 'Copied Role path'))).catch((ex) => toast.error(ex.message))}>
                         <Copy className="h-3 w-3" />
                       </Button>
                     </div>
                     <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-900">
-                      <span className="truncate text-[11px]">模板路径：<code className="font-mono">{parsed.templatePath}</code></span>
-                      <Button size="sm" onClick={() => void copyText(parsed.templatePath).then(() => toast.success('已复制模板路径')).catch((ex) => toast.error(ex.message))}>
+                      <span className="truncate text-[11px]">{tr('模板路径：', 'Template Path: ')}<code className="font-mono">{parsed.templatePath}</code></span>
+                      <Button size="sm" onClick={() => void copyText(parsed.templatePath).then(() => toast.success(tr('已复制模板路径', 'Copied template path'))).catch((ex) => toast.error(ex.message))}>
                         <Copy className="h-3 w-3" />
                       </Button>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button size="sm" onClick={() => void copyText(envSnippet).then(() => toast.success('已复制环境变量模板代码')).catch((ex) => toast.error(ex.message))}>
+                    <Button size="sm" onClick={() => void copyText(envSnippet).then(() => toast.success(tr('已复制环境变量模板代码', 'Copied env template snippet'))).catch((ex) => toast.error(ex.message))}>
                       <Copy className="h-3 w-3" />
-                      <span>复制环境变量模板 (env)</span>
+                      <span>{tr('复制环境变量模板 (env)', 'Copy Env Template (env)')}</span>
                     </Button>
-                    <Button size="sm" onClick={() => void copyText(fileSnippet).then(() => toast.success('已复制密码文件模板代码')).catch((ex) => toast.error(ex.message))}>
+                    <Button size="sm" onClick={() => void copyText(fileSnippet).then(() => toast.success(tr('已复制密码文件模板代码', 'Copied file template snippet'))).catch((ex) => toast.error(ex.message))}>
                       <Copy className="h-3 w-3" />
-                      <span>复制密码文件模板 (file)</span>
+                      <span>{tr('复制密码文件模板 (file)', 'Copy File Template (file)')}</span>
                     </Button>
                   </div>
                 </div>
@@ -1521,33 +1539,33 @@ export function VaultPage() {
                     onClick={() => void handleDeleteKVSecret(kvItem.path)}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
-                    <span>删除 Secret</span>
+                    <span>{tr('删除 Secret', 'Delete Secret')}</span>
                   </Button>
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <Button type="button" disabled={kvSaving} onClick={() => { setKvItem(null); setKvErr(''); }}>关闭</Button>
+                <Button type="button" disabled={kvSaving} onClick={() => { setKvItem(null); setKvErr(''); }}>{tr('关闭', 'Close')}</Button>
                 <Button
                   variant="primary"
                   loading={kvSaving}
                   onClick={async () => {
                   const targetPath = kvItem.path.trim().replace(/^\/+|\/+$/g, '');
                   if (!targetPath) {
-                    setKvErr('请填写 Secret 路径，例如 apps/postgres');
+                    setKvErr(tr('请填写 Secret 路径，例如 apps/postgres', 'Please enter a secret path, e.g. apps/postgres'));
                     return;
                   }
                   let payloadData: Record<string, unknown>;
                   if (kvEditMode === 'form') {
                     payloadData = serializeKVRows(kvRows);
                     if (Object.keys(payloadData).length === 0) {
-                      setKvErr('请至少填写一个字段名');
+                      setKvErr(tr('请至少填写一个字段名', 'Please add at least one field name'));
                       return;
                     }
                   } else {
                     try {
                       payloadData = JSON.parse(kvItem.data);
                     } catch {
-                      setKvErr('KV 数据必须是合法 JSON');
+                      setKvErr(tr('KV 数据必须是合法 JSON', 'KV data must be valid JSON'));
                       return;
                     }
                   }
@@ -1558,20 +1576,20 @@ export function VaultPage() {
                       `/api/v1/vault/${selectedId}/kv/item?mount=${encodeURIComponent(kvMount)}&path=${encodeURIComponent(targetPath)}`,
                       { data: payloadData, cas: kvItem.cas },
                     );
-                    toast.success(kvItem.cas === 0 ? 'Secret 已创建' : 'KV 已更新');
+                    toast.success(kvItem.cas === 0 ? tr('Secret 已创建', 'Secret created') : tr('KV 已更新', 'KV updated'));
                     const nextVer = Number(r.result?.version ?? kvItem.cas + 1);
                     setKvItem({ path: targetPath, data: JSON.stringify(payloadData, null, 2), cas: nextVer });
                     const parentDir = targetPath.includes('/') ? `${targetPath.slice(0, targetPath.lastIndexOf('/') + 1)}` : '';
                     setKvPath(parentDir);
                     await listKVKeys(kvMount, parentDir);
                   } catch (ex: any) {
-                    setKvErr(ex?.message || '保存 Secret 失败');
+                    setKvErr(ex?.message || tr('保存 Secret 失败', 'Failed to save secret'));
                   } finally {
                     setKvSaving(false);
                   }
                 }}
               >
-                保存 Secret
+                {tr('保存 Secret', 'Save Secret')}
               </Button>
               </div>
             </div>
@@ -1588,11 +1606,11 @@ export function VaultPage() {
           await loadList();
           setSelectedId(id);
           setTab('status');
-          toast.success('集群配置已创建，请继续部署服务');
+          toast.success(tr('集群配置已创建，请继续部署服务', 'Cluster config created. Continue to deploy.'));
         }}
       />
 
-      <Modal open={showKVMount} title="启用 KV v2 挂载" onClose={() => setShowKVMount(false)}>
+      <Modal open={showKVMount} title={tr('启用 KV v2 挂载', 'Enable KV v2 Mount')} onClose={() => setShowKVMount(false)}>
         <form
           className="space-y-3"
           onSubmit={(e) => {
@@ -1604,36 +1622,36 @@ export function VaultPage() {
                 setKvItem(null);
                 setKvKeys([]);
                 setKvPath('');
-    setKvListedDir('');
+                setKvListedDir('');
                 setShowKVMount(false);
-                toast.success('KV v2 挂载已启用');
+                toast.success(tr('KV v2 挂载已启用', 'KV v2 mount enabled'));
               })
               .catch((ex) => setErr(ex.message));
           }}
         >
-          <Input label="挂载路径" required value={kvMountForm.path} onChange={(e) => setKvMountForm({ ...kvMountForm, path: e.target.value })} />
-          <Input label="挂载描述" value={kvMountForm.description} onChange={(e) => setKvMountForm({ ...kvMountForm, description: e.target.value })} />
+          <Input label={tr('挂载路径', 'Mount Path')} required value={kvMountForm.path} onChange={(e) => setKvMountForm({ ...kvMountForm, path: e.target.value })} />
+          <Input label={tr('挂载描述', 'Description')} value={kvMountForm.description} onChange={(e) => setKvMountForm({ ...kvMountForm, description: e.target.value })} />
           <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setShowKVMount(false)}>取消</Button>
-            <Button type="submit" variant="primary">启用挂载</Button>
+            <Button type="button" onClick={() => setShowKVMount(false)}>{tr('取消', 'Cancel')}</Button>
+            <Button type="submit" variant="primary">{tr('启用挂载', 'Enable Mount')}</Button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={showAuth} title="启用 Vault Auth 方法" onClose={() => setShowAuth(false)}>
+      <Modal open={showAuth} title={tr('启用 Vault Auth 方法', 'Enable Vault Auth Method')} onClose={() => setShowAuth(false)}>
         <form className="space-y-3" onSubmit={(e) => {
           e.preventDefault();
           void apiPost(`/api/v1/vault/${selectedId}/auth`, authForm).then(() => { setShowAuth(false); return loadManage(); }).catch((ex) => setErr(ex.message));
         }}>
           <ErrorAlert message={err} onClose={() => setErr('')} />
-          <Input label="Auth 挂载路径" required value={authForm.path} onChange={(e) => setAuthForm({ ...authForm, path: e.target.value })} />
-          <Input label="Auth 类型" required value={authForm.type} onChange={(e) => setAuthForm({ ...authForm, type: e.target.value })} />
-          <Input label="描述" value={authForm.description} onChange={(e) => setAuthForm({ ...authForm, description: e.target.value })} />
-          <Button type="submit" variant="primary">启用 Auth</Button>
+          <Input label={tr('Auth 挂载路径', 'Auth Mount Path')} required value={authForm.path} onChange={(e) => setAuthForm({ ...authForm, path: e.target.value })} />
+          <Input label={tr('Auth 类型', 'Auth Type')} required value={authForm.type} onChange={(e) => setAuthForm({ ...authForm, type: e.target.value })} />
+          <Input label={tr('描述', 'Description')} value={authForm.description} onChange={(e) => setAuthForm({ ...authForm, description: e.target.value })} />
+          <Button type="submit" variant="primary">{tr('启用 Auth', 'Enable Auth')}</Button>
         </form>
       </Modal>
 
-      <Modal open={showJoin} title="扩容 Vault 节点" onClose={() => setShowJoin(false)}>
+      <Modal open={showJoin} title={tr('扩容 Vault 节点', 'Add Vault Node')} onClose={() => setShowJoin(false)}>
         <form
           className="space-y-3 text-xs"
           onSubmit={async (e) => {
@@ -1645,9 +1663,9 @@ export function VaultPage() {
                 advertise_addr: joinAdvertiseAddr.trim() || undefined,
               });
               setShowJoin(false);
-              if (r.task?.id) openTask(r.task.id, '扩容 Vault 节点');
+              if (r.task?.id) openTask(r.task.id, tr('扩容 Vault 节点', 'Add Vault Node'));
             } catch (ex: any) {
-              setErr(ex?.message || '扩容失败');
+              setErr(ex?.message || tr('扩容失败', 'Failed to join node'));
             } finally {
               setJoinBusy(false);
             }
@@ -1655,7 +1673,7 @@ export function VaultPage() {
         >
           <ErrorAlert message={err} onClose={() => setErr('')} />
           <Select
-            label="待加入主机"
+            label={tr('待加入主机', 'Host to Join')}
             required
             value={joinNodeId}
             onChange={(e) => {
@@ -1665,33 +1683,33 @@ export function VaultPage() {
               setJoinAdvertiseAddr(matched?.host || '');
             }}
           >
-            <option value="">选择主机</option>
+            <option value="">{tr('选择主机', 'Select host')}</option>
             {nodes.filter((n) => !clusterNodes.some((m: any) => m.node_id === n.id)).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.host})</option>)}
           </Select>
           <div>
             <Input
-              label="集群通信地址 (advertise_addr)"
+              label={tr('集群通信地址 (advertise_addr)', 'Advertise Address (advertise_addr)')}
               required
-              placeholder="例如 10.0.0.12"
+              placeholder={tr('例如 10.0.0.12', 'e.g. 10.0.0.12')}
               value={joinAdvertiseAddr}
               onChange={(e) => setJoinAdvertiseAddr(e.target.value)}
-              hint="默认填入主机 SSH 地址；加入多节点集群请填写真实内网 IP（勿填 127.0.0.1）。"
+              hint={tr('默认填入主机 SSH 地址；加入多节点集群请填写真实内网 IP（勿填 127.0.0.1）。', 'Prefilled with SSH host address; use a reachable private IP for multi-node clusters (not 127.0.0.1).')}
             />
             {isLoopbackAddress(joinAdvertiseAddr) && (
               <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">
-                跨机加入集群不能使用回环地址（127.0.0.1 / localhost），请改为真实内网 IP。
+                {tr('跨机加入集群不能使用回环地址（127.0.0.1 / localhost），请改为真实内网 IP。', 'Loopback addresses (127.0.0.1 / localhost) cannot be used when joining a multi-node cluster.')}
               </p>
             )}
           </div>
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
-            <span>下载网络：{proxyEnabled ? '通过系统代理' : '直连'}</span>
-            <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">前往下载代理设置</Link>
+            <span>{tr('下载网络：', 'Download Network: ')}{proxyEnabled ? tr('通过系统代理', 'Via system proxy') : tr('直连', 'Direct')}</span>
+            <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">{tr('前往下载代理设置', 'Configure download proxy')}</Link>
           </div>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={confirmSwap} onChange={(e) => setConfirmSwap(e.target.checked)} />确认未加密 Swap 风险</label>
-          <p className="text-slate-500">加入主机使用集群当前版本，完成 Raft 加入与解封后核对投票成员状态。</p>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={confirmSwap} onChange={(e) => setConfirmSwap(e.target.checked)} />{tr('确认未加密 Swap 风险', 'Confirm unencrypted swap risk')}</label>
+          <p className="text-slate-500">{tr('加入主机使用集群当前版本，完成 Raft 加入与解封后核对投票成员状态。', 'Joined node uses current cluster version and verifies Raft voter membership after unseal.')}</p>
           <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setShowJoin(false)}>取消</Button>
-            <Button type="submit" variant="primary" loading={joinBusy}>确认扩容</Button>
+            <Button type="button" onClick={() => setShowJoin(false)}>{tr('取消', 'Cancel')}</Button>
+            <Button type="submit" variant="primary" loading={joinBusy}>{tr('确认扩容', 'Join Node')}</Button>
           </div>
         </form>
       </Modal>
@@ -1707,11 +1725,11 @@ export function VaultPage() {
 
       <Modal
         open={Boolean(uiLoginModal)}
-        title={`免密登录 Vault Web UI${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`}
+        title={tr(`免密登录 Vault Web UI${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`, `SSO Login to Vault Web UI${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`)}
         onClose={() => setUiLoginModal(null)}
         footer={
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button type="button" onClick={() => setUiLoginModal(null)}>关闭</Button>
+            <Button type="button" onClick={() => setUiLoginModal(null)}>{tr('关闭', 'Close')}</Button>
             {uiLoginModal && (
               <a
                 href={uiLoginModal.url}
@@ -1720,7 +1738,7 @@ export function VaultPage() {
                 onClick={() => setUiLoginModal(null)}
                 className="primary-button"
               >
-                <span>立即免密打开 Vault UI</span>
+                <span>{tr('立即免密打开 Vault UI', 'Open Vault UI (SSO)')}</span>
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
             )}
@@ -1730,11 +1748,21 @@ export function VaultPage() {
         {uiLoginModal && (
           <div className="space-y-3 text-xs leading-5 text-slate-600 dark:text-slate-300">
             <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 px-3.5 py-2.5 text-indigo-950 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-100">
-              <p>已生成<strong>单次自毁信封链接</strong>（{uiLoginModal.wrapTTL} 秒内有效，拆封一次即作废）。</p>
-              <p className="mt-1">打开后会自动登录 Vault 原生后台，会话有效期为 <strong>{uiLoginModal.tokenTTL}</strong>，到期自动失效，无需手动吊销。</p>
+              <p>
+                {tr(
+                  <>已生成<strong>单次自毁信封链接</strong>（{uiLoginModal.wrapTTL} 秒内有效，拆封一次即作废）。</>,
+                  <>A <strong>response-wrapped single-use link</strong> has been created (valid for {uiLoginModal.wrapTTL}s).</>,
+                )}
+              </p>
+              <p className="mt-1">
+                {tr(
+                  <>打开后会自动登录 Vault 原生后台，会话有效期为 <strong>{uiLoginModal.tokenTTL}</strong>，到期自动失效，无需手动吊销。</>,
+                  <>Opening the link signs you into Vault UI automatically with a session TTL of <strong>{uiLoginModal.tokenTTL}</strong>.</>,
+                )}
+              </p>
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              提示：如果节点使用自签名 TLS 证书，浏览器首次打开提示“证书风险”时点击“继续访问”后，页面仍会自动完成登录。
+              {tr('提示：如果节点使用自签名 TLS 证书，浏览器首次打开提示“证书风险”时点击“继续访问”后，页面仍会自动完成登录。', 'Tip: If the node uses a self-signed TLS cert, click Proceed in your browser and SSO login will still complete.')}
             </p>
           </div>
         )}
@@ -1742,7 +1770,7 @@ export function VaultPage() {
 
       <Modal
         open={Boolean(rootToken)}
-        title="Vault 临时 Root Token"
+        title={tr('Vault 临时 Root Token', 'Vault Temporary Root Token')}
         busy={revokingRootToken}
         onClose={() => setRootToken('')}
         footer={
@@ -1757,28 +1785,28 @@ export function VaultPage() {
                   try {
                     await apiPost(`/api/v1/vault/${selectedId}/root-token/revoke`, { token: rootToken });
                     setRootToken('');
-                    toast.success('临时 Root Token 已向 Vault 吊销');
+                    toast.success(tr('临时 Root Token 已向 Vault 吊销', 'Temporary Root Token revoked in Vault'));
                   } catch (ex: any) {
-                    toast.error(ex?.message || '吊销 Root Token 失败');
+                    toast.error(ex?.message || tr('吊销 Root Token 失败', 'Failed to revoke Root Token'));
                   } finally {
                     setRevokingRootToken(false);
                   }
                 }}
               >
-                吊销 Root Token
+                {tr('吊销 Root Token', 'Revoke Root Token')}
               </Button>
             )}
             <Button type="button" variant="primary" disabled={revokingRootToken} onClick={() => setRootToken('')}>
-              关闭
+              {tr('关闭', 'Close')}
             </Button>
           </div>
         }
       >
         <div className="space-y-4">
           <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-xs leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-            此 Token 通过托管 Unseal Key 动态重建，控制面不落盘保存。可用于登录 Vault 原生 Web UI 或执行高危恢复操作；使用完毕后请及时点击「吊销 Root Token」作废。
+            {tr('此 Token 通过托管 Unseal Key 动态重建，控制面不落盘保存。可用于登录 Vault 原生 Web UI 或执行高危恢复操作；使用完毕后请及时点击「吊销 Root Token」作废。', 'Dynamically reconstructed from custodied Unseal Keys (never stored on disk). Click "Revoke Root Token" as soon as you finish.')}
           </div>
-          <MaskedSecret value={rootToken} label="临时 Root Token：" />
+          <MaskedSecret value={rootToken} label={tr('临时 Root Token：', 'Temporary Root Token:')} />
         </div>
       </Modal>
 
@@ -1788,7 +1816,7 @@ export function VaultPage() {
             e.preventDefault();
             if (!dlModal) return;
             if (dlPass && dlPass.length < 6) {
-              setDlErr('归档加密口令至少 6 位（或留空不加密）');
+              setDlErr(tr('归档加密口令至少 6 位（或留空不加密）', 'Archive passphrase must be at least 6 characters (or blank for unencrypted)'));
               return;
             }
             setDlBusy(true);
@@ -1797,7 +1825,7 @@ export function VaultPage() {
               await dlModal.run(dlPw, dlPass);
               setDlModal(null);
             } catch (ex: any) {
-              setDlErr(ex?.message || '导出失败');
+              setDlErr(ex?.message || tr('导出失败', 'Export failed'));
             } finally {
               setDlBusy(false);
             }
@@ -1805,11 +1833,11 @@ export function VaultPage() {
           className="space-y-3 text-xs"
         >
           <ErrorAlert message={dlErr} />
-          <SecretInput label="当前管理员登录密码" required value={dlPw} onChangeValue={setDlPw} />
-          <SecretInput label="归档加密口令（可选，填写则至少 6 位）" value={dlPass} onChangeValue={setDlPass} />
+          <SecretInput label={tr('当前管理员登录密码', 'Current Admin Password')} required value={dlPw} onChangeValue={setDlPw} />
+          <SecretInput label={tr('归档加密口令（可选，填写则至少 6 位）', 'Archive Encryption Passphrase (optional, min 6 chars)')} value={dlPass} onChangeValue={setDlPass} />
           <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setDlModal(null)}>取消</Button>
-            <Button type="submit" variant="primary" disabled={dlBusy}>{dlBusy ? '导出中...' : '确认导出'}</Button>
+            <Button type="button" onClick={() => setDlModal(null)}>{tr('取消', 'Cancel')}</Button>
+            <Button type="submit" variant="primary" disabled={dlBusy}>{dlBusy ? tr('导出中...', 'Exporting...') : tr('确认导出', 'Export')}</Button>
           </div>
         </form>
       </Modal>
@@ -1820,7 +1848,7 @@ export function VaultPage() {
         plan={uninstallPlan}
         onClose={() => setUninstallPlan(null)}
         onSubmitted={(taskId) => {
-          if (taskId) openTask(taskId, `卸载 Vault: ${cluster?.name || ''}`);
+          if (taskId) openTask(taskId, tr(`卸载 Vault: ${cluster?.name || ''}`, `Uninstall Vault: ${cluster?.name || ''}`));
           void loadList();
         }}
       />

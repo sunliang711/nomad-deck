@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3 } from 'lucide-react';
+import { useI18n } from '../lib/i18n';
 import './FilterControls.css';
 
 export interface FilterOption {
@@ -205,13 +206,14 @@ export function FilterDateTime({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const { isEn, tr } = useI18n();
   const id = useId();
   const popover = useFilterPopover(320, 480);
   const [draftDate, setDraftDate] = useState(() => localDate(new Date()));
   const [hours, setHours] = useState('00');
   const [minutes, setMinutes] = useState('00');
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-  const locale = 'zh-CN';
+  const locale = isEn ? 'en-US' : 'zh-CN';
   const today = localDate(new Date());
   const start = new Date(month.getFullYear(), month.getMonth(), 1 - month.getDay(), 12);
   const days = Array.from(
@@ -326,7 +328,7 @@ export function FilterDateTime({
               <button
                 type="button"
                 className="audit-calendar-nav"
-                aria-label="上个月"
+                aria-label={tr('上个月', 'Previous month')}
                 onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}
               >
                 <ChevronLeft aria-hidden="true" size={16} />
@@ -337,7 +339,7 @@ export function FilterDateTime({
               <button
                 type="button"
                 className="audit-calendar-nav"
-                aria-label="下个月"
+                aria-label={tr('下个月', 'Next month')}
                 onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}
               >
                 <ChevronRight aria-hidden="true" size={16} />
@@ -375,14 +377,14 @@ export function FilterDateTime({
             <div className="audit-date-time">
               <span>
                 <Clock3 aria-hidden="true" size={15} />
-                时间
+                {tr('时间', 'Time')}
               </span>
               <div>
                 <input
                   type="text"
                   inputMode="numeric"
                   maxLength={2}
-                  aria-label="小时"
+                  aria-label={tr('小时', 'Hour')}
                   aria-invalid={!/^\d{1,2}$/.test(hours) || Number(hours) > 23}
                   value={hours}
                   onChange={(event) => setHours(event.target.value.replace(/\D/g, ''))}
@@ -395,7 +397,7 @@ export function FilterDateTime({
                   type="text"
                   inputMode="numeric"
                   maxLength={2}
-                  aria-label="分钟"
+                  aria-label={tr('分钟', 'Minute')}
                   aria-invalid={!/^\d{1,2}$/.test(minutes) || Number(minutes) > 59}
                   value={minutes}
                   onChange={(event) => setMinutes(event.target.value.replace(/\D/g, ''))}
@@ -414,10 +416,10 @@ export function FilterDateTime({
                   popover.close(true);
                 }}
               >
-                清除
+                {tr('清除', 'Clear')}
               </button>
               <button type="button" className="audit-date-text" onClick={() => selectDay(new Date(), true)}>
-                今天
+                {tr('今天', 'Today')}
               </button>
               <button
                 type="button"
@@ -428,7 +430,7 @@ export function FilterDateTime({
                   popover.close(true);
                 }}
               >
-                应用
+                {tr('应用', 'Apply')}
               </button>
             </div>
           </div>,

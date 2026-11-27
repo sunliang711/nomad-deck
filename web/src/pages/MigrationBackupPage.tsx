@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Download, ShieldCheck, Upload } from 'lucide-react';
 import { apiDownload, apiPost, apiUpload } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { useI18n } from '../lib/i18n';
 import { useToast } from '../components/Toast';
 import {
   Button,
@@ -14,15 +15,16 @@ import {
 } from '../components/UI';
 
 const optionalTables = [
-  { id: 'admins', label: '管理员账号（迁移可选）' },
-  { id: 'job_revisions', label: 'Job 修订历史' },
-  { id: 'audit_logs', label: '审计日志' },
-  { id: 'operation_tasks', label: '运维任务与步骤日志' },
-  { id: 'cron_job_runs', label: '定时任务执行历史' },
+  { id: 'admins', label: '管理员账号（迁移可选）', labelEn: 'Admin Accounts (optional)' },
+  { id: 'job_revisions', label: 'Job 修订历史', labelEn: 'Job Revision History' },
+  { id: 'audit_logs', label: '审计日志', labelEn: 'Audit Logs' },
+  { id: 'operation_tasks', label: '运维任务与步骤日志', labelEn: 'Operation Tasks & Logs' },
+  { id: 'cron_job_runs', label: '定时任务执行历史', labelEn: 'Cron Run History' },
 ];
 
 export function MigrationBackupPage() {
   const { isAdmin } = useAuth();
+  const { isEn, tr } = useI18n();
   const toast = useToast();
 
   const [err, setErr] = useState('');
@@ -41,8 +43,8 @@ export function MigrationBackupPage() {
   if (!isAdmin) {
     return (
       <div className="space-y-5">
-        <PageHeader title="环境迁移" subtitle="控制面数据打包导出（.ndbundle）、预检导入与控制面激活" />
-        <Card title="权限受限">环境迁移操作仅限 admin 角色。</Card>
+        <PageHeader title={tr('环境迁移', 'Migration')} subtitle={tr('控制面数据打包导出（.ndbundle）、预检导入与控制面激活', 'Export (.ndbundle), dry-run preview import, and activate control plane')} />
+        <Card title={tr('权限受限', 'Access Restricted')}>{tr('环境迁移操作仅限 admin 角色。', 'Migration operations require the admin role.')}</Card>
       </div>
     );
   }
@@ -62,10 +64,10 @@ export function MigrationBackupPage() {
         impFile,
       );
       setPreviewRep(res.report);
-      toast.info('迁移包解析与 Dry-Run 预检完成');
+      toast.info(tr('迁移包解析与 Dry-Run 预检完成', 'Bundle parsed and dry-run preview completed'));
     } catch (ex: any) {
       setPreviewRep(null);
-      toast.error(ex?.message || '迁移预检失败');
+      toast.error(ex?.message || tr('迁移预检失败', 'Migration preview failed'));
     } finally {
       setPreviewBusy(false);
     }
@@ -74,27 +76,30 @@ export function MigrationBackupPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="环境迁移"
-        subtitle="控制面数据打包导出（.ndbundle）、Dry-Run 预检导入与控制面激活"
+        title={tr('环境迁移', 'Migration')}
+        subtitle={tr('控制面数据打包导出（.ndbundle）、Dry-Run 预检导入与控制面激活', 'Export control plane bundle (.ndbundle), dry-run preview import, and activate')}
       />
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
 
       <div className="space-y-5">
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-indigo-100 dark:border-indigo-500/30 bg-indigo-50/60 dark:bg-indigo-500/10 p-4 text-xs text-indigo-800 dark:text-indigo-200">
-          <span className="font-semibold">迁移流程：</span>
-          <span>1. 导出迁移包（.ndbundle）</span>
+          <span className="font-semibold">{tr('迁移流程：', 'Workflow: ')}</span>
+          <span>{tr('1. 导出迁移包（.ndbundle）', '1. Export bundle (.ndbundle)')}</span>
           <span aria-hidden="true">→</span>
-          <span>2. 在新控制面上传并 Dry-Run 预检</span>
+          <span>{tr('2. 在新控制面上传并 Dry-Run 预检', '2. Upload & dry-run preview on target')}</span>
           <span aria-hidden="true">→</span>
-          <span>3. 确认还原并激活控制面</span>
+          <span>{tr('3. 确认还原并激活控制面', '3. Apply restore & activate')}</span>
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <Card title={<span className="flex items-center gap-2"><Download className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />导出迁移包（.ndbundle）</span>}>
+          <Card title={<span className="flex items-center gap-2"><Download className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />{tr('导出迁移包（.ndbundle）', 'Export Migration Bundle (.ndbundle)')}</span>}>
             <div className="space-y-4 text-xs">
               <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
-                核心配置表默认全选；如填写临时迁移口令（至少 6 位），敏感字段解密后将使用 Argon2id + AES-256-GCM 加密封装，留空则不加密。
+                {tr(
+                  '核心配置表默认全选；如填写临时迁移口令（至少 6 位），敏感字段解密后将使用 Argon2id + AES-256-GCM 加密封装，留空则不加密。',
+                  'Core config tables are included by default. If a passphrase (min 6 chars) is provided, sensitive fields are sealed with Argon2id + AES-256-GCM; leave blank for unencrypted export.',
+                )}
               </p>
               <div className="space-y-2">
                 {optionalTables.map((t) => (
@@ -108,12 +113,12 @@ export function MigrationBackupPage() {
                         )
                       }
                     />
-                    <span>{t.label}</span>
+                    <span>{isEn ? t.labelEn : t.label}</span>
                   </label>
                 ))}
               </div>
               <SecretInput
-                label="临时迁移口令（可选，填写则至少 6 位）"
+                label={tr('临时迁移口令（可选，填写则至少 6 位）', 'Migration Passphrase (optional, min 6 chars)')}
                 value={expPass}
                 onChangeValue={setExpPass}
               />
@@ -121,11 +126,11 @@ export function MigrationBackupPage() {
                 variant="primary"
                 onClick={() => {
                   if (expPass && expPass.length < 6) {
-                    toast.error('迁移口令至少 6 位（或留空不加密）');
+                    toast.error(tr('迁移口令至少 6 位（或留空不加密）', 'Passphrase must be at least 6 chars (or leave blank)'));
                     return;
                   }
                   setPwAction({
-                    title: '验证当前密码并导出迁移包',
+                    title: tr('验证当前密码并导出迁移包', 'Verify Password & Export Bundle'),
                     run: async (pw) => {
                       await apiDownload(
                         '/api/v1/migration/export',
@@ -136,47 +141,47 @@ export function MigrationBackupPage() {
                         },
                         'nomad-deck.ndbundle',
                       );
-                      toast.success('迁移包已导出并开始下载');
+                      toast.success(tr('迁移包已导出并开始下载', 'Migration bundle exported and download started'));
                     },
                   });
                 }}
               >
                 <Download className="h-3.5 w-3.5" />
-                <span>导出 .ndbundle</span>
+                <span>{tr('导出 .ndbundle', 'Export .ndbundle')}</span>
               </Button>
             </div>
           </Card>
 
           <Card
-            title={<span className="flex items-center gap-2"><Upload className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />导入预检与控制面激活</span>}
+            title={<span className="flex items-center gap-2"><Upload className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />{tr('导入预检与控制面激活', 'Import Preview & Activation')}</span>}
             actions={
               <Button
                 size="sm"
                 variant="primary"
                 onClick={() =>
                   setPwAction({
-                    title: '激活控制面自动调度与解封',
-                    description: '请确认旧控制面已下线，避免双活冲突。',
+                    title: tr('激活控制面自动调度与解封', 'Activate Auto-Scheduling & Unseal'),
+                    description: tr('请确认旧控制面已下线，避免双活冲突。', 'Confirm the previous control plane is stopped to avoid split-brain conflicts.'),
                     run: async (pw) => {
                       await apiPost('/api/v1/migration/activate', { current_password: pw });
-                      toast.success('控制面已激活，定时任务与自动解封已恢复');
+                      toast.success(tr('控制面已激活，定时任务与自动解封已恢复', 'Control plane activated; cron jobs and auto-unseal resumed'));
                     },
                   })
                 }
               >
                 <ShieldCheck className="h-3.5 w-3.5" />
-                <span>激活控制面</span>
+                <span>{tr('激活控制面', 'Activate Control Plane')}</span>
               </Button>
             }
           >
             <form onSubmit={doPreview} className="space-y-4 text-xs">
-              <Select label="还原策略" value={impStrategy} onChange={(e) => setImpStrategy(e.target.value as any)}>
-                <option value="replace">replace（整库灾难恢复，推荐）</option>
-                <option value="merge">merge（增量合并）</option>
+              <Select label={tr('还原策略', 'Restore Strategy')} value={impStrategy} onChange={(e) => setImpStrategy(e.target.value as any)}>
+                <option value="replace">{tr('replace（整库灾难恢复，推荐）', 'replace (Full restore, recommended)')}</option>
+                <option value="merge">{tr('merge（增量合并）', 'merge (Incremental merge)')}</option>
               </Select>
-              <SecretInput label="迁移/备份口令（未加密包可留空）" value={impPass} onChangeValue={setImpPass} />
+              <SecretInput label={tr('迁移/备份口令（未加密包可留空）', 'Migration/Backup Passphrase (blank if unencrypted)')} value={impPass} onChangeValue={setImpPass} />
               <label className="block space-y-1.5">
-                <span className="block font-medium text-slate-700 dark:text-slate-300">选择 .ndbundle 文件</span>
+                <span className="block font-medium text-slate-700 dark:text-slate-300">{tr('选择 .ndbundle 文件', 'Select .ndbundle File')}</span>
                 <input
                   type="file"
                   required
@@ -190,18 +195,18 @@ export function MigrationBackupPage() {
               </label>
               <Button type="submit" variant="primary" disabled={previewBusy || !impFile}>
                 <Upload className="h-3.5 w-3.5" />
-                <span>{previewBusy ? '正在解析预检...' : '上传并 Dry-Run 预检'}</span>
+                <span>{previewBusy ? tr('正在解析预检...', 'Parsing preview...') : tr('上传并 Dry-Run 预检', 'Upload & Dry-Run Preview')}</span>
               </Button>
             </form>
 
             {previewRep && (
               <div className="mt-4 space-y-3 border-t border-slate-200 pt-4 text-xs dark:border-slate-800">
                 <div className="font-semibold text-slate-900 dark:text-slate-100">
-                  预检报告（SHA256: <code className="font-mono">{previewRep.bundle_sha256?.slice(0, 12)}…</code>）
+                  {tr('预检报告', 'Preview Report')}（SHA256: <code className="font-mono">{previewRep.bundle_sha256?.slice(0, 12)}…</code>）
                 </div>
                 <div className="text-slate-600 dark:text-slate-300">
-                  导入后可登录账号：
-                  {(previewRep.login_accounts || []).map((a: any) => `${a.username}(${a.role})`).join('、')}
+                  {tr('导入后可登录账号：', 'Accounts after import: ')}
+                  {(previewRep.login_accounts || []).map((a: any) => `${a.username}(${a.role})`).join(isEn ? ', ' : '、')}
                 </div>
                 <pre className="max-h-48 overflow-auto rounded-xl bg-slate-950 p-3 font-mono text-slate-100">
                   {JSON.stringify(previewRep.tables, null, 2)}
@@ -210,8 +215,8 @@ export function MigrationBackupPage() {
                   variant="danger"
                   onClick={() =>
                     setPwAction({
-                      title: `确认执行 ${previewRep.strategy} 还原`,
-                      description: '还原后现有会话将全部失效，需重新登录并激活控制面。',
+                      title: tr(`确认执行 ${previewRep.strategy} 还原`, `Confirm ${previewRep.strategy} Restore`),
+                      description: tr('还原后现有会话将全部失效，需重新登录并激活控制面。', 'All active sessions will be invalidated after restore; sign in again and activate the control plane.'),
                       run: async (pw) => {
                         await apiPost('/api/v1/migration/import/apply', {
                           preview_token: previewRep.preview_token,
@@ -222,7 +227,7 @@ export function MigrationBackupPage() {
                     })
                   }
                 >
-                  执行还原
+                  {tr('执行还原', 'Apply Restore')}
                 </Button>
               </div>
             )}

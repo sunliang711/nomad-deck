@@ -1,3 +1,5 @@
+import type { Locale } from './locale.ts';
+
 export interface ParsedKVPath {
   mount: string;
   path: string;
@@ -13,7 +15,7 @@ export interface ParsedKVPath {
  * Normalizes a KV v2 path into both the Role authorization path (`<mount>/<path>`)
  * and the Nomad template API path (`<mount>/data/<path>`).
  */
-export function parseKVPath(raw: string, fallbackMount = 'secret'): ParsedKVPath {
+export function parseKVPath(raw: string, fallbackMount = 'secret', locale: Locale = 'zh'): ParsedKVPath {
   const trimmedRaw = raw.trim();
   const cleaned = trimmedRaw.replace(/^\/+|\/+$/g, '');
   if (!cleaned) {
@@ -56,7 +58,7 @@ export function parseKVPath(raw: string, fallbackMount = 'secret'): ParsedKVPath
   const isWildcard = rest.includes('*');
   const templatePath = rest ? `${mount}/data/${rest}` : `${mount}/data`;
   const templateExamplePath = isWildcard
-    ? `${mount}/data/${rest.replace(/\*/g, '<你的密钥名>')}`
+    ? `${mount}/data/${rest.replace(/\*/g, locale === 'en' ? '<secret-name>' : '<你的密钥名>')}`
     : templatePath;
   return {
     mount,

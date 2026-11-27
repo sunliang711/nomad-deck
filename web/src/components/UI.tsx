@@ -1,9 +1,49 @@
 import React, { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, AlertCircle, Eye, EyeOff, Info, ExternalLink, Copy, Check, Inbox, Loader2, ChevronDown, Search } from 'lucide-react';
+import { X, AlertCircle, Eye, EyeOff, Info, ExternalLink, Copy, Check, Inbox, Loader2, ChevronDown, Search, Languages, Moon, Sun } from 'lucide-react';
 import { copyText } from '../lib/clipboard';
+import { useI18n } from '../lib/i18n';
+import { useTheme } from '../lib/theme';
 import { useToast } from './Toast';
 import { isTopDialog, registerDialog } from './dialogLayers';
+
+export function LocaleToggleButton() {
+  const { locale, toggleLocale, tr } = useI18n();
+  const label = tr('Switch to English', '切换为中文');
+  return (
+    <button
+      type="button"
+      onClick={toggleLocale}
+      title={label}
+      aria-label={label}
+      data-testid="locale-toggle"
+      className="inline-flex items-center justify-center gap-1.5 h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white transition"
+    >
+      <Languages className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
+      <span>{locale === 'zh' ? '中文' : 'EN'}</span>
+    </button>
+  );
+}
+
+export function ThemeToggleButton() {
+  const { theme, toggle } = useTheme();
+  const { tr } = useI18n();
+  const label =
+    theme === 'dark'
+      ? tr('切换到浅色主题', 'Switch to light theme')
+      : tr('切换到深色主题', 'Switch to dark theme');
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      title={label}
+      aria-label={label}
+      className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 text-slate-600 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white transition"
+    >
+      {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
+    </button>
+  );
+}
 
 export function PageHeader({
   title,
@@ -60,7 +100,7 @@ export function Card({
 
 type Tone = 'neutral' | 'green' | 'amber' | 'red' | 'blue';
 
-const statusLabels: Record<string, string> = {
+const statusLabelsZh: Record<string, string> = {
   healthy: '健康', online: '在线', running: '运行中', success: '成功', succeeded: '成功', successful: '成功',
   active: '运行中', ok: '正常', completed: '已完成', complete: '已完成', enabled: '已启用', ready: '就绪',
   alive: '存活', leaving: '离开中', left: '已退出', stopped: '已停止', ineligible: '不可调度', draining: '排空中',
@@ -70,6 +110,18 @@ const statusLabels: Record<string, string> = {
   timeout: '已超时', failed: '失败', failure: '失败', offline: '离线', unreachable: '无法连接',
   fail: '异常', rolled_back: '已回退', anomaly: '异常', timed_out: '已超时', cancelled: '已取消', idle: '空闲', disabled: '已停用',
   inactive: '未运行', interrupted: '已中断', sync: '同步', async: '异步', applied: '已应用', draft: '草稿', drifted: '已漂移', skipped: '已跳过',
+};
+
+const statusLabelsEn: Record<string, string> = {
+  healthy: 'Healthy', online: 'Online', running: 'Running', success: 'Success', succeeded: 'Succeeded', successful: 'Succeeded',
+  active: 'Active', ok: 'OK', completed: 'Completed', complete: 'Complete', enabled: 'Enabled', ready: 'Ready',
+  alive: 'Alive', leaving: 'Leaving', left: 'Left', stopped: 'Stopped', ineligible: 'Ineligible', draining: 'Draining',
+  initialized: 'Initialized', uninitialized: 'Pending Deploy', unknown: 'Pending Probe', degraded: 'Degraded',
+  pending: 'Pending', waiting: 'Waiting', upgrading: 'Upgrading', warn: 'Warning', sealed: 'Sealed',
+  init_in_doubt: 'Init Uncertain', needs_reconcile: 'Needs Reconcile', partial_success: 'Partial Success',
+  timeout: 'Timed Out', failed: 'Failed', failure: 'Failure', offline: 'Offline', unreachable: 'Unreachable',
+  fail: 'Error', rolled_back: 'Rolled Back', anomaly: 'Anomaly', timed_out: 'Timed Out', cancelled: 'Cancelled', idle: 'Idle', disabled: 'Disabled',
+  inactive: 'Inactive', interrupted: 'Interrupted', sync: 'Sync', async: 'Async', applied: 'Applied', draft: 'Draft', drifted: 'Drifted', skipped: 'Skipped',
 };
 
 const toneMap: Record<Tone, string> = {
@@ -91,15 +143,17 @@ export function Badge({ tone = 'neutral', children }: { tone?: Tone; children: R
 }
 
 export function StatusBadge({ value, label }: { value?: string; label?: string }) {
+  const { isEn, tr } = useI18n();
   const v = (value || '').toLowerCase();
   const tone = statusTone(v);
   const animated = v === 'running' || v === 'upgrading' || v === 'waiting';
+  const labels = isEn ? statusLabelsEn : statusLabelsZh;
   return (
     <span
       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium ${toneMap[tone]}`}
     >
       <span className={`h-1.5 w-1.5 rounded-full bg-current ${animated ? 'animate-pulse' : ''}`} aria-hidden="true" />
-      <span title={value}>{label || statusLabels[v] || value || '待探测'}</span>
+      <span title={value}>{label || labels[v] || value || tr('待探测', 'Pending Probe')}</span>
     </span>
   );
 }
@@ -353,6 +407,7 @@ export function SecretInput({
   onRevealStored?: () => Promise<string>;
   resetKey?: string | number | boolean;
 }) {
+  const { tr } = useI18n();
   const [showPlain, setShowPlain] = useState(false);
   const [touched, setTouched] = useState(false);
   const [revealedText, setRevealedText] = useState<string | null>(null);
@@ -418,8 +473,8 @@ export function SecretInput({
           type="button"
           disabled={revealing}
           onClick={() => void toggleShow()}
-          title={showPlain ? '隐藏明文' : '显示明文'}
-          aria-label={showPlain ? '隐藏明文' : '显示明文'}
+          title={showPlain ? tr('隐藏明文', 'Hide plaintext') : tr('显示明文', 'Show plaintext')}
+          aria-label={showPlain ? tr('隐藏明文', 'Hide plaintext') : tr('显示明文', 'Show plaintext')}
           className="absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-400 hover:text-indigo-600 disabled:opacity-50 dark:text-slate-500 dark:hover:text-indigo-400"
         >
           {revealing ? <Loader2 className="h-4 w-4 animate-spin" /> : showPlain ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -431,6 +486,7 @@ export function SecretInput({
 }
 
 export function MaskedSecret({ value, label }: { value: string; label?: React.ReactNode }) {
+  const { tr } = useI18n();
   const toast = useToast();
   const [show, setShow] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -439,10 +495,10 @@ export function MaskedSecret({ value, label }: { value: string; label?: React.Re
     try {
       await copyText(value);
       setCopied(true);
-      toast.success('已复制到剪贴板', { recordHistory: false });
+      toast.success(tr('已复制到剪贴板', 'Copied to clipboard'), { recordHistory: false });
       window.setTimeout(() => setCopied(false), 1500);
     } catch (ex: any) {
-      toast.error(ex?.message || '复制失败，请手动复制');
+      toast.error(ex?.message || tr('复制失败，请手动复制', 'Copy failed, please copy manually'));
     }
   };
 
@@ -457,11 +513,11 @@ export function MaskedSecret({ value, label }: { value: string; label?: React.Re
         <div className="flex shrink-0 items-center gap-1.5">
           <Button type="button" size="sm" onClick={() => setShow((v) => !v)}>
             {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            <span>{show ? '隐藏明文' : '显示明文'}</span>
+            <span>{show ? tr('隐藏明文', 'Hide') : tr('显示明文', 'Reveal')}</span>
           </Button>
           <Button type="button" size="sm" onClick={() => void copy()}>
             {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
-            <span>{copied ? '已复制' : '复制'}</span>
+            <span>{copied ? tr('已复制', 'Copied') : tr('复制', 'Copy')}</span>
           </Button>
         </div>
       </div>
@@ -535,6 +591,7 @@ export function Select({
   searchable?: boolean;
   children?: React.ReactNode;
 }) {
+  const { tr } = useI18n();
   const autoId = useId();
   const triggerId = propId || `${autoId}-trigger`;
   const listboxId = `${autoId}-listbox`;
@@ -731,7 +788,7 @@ export function Select({
     size === 'sm' ? 'px-2.5 py-1.5 text-xs rounded-lg gap-1.5' : 'px-3 py-2 text-sm rounded-lg gap-2';
 
   const isPlaceholder = selectedOpt ? selectedOpt.value === '' : !currentVal;
-  const displayLabel = selectedOpt ? selectedOpt.label : currentVal || '请选择';
+  const displayLabel = selectedOpt ? selectedOpt.label : currentVal || tr('请选择', 'Select...');
 
   return (
     <div className="relative block space-y-1.5">
@@ -802,7 +859,7 @@ export function Select({
             ref={panelRef}
             id={listboxId}
             role="listbox"
-            aria-label={typeof ariaLabel === 'string' ? ariaLabel : typeof label === 'string' ? label : '选项列表'}
+            aria-label={typeof ariaLabel === 'string' ? ariaLabel : typeof label === 'string' ? label : tr('选项列表', 'Options')}
             style={menuStyle}
             onClick={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
@@ -820,7 +877,7 @@ export function Select({
                     setQuery(e.target.value);
                     setActiveIdx(0);
                   }}
-                  placeholder="搜索选项…"
+                  placeholder={tr('搜索选项…', 'Search options...')}
                   className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                 />
               </div>
@@ -829,7 +886,7 @@ export function Select({
             <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain">
               {filtered.length === 0 ? (
                 <div className="px-3 py-4 text-center text-xs text-slate-400 dark:text-slate-500">
-                  没有匹配的选项
+                  {tr('没有匹配的选项', 'No matching options')}
                 </div>
               ) : (
                 filtered.map((opt, idx) => {
@@ -887,6 +944,7 @@ export function Select({
 }
 
 export function ErrorAlert({ message, onClose }: { message: string; onClose?: () => void }) {
+  const { tr } = useI18n();
   if (!message) return null;
   return (
     <div
@@ -901,7 +959,7 @@ export function ErrorAlert({ message, onClose }: { message: string; onClose?: ()
         <button
           type="button"
           onClick={onClose}
-          aria-label="关闭错误提示"
+          aria-label={tr('关闭错误提示', 'Dismiss error')}
           className="rounded-lg p-1 hover:bg-rose-100 dark:hover:bg-rose-900/60"
         >
           <X className="h-3.5 w-3.5" />
@@ -924,7 +982,8 @@ export function EmptyState({
   action?: React.ReactNode;
   icon?: React.ReactNode;
 }) {
-  const heading = title || text || '暂无数据';
+  const { tr } = useI18n();
+  const heading = title || text || tr('暂无数据', 'No Data');
   return (
     <div className="empty-state">
       <div className="empty-icon">{icon || <Inbox className="h-6 w-6" />}</div>
@@ -935,11 +994,12 @@ export function EmptyState({
   );
 }
 
-export function LoadingState({ label = '正在加载...' }: { label?: string }) {
+export function LoadingState({ label }: { label?: string }) {
+  const { tr } = useI18n();
   return (
     <div role="status" className="flex items-center justify-center gap-2 p-10 text-sm text-slate-500 dark:text-slate-400">
       <Loader2 className="h-4 w-4 animate-spin text-indigo-500 dark:text-indigo-400" />
-      <span>{label}</span>
+      <span>{label || tr('正在加载...', 'Loading...')}</span>
     </div>
   );
 }
@@ -1003,6 +1063,7 @@ function ModalDialog({
   backdropClassName: string;
   footer?: React.ReactNode;
 }) {
+  const { tr } = useI18n();
   const root = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   const blockedRef = useRef(false);
@@ -1068,7 +1129,7 @@ function ModalDialog({
         ref={root}
         role="dialog"
         aria-modal="true"
-        aria-label={typeof title === 'string' ? title : '对话窗口'}
+        aria-label={typeof title === 'string' ? title : tr('对话窗口', 'Dialog')}
         aria-busy={busy}
         tabIndex={-1}
         className={`modal-container ${maxW} max-h-[calc(100dvh-40px)] flex flex-col overflow-hidden border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900`}
@@ -1080,7 +1141,7 @@ function ModalDialog({
               type="button"
               disabled={busy}
               onClick={onClose}
-              aria-label="关闭弹窗"
+              aria-label={tr('关闭弹窗', 'Close modal')}
               className="modal-close shrink-0 disabled:opacity-40"
             >
               <X className="h-4 w-4" />
@@ -1108,6 +1169,7 @@ export function PasswordConfirmModal({
   onClose: () => void;
   onConfirm: (password: string) => Promise<void>;
 }) {
+  const { tr } = useI18n();
   const [pw, setPw] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1128,7 +1190,7 @@ export function PasswordConfirmModal({
       setPw('');
       onClose();
     } catch (ex: any) {
-      setErr(ex?.message || '操作失败');
+      setErr(ex?.message || tr('操作失败', 'Operation failed'));
     } finally {
       setBusy(false);
     }
@@ -1140,7 +1202,7 @@ export function PasswordConfirmModal({
         {description && <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-300">{description}</p>}
         <ErrorAlert message={err} onClose={() => setErr('')} />
         <SecretInput
-          label="当前管理员密码（二次验证）"
+          label={tr('当前管理员密码（二次验证）', 'Current Admin Password (Verification)')}
           required
           data-autofocus
           value={pw}
@@ -1149,10 +1211,10 @@ export function PasswordConfirmModal({
         />
         <div className="flex justify-end gap-2 pt-1">
           <Button type="button" variant="secondary" disabled={busy} onClick={onClose}>
-            取消
+            {tr('取消', 'Cancel')}
           </Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? '验证中...' : '确认执行'}
+            {busy ? tr('验证中...', 'Verifying...') : tr('确认执行', 'Confirm')}
           </Button>
         </div>
       </form>
@@ -1171,6 +1233,7 @@ export function SectionTabs({
   onChange: (id: string) => void;
   variant?: 'pill' | 'underline';
 }) {
+  const { tr } = useI18n();
   const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
@@ -1191,7 +1254,7 @@ export function SectionTabs({
     return (
       <nav
         role="tablist"
-        aria-label="页面分区"
+        aria-label={tr('页面分区', 'Page sections')}
         onKeyDown={handleKeyDown}
         className="max-w-full overflow-x-auto scrollbar-none inline-flex items-center gap-1 border-b border-slate-200/80 dark:border-slate-800"
       >
@@ -1240,7 +1303,7 @@ export function SectionTabs({
   return (
     <nav
       role="tablist"
-      aria-label="页面分区"
+      aria-label={tr('页面分区', 'Page sections')}
       onKeyDown={handleKeyDown}
       className="max-w-full overflow-x-auto scrollbar-none bg-white dark:bg-slate-900/95 rounded-xl border border-[#e3e8f1] dark:border-slate-800 p-1 inline-flex items-center gap-1 shadow-[0_2px_8px_rgba(15,23,42,0.02)]"
     >

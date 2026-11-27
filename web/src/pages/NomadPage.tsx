@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Boxes, ExternalLink, FileCode2, Plus, RefreshCw } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { useI18n } from '../lib/i18n';
 import {
   NOMAD_CLUSTER_KEY,
   readStoredSelection,
@@ -41,6 +42,7 @@ import { isLoopbackAddress } from '../lib/net';
 
 export function NomadPage() {
   const { isAdmin } = useAuth();
+  const { locale, tr } = useI18n();
   const navigate = useNavigate();
   const { openTask, openNodeLogs, tasks } = useOpsDrawer();
   const toast = useToast();
@@ -139,11 +141,11 @@ export function NomadPage() {
         resolveClusterSelection(list, queryId, prev, readStoredSelection(NOMAD_CLUSTER_KEY)),
       );
     } catch (ex: any) {
-      setErr(ex?.message || '加载 Nomad 集群列表失败');
+      setErr(ex?.message || tr('加载 Nomad 集群列表失败', 'Failed to load Nomad clusters'));
     } finally {
       setLoadingList(false);
     }
-  }, [queryId]);
+  }, [queryId, tr]);
 
   const loadOpsTab = useCallback(async () => {
     if (!selectedId) return;
@@ -167,9 +169,9 @@ export function NomadPage() {
       setSnapshots(snRes.snapshots || []);
     } catch (ex: any) {
       if (selectionRef.current !== selectedId) return;
-      setErr(ex?.message || '加载 Nomad 状态失败');
+      setErr(ex?.message || tr('加载 Nomad 状态失败', 'Failed to load Nomad status'));
     }
-  }, [selectedId]);
+  }, [selectedId, tr]);
 
   const loadGovernance = async () => {
     if (!selectedId) return;
@@ -187,7 +189,7 @@ export function NomadPage() {
       setTokens(tokRes.tokens || []);
       setRoles(roleRes.roles || []);
     } catch (ex: any) {
-      setErr(ex?.message || '加载治理信息失败');
+      setErr(ex?.message || tr('加载治理信息失败', 'Failed to load governance info'));
     }
   };
 
@@ -235,7 +237,7 @@ export function NomadPage() {
 
   const handleRevealMgmtToken = () => {
     setPwAction({
-      title: '查看 Nomad Management (Root) Token',
+      title: tr('查看 Nomad Management (Root) Token', 'Reveal Nomad Management (Root) Token'),
       run: async (pw) => {
         const res = await apiPost(`/api/v1/nomad/${selectedId}/management-token/reveal`, { current_password: pw });
         setMgmtToken(res.management_token || '');
@@ -245,7 +247,7 @@ export function NomadPage() {
 
   const handleOpenWebUI = (targetUrl: string, label?: string) => {
     setPwAction({
-      title: `免密登录 Nomad Web UI${label ? ` · ${label}` : ''}`,
+      title: tr(`免密登录 Nomad Web UI${label ? ` · ${label}` : ''}`, `SSO Login to Nomad Web UI${label ? ` · ${label}` : ''}`),
       run: async (pw) => {
         const r = await apiPost(`/api/v1/nomad/${selectedId}/ui-login`, {
           current_password: pw,
@@ -267,9 +269,9 @@ export function NomadPage() {
       cluster.init_state === 'uninitialized' && clusterNodes.every((n: any) => n.install_state === 'pending');
     if (canDeleteUndeployed) {
       if (
-        !(await askConfirm(`确认删除未部署集群「${cluster.name}」吗？仅清除控制面记录，不会改动主机。`, {
-          title: '删除未部署集群',
-          confirmText: '确认删除',
+        !(await askConfirm(tr(`确认删除未部署集群「${cluster.name}」吗？仅清除控制面记录，不会改动主机。`, `Delete undeployed cluster "${cluster.name}"? Only the control-plane record is removed; hosts are untouched.`), {
+          title: tr('删除未部署集群', 'Delete Undeployed Cluster'),
+          confirmText: tr('确认删除', 'Delete'),
           danger: true,
         }))
       ) {
@@ -277,12 +279,12 @@ export function NomadPage() {
       }
       try {
         await apiDelete(`/api/v1/clusters/${selectedId}`);
-        toast.success('集群记录已删除');
+        toast.success(tr('集群记录已删除', 'Cluster record deleted'));
         await loadList();
         return;
       } catch (ex: any) {
         if (!String(ex?.message || '').includes('已部署')) {
-          setErr(ex?.message || '删除集群失败');
+          setErr(ex?.message || tr('删除集群失败', 'Failed to delete cluster'));
           return;
         }
       }
@@ -291,7 +293,7 @@ export function NomadPage() {
       const r = await apiPost(`/api/v1/clusters/${selectedId}/uninstall/plan`, {});
       setUninstallPlan(r.plan || { warnings: [] });
     } catch (ex: any) {
-      setErr(ex?.message || '获取卸载计划失败');
+      setErr(ex?.message || tr('获取卸载计划失败', 'Failed to load uninstall plan'));
     }
   };
 
@@ -299,23 +301,23 @@ export function NomadPage() {
   const nodeConfigs = Object.fromEntries(memberRecords.map((m) => [m.node_id, m.config]));
 
 
-  if (loadingList) return <LoadingState label="正在加载 Nomad 集群…" />;
+  if (loadingList) return <LoadingState label={tr('正在加载 Nomad 集群…', 'Loading Nomad clusters...')} />;
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Nomad 集群"
-        subtitle="管理 Nomad Server/Client 编排、运行态工作台、Raft 快照与 ACL 多租户治理"
+        title={tr('Nomad 集群', 'Nomad Clusters')}
+        subtitle={tr('管理 Nomad Server/Client 编排、运行态工作台、Raft 快照与 ACL 多租户治理', 'Manage Nomad Server/Client orchestration, runtime workbench, Raft snapshots, and ACL multi-tenant governance')}
         actions={
           <>
             <Button onClick={() => { void loadList(); if (tab === 'status' || tab === 'snapshots') void loadOpsTab(); if (tab === 'governance') void loadGovernance(); }}>
               <RefreshCw className="h-4 w-4" />
-              <span>刷新</span>
+              <span>{tr('刷新', 'Refresh')}</span>
             </Button>
             {isAdmin && (
               <Button variant="primary" onClick={() => setShowCreate(true)}>
                 <Plus className="h-4 w-4" />
-                <span>新建 Nomad 集群</span>
+                <span>{tr('新建 Nomad 集群', 'New Nomad Cluster')}</span>
               </Button>
             )}
           </>
@@ -323,17 +325,17 @@ export function NomadPage() {
       />
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
-      {newToken && <MaskedSecret value={newToken} label="新签发 ACL Token Secret（仅展示一次）：" />}
+      {newToken && <MaskedSecret value={newToken} label={tr('新签发 ACL Token Secret（仅展示一次）：', 'Newly Issued ACL Token Secret (shown once):')} />}
 
       {!cluster ? (
         <Card>
-          <EmptyState icon={<Boxes className="w-6 h-6" />} title="暂无 Nomad 集群" description="Nomad 负责调度与运行工作负载。先接入主机，再选择节点、创建配置并部署服务。" action={isAdmin && <Button variant="primary" onClick={() => setShowCreate(true)}>创建第一个 Nomad 集群</Button>} />
+          <EmptyState icon={<Boxes className="w-6 h-6" />} title={tr('暂无 Nomad 集群', 'No Nomad Clusters')} description={tr('Nomad 负责调度与运行工作负载。先接入主机，再选择节点、创建配置并部署服务。', 'Nomad schedules and runs your workloads. Enroll hosts first, then select nodes, create a config, and deploy.')} action={isAdmin && <Button variant="primary" onClick={() => setShowCreate(true)}>{tr('创建第一个 Nomad 集群', 'Create First Nomad Cluster')}</Button>} />
         </Card>
       ) : (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <ItemSwitcher
-              label="Nomad 集群"
+              label={tr('Nomad 集群', 'Nomad Cluster')}
               selectedId={selectedId}
               onSelect={setSelectedId}
               items={clusters.map((c) => ({
@@ -344,10 +346,10 @@ export function NomadPage() {
             />
             <SectionTabs
               tabs={[
-                { id: 'status', label: '集群状态详情' },
-                { id: 'workbench', label: '运行态工作台', title: '实时查看与管理 Nomad Clients、Servers、拓扑容量、CSI 存储、Variables 与 Evaluations' },
-                { id: 'snapshots', label: 'Raft 快照', badge: snapshots.length, title: '保存与恢复 Nomad Server Raft 状态机中的任务、变量与 ACL 快照' },
-                { id: 'governance', label: '治理 (Namespace / Pool / ACL)', title: '配置多租户命名空间（Namespace）、节点资源池（Node Pool）与访问控制（ACL Policy / Role / Token）' },
+                { id: 'status', label: tr('集群状态详情', 'Cluster Status') },
+                { id: 'workbench', label: tr('运行态工作台', 'Workbench'), title: tr('实时查看与管理 Nomad Clients、Servers、拓扑容量、CSI 存储、Variables 与 Evaluations', 'Inspect and manage Nomad Clients, Servers, Topology, CSI Storage, Variables, and Evaluations') },
+                { id: 'snapshots', label: tr('Raft 快照', 'Raft Snapshots'), badge: snapshots.length, title: tr('保存与恢复 Nomad Server Raft 状态机中的任务、变量与 ACL 快照', 'Save and restore Nomad Server Raft state snapshots') },
+                { id: 'governance', label: tr('治理 (Namespace / Pool / ACL)', 'Governance (Namespace / Pool / ACL)'), title: tr('配置多租户命名空间（Namespace）、节点资源池（Node Pool）与访问控制（ACL Policy / Role / Token）', 'Configure Namespaces, Node Pools, and ACL Policies / Roles / Tokens') },
               ]}
               active={tab}
               onChange={setTab}
@@ -371,52 +373,52 @@ export function NomadPage() {
                 setDrainClients={setDrainClients}
                 onDeploy={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest' })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, '部署 Nomad'); })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('部署 Nomad', 'Deploy Nomad')); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onUpgrade={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', drain_clients: drainClients, confirm: true })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, '滚动升级 Nomad'); })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('滚动升级 Nomad', 'Rolling Upgrade Nomad')); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onRenewCerts={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, '续期 Nomad 证书'); })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('续期 Nomad 证书', 'Renew Nomad Certificates')); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onRotateCA={() => {
                   setPwAction({
-                    title: '确认轮换 Nomad 集群 CA',
+                    title: tr('确认轮换 Nomad 集群 CA', 'Rotate Nomad Cluster CA'),
                     run: async (pw) => {
                       const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
-                      if (r.task?.id) openTask(r.task.id, '轮换 Nomad CA');
+                      if (r.task?.id) openTask(r.task.id, tr('轮换 Nomad CA', 'Rotate Nomad CA'));
                     },
                   });
                 }}
                 onRotateGossip={() => {
                   setPwAction({
-                    title: '确认轮换 Nomad Gossip 密钥',
+                    title: tr('确认轮换 Nomad Gossip 密钥', 'Rotate Nomad Gossip Key'),
                     run: async (pw) => {
                       const r = await apiPost(`/api/v1/clusters/${selectedId}/gossip/rotate`, { current_password: pw });
-                      if (r.task?.id) openTask(r.task.id, '轮换 Gossip 密钥');
+                      if (r.task?.id) openTask(r.task.id, tr('轮换 Gossip 密钥', 'Rotate Gossip Key'));
                     },
                   });
                 }}
                 onDoctor={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
-                    .then((r) => toast.info(r.report?.summary || 'Doctor 完成'))
+                    .then((r) => toast.info(r.report?.summary || tr('Doctor 完成', 'Doctor finished')))
                     .catch((ex) => setErr(ex.message))
                 }
                 onReconcile={() =>
                   apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
-                    .then((r) => { toast.success(r.report?.message || '已核对'); return loadOpsTab(); })
+                    .then((r) => { toast.success(r.report?.message || tr('已核对', 'Reconciled')); return loadOpsTab(); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onRevealRootToken={handleRevealMgmtToken}
                 onOpenWebUI={handleOpenWebUI}
                 onUninstall={handleUninstall}
                 onOpenJoin={() => { setJoinNodeId(''); setJoinAdvertiseAddr(''); setShowJoin(true); }}
-                onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Nomad 日志: ${n.name}`)}
+                onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, tr(`Nomad 日志: ${n.name}`, `Nomad Logs: ${n.name}`))}
                 onCheckGate={(n) =>
                   apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
                     .then((r) => setGateView(r.gate))
@@ -424,12 +426,12 @@ export function NomadPage() {
                 }
                 onRestartNode={(n) =>
                   apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, `重启节点: ${n.name}`); })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`重启节点: ${n.name}`, `Restart Node: ${n.name}`)); })
                     .catch((ex) => setErr(ex.message))
                 }
                 onRemoveNode={(n, force) =>
                   apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, { force })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, `${force ? '强制移出' : '缩容'}节点: ${n.name}`); })
+                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`${force ? '强制移出' : '缩容'}节点: ${n.name}`, `${force ? 'Force Remove' : 'Remove'} Node: ${n.name}`)); })
                     .catch((ex) => setErr(ex.message))
                 }
                 nodeConfigs={nodeConfigs}
@@ -450,7 +452,7 @@ export function NomadPage() {
                 quickActions={
                   <Link to={`/jobs?cluster_id=${encodeURIComponent(selectedId)}`} className="primary-button">
                     <FileCode2 className="h-3.5 w-3.5" />
-                    <span>前往 Job 中心</span>
+                    <span>{tr('前往 Job 中心', 'Go to Job Center')}</span>
                   </Link>
                 }
                 onError={setErr}
@@ -469,8 +471,8 @@ export function NomadPage() {
 
           {tab === 'snapshots' && (
             <Card
-              title="Nomad Raft 快照"
-              actions={isAdmin && <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/snapshots`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>创建快照</Button>}
+              title={tr('Nomad Raft 快照', 'Nomad Raft Snapshots')}
+              actions={isAdmin && <Button size="sm" variant="primary" onClick={() => void apiPost(`/api/v1/clusters/${selectedId}/snapshots`, {}).then((r) => r.task?.id && openTask(r.task.id)).catch((ex) => setErr(ex.message))}>{tr('创建快照', 'Create Snapshot')}</Button>}
             >
               {isAdmin && (
                 <form
@@ -483,9 +485,9 @@ export function NomadPage() {
                   }}
                   className="mb-4 flex flex-wrap items-end gap-2 border-b border-slate-200 pb-3 text-xs dark:border-slate-800"
                 >
-                  <SecretInput label="归档口令（未加密可留空）" value={snapPass} onChangeValue={setSnapPass} />
+                  <SecretInput label={tr('归档口令（未加密可留空）', 'Archive Passphrase (leave blank if unencrypted)')} value={snapPass} onChangeValue={setSnapPass} />
                   <input type="file" onChange={(e) => setSnapFile(e.target.files?.[0] || null)} />
-                  <Button type="submit">上传登记</Button>
+                  <Button type="submit">{tr('上传登记', 'Upload & Register')}</Button>
                 </form>
               )}
               <div className="space-y-2 text-xs">
@@ -493,7 +495,7 @@ export function NomadPage() {
                   <div key={sn.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 p-2.5 dark:border-slate-800">
                     <div>
                       <span className="font-mono font-semibold">{sn.id}</span>
-                      <span className="ml-2 text-slate-500">{sn.product_version} · {fmtBytes(sn.size_bytes)} · {fmtTime(sn.created_at)}</span>
+                      <span className="ml-2 text-slate-500">{sn.product_version} · {fmtBytes(sn.size_bytes)} · {fmtTime(sn.created_at, locale)}</span>
                     </div>
                     {isAdmin && (
                       <div className="flex gap-1">
@@ -504,7 +506,7 @@ export function NomadPage() {
                             setDlPass('');
                             setDlErr('');
                             setDlModal({
-                              title: `下载快照 ${sn.id}`,
+                              title: tr(`下载快照 ${sn.id}`, `Download Snapshot ${sn.id}`),
                               run: async (pw, passphrase) => {
                                 await apiDownload(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}/download`, {
                                   current_password: pw,
@@ -514,37 +516,37 @@ export function NomadPage() {
                             });
                           }}
                         >
-                          下载
+                          {tr('下载', 'Download')}
                         </Button>
                         <Button
                           size="sm"
                           variant="danger-outline"
                           onClick={() =>
                             setPwAction({
-                              title: `恢复 Nomad 快照 ${sn.id}`,
+                              title: tr(`恢复 Nomad 快照 ${sn.id}`, `Restore Nomad Snapshot ${sn.id}`),
                               run: async (pw) => {
                                 const res = await apiPost(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}/restore`, { current_password: pw });
-                                if (res.task?.id) openTask(res.task.id, '恢复 Nomad 快照');
+                                if (res.task?.id) openTask(res.task.id, tr('恢复 Nomad 快照', 'Restore Nomad Snapshot'));
                               },
                             })
                           }
                         >
-                          恢复
+                          {tr('恢复', 'Restore')}
                         </Button>
                         <Button
                           size="sm"
                           variant="danger-outline"
                           onClick={async () => {
-                            if (!(await askConfirm(`确定要删除快照 ${sn.id} 吗？`, { title: '删除 Raft 快照', confirmText: '确认删除', danger: true }))) return;
+                            if (!(await askConfirm(tr(`确定要删除快照 ${sn.id} 吗？`, `Delete snapshot ${sn.id}?`), { title: tr('删除 Raft 快照', 'Delete Raft Snapshot'), confirmText: tr('确认删除', 'Delete'), danger: true }))) return;
                             void apiDelete(`/api/v1/clusters/${selectedId}/snapshots/${sn.id}`)
                               .then(() => {
-                                toast.success('快照已删除');
+                                toast.success(tr('快照已删除', 'Snapshot deleted'));
                                 return loadOpsTab();
                               })
                               .catch((ex) => setErr(ex.message));
                           }}
                         >
-                          删除
+                          {tr('删除', 'Delete')}
                         </Button>
                       </div>
                     )}
@@ -569,7 +571,7 @@ export function NomadPage() {
                 />
                 {isAdmin && (
                   <Button size="sm" onClick={handleRevealMgmtToken}>
-                    查看 Management (Root) Token
+                    {tr('查看 Management (Root) Token', 'Reveal Management (Root) Token')}
                   </Button>
                 )}
               </div>
@@ -578,7 +580,7 @@ export function NomadPage() {
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                   <Card
                     title={`Namespaces (${namespaces.length})`}
-                    description="多租户逻辑隔离空间，控制任务、变量与 ACL 权限边界"
+                    description={tr('多租户逻辑隔离空间，控制任务、变量与 ACL 权限边界', 'Logical multi-tenant isolation for jobs, variables, and ACL boundaries')}
                     actions={
                       isAdmin && (
                         <Button
@@ -587,7 +589,7 @@ export function NomadPage() {
                           onClick={() => setGovernanceEdit({ kind: 'namespaces', name: '', description: '', meta: {}, creating: true })}
                         >
                           <Plus className="h-3.5 w-3.5" />
-                          <span>新建 Namespace</span>
+                          <span>{tr('新建 Namespace', 'New Namespace')}</span>
                         </Button>
                       )
                     }
@@ -615,7 +617,7 @@ export function NomadPage() {
                                 })
                               }
                             >
-                              编辑
+                              {tr('编辑', 'Edit')}
                             </Button>
                           )}
                         </div>
@@ -625,7 +627,7 @@ export function NomadPage() {
 
                   <Card
                     title={`Node Pools (${pools.length})`}
-                    description="按硬件规格或业务分组划分 Client 节点调度池"
+                    description={tr('按硬件规格或业务分组划分 Client 节点调度池', 'Group Client nodes by hardware profile or workload tier')}
                     actions={
                       isAdmin && (
                         <Button
@@ -634,7 +636,7 @@ export function NomadPage() {
                           onClick={() => setGovernanceEdit({ kind: 'node-pools', name: '', description: '', meta: {}, creating: true })}
                         >
                           <Plus className="h-3.5 w-3.5" />
-                          <span>新建 Node Pool</span>
+                          <span>{tr('新建 Node Pool', 'New Node Pool')}</span>
                         </Button>
                       )
                     }
@@ -662,7 +664,7 @@ export function NomadPage() {
                                 })
                               }
                             >
-                              编辑
+                              {tr('编辑', 'Edit')}
                             </Button>
                           )}
                         </div>
@@ -681,13 +683,13 @@ export function NomadPage() {
                       isAdmin && (
                         <Button size="sm" onClick={() => setPolicyEdit({ name: '', rules: '' })}>
                           <Plus className="h-3.5 w-3.5" />
-                          <span>新建</span>
+                          <span>{tr('新建', 'New')}</span>
                         </Button>
                       )
                     }
                   >
                     {policies.length === 0 ? (
-                      <div className="py-6 text-center text-xs text-slate-400">暂无 ACL Policy</div>
+                      <div className="py-6 text-center text-xs text-slate-400">{tr('暂无 ACL Policy', 'No ACL Policies')}</div>
                     ) : (
                       <div className="space-y-1 text-xs">
                         {policies.map((p) => {
@@ -716,14 +718,14 @@ export function NomadPage() {
                   </Card>
 
                   <Card
-                    title={policyEdit.name ? `编辑 Policy：${policyEdit.name}` : '新建 ACL Policy'}
-                    description={'编写 Nomad HCL 权限规则（例如 namespace "default" { policy = "read" }）'}
+                    title={policyEdit.name ? tr(`编辑 Policy：${policyEdit.name}`, `Edit Policy: ${policyEdit.name}`) : tr('新建 ACL Policy', 'New ACL Policy')}
+                    description={tr('编写 Nomad HCL 权限规则（例如 namespace "default" { policy = "read" }）', 'Write Nomad HCL policy rules (e.g. namespace "default" { policy = "read" })')}
                   >
                     <div className="space-y-3 text-xs">
                       <Input
-                        label="Policy 名称"
+                        label={tr('Policy 名称', 'Policy Name')}
                         disabled={!isAdmin}
-                        placeholder="例如 app-readonly"
+                        placeholder={tr('例如 app-readonly', 'e.g. app-readonly')}
                         value={policyEdit.name}
                         onChange={(e) => setPolicyEdit({ ...policyEdit, name: e.target.value })}
                       />
@@ -736,17 +738,17 @@ export function NomadPage() {
                             onClick={async () => {
                               const name = policyEdit.name.trim();
                               if (!name) return;
-                              if (!(await askConfirm(`确认删除 ACL Policy「${name}」吗？`, { title: '删除 Policy', confirmText: '确认删除', danger: true }))) return;
+                              if (!(await askConfirm(tr(`确认删除 ACL Policy「${name}」吗？`, `Delete ACL Policy "${name}"?`), { title: tr('删除 Policy', 'Delete Policy'), confirmText: tr('确认删除', 'Delete'), danger: true }))) return;
                               void apiDelete(`/api/v1/nomad/${selectedId}/acl/policies/${encodeURIComponent(name)}`)
                                 .then(() => {
                                   setPolicyEdit({ name: '', rules: '' });
-                                  toast.success('Policy 已删除');
+                                  toast.success(tr('Policy 已删除', 'Policy deleted'));
                                   return loadGovernance();
                                 })
                                 .catch((ex) => setErr(ex.message));
                             }}
                           >
-                            删除 Policy
+                            {tr('删除 Policy', 'Delete Policy')}
                           </Button>
                           <Button
                             variant="primary"
@@ -757,13 +759,13 @@ export function NomadPage() {
                                 rules: policyEdit.rules,
                               })
                                 .then(() => {
-                                  toast.success('Policy 已保存');
+                                  toast.success(tr('Policy 已保存', 'Policy saved'));
                                   return loadGovernance();
                                 })
                                 .catch((ex) => setErr(ex.message))
                             }
                           >
-                            保存 Policy
+                            {tr('保存 Policy', 'Save Policy')}
                           </Button>
                         </div>
                       )}
@@ -776,7 +778,7 @@ export function NomadPage() {
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                   <Card
                     title={`ACL Tokens (${tokens.length})`}
-                    description="签发与吊销 Nomad API 访问令牌"
+                    description={tr('签发与吊销 Nomad API 访问令牌', 'Issue and revoke Nomad API access tokens')}
                     actions={
                       isAdmin && (
                         <Button
@@ -785,13 +787,13 @@ export function NomadPage() {
                           onClick={() => setTokenModal({ name: '', policies: [] })}
                         >
                           <Plus className="h-3.5 w-3.5" />
-                          <span>签发 Client Token</span>
+                          <span>{tr('签发 Client Token', 'Issue Client Token')}</span>
                         </Button>
                       )
                     }
                   >
                     {tokens.length === 0 ? (
-                      <EmptyState title="暂无 ACL Token" />
+                      <EmptyState title={tr('暂无 ACL Token', 'No ACL Tokens')} />
                     ) : (
                       <div className="space-y-2 text-xs">
                         {tokens.slice(0, 20).map((tk) => (
@@ -814,16 +816,16 @@ export function NomadPage() {
                                 size="sm"
                                 variant="danger-outline"
                                 onClick={async () => {
-                                  if (!(await askConfirm(`确认吊销 ACL Token「${tk.name}」吗？`, { title: '吊销 Token', confirmText: '确认吊销', danger: true }))) return;
+                                  if (!(await askConfirm(tr(`确认吊销 ACL Token「${tk.name}」吗？`, `Revoke ACL Token "${tk.name}"?`), { title: tr('吊销 Token', 'Revoke Token'), confirmText: tr('确认吊销', 'Revoke'), danger: true }))) return;
                                   void apiDelete(`/api/v1/nomad/${selectedId}/acl/tokens/${tk.accessor_id}`)
                                     .then(() => {
-                                      toast.success('Token 已吊销');
+                                      toast.success(tr('Token 已吊销', 'Token revoked'));
                                       return loadGovernance();
                                     })
                                     .catch((ex) => setErr(ex.message));
                                 }}
                               >
-                                吊销
+                                {tr('吊销', 'Revoke')}
                               </Button>
                             )}
                           </div>
@@ -834,7 +836,7 @@ export function NomadPage() {
 
                   <Card
                     title={`ACL Roles (${roles.length})`}
-                    description="将多个 ACL Policy 聚合为可复用角色"
+                    description={tr('将多个 ACL Policy 聚合为可复用角色', 'Bundle multiple ACL Policies into reusable roles')}
                     actions={
                       isAdmin && (
                         <Button
@@ -843,13 +845,13 @@ export function NomadPage() {
                           onClick={() => setRoleEdit({ id: '', name: '', description: '', policies: [] })}
                         >
                           <Plus className="h-3.5 w-3.5" />
-                          <span>新建 ACL Role</span>
+                          <span>{tr('新建 ACL Role', 'New ACL Role')}</span>
                         </Button>
                       )
                     }
                   >
                     {roles.length === 0 ? (
-                      <EmptyState title="暂无 ACL Role" description="可创建 Role 绑定一组 Policy，便于向团队或自动化工具统一授权。" />
+                      <EmptyState title={tr('暂无 ACL Role', 'No ACL Roles')} description={tr('可创建 Role 绑定一组 Policy，便于向团队或自动化工具统一授权。', 'Create roles that bind a set of policies for streamlined team or automation access.')} />
                     ) : (
                       <div className="space-y-2 text-xs">
                         {roles.map((role) => (
@@ -863,7 +865,7 @@ export function NomadPage() {
                                 {(role.policies || []).length > 0 ? (
                                   role.policies.map((p: string) => <Badge key={p} tone="blue">{p}</Badge>)
                                 ) : (
-                                  <span className="text-[11px] text-slate-400">未关联 Policy</span>
+                                  <span className="text-[11px] text-slate-400">{tr('未关联 Policy', 'No linked policies')}</span>
                                 )}
                               </div>
                             </div>
@@ -879,7 +881,7 @@ export function NomadPage() {
                                   })
                                 }
                               >
-                                编辑
+                                {tr('编辑', 'Edit')}
                               </Button>
                             )}
                           </div>
@@ -894,7 +896,7 @@ export function NomadPage() {
         </div>
       )}
 
-      <Modal open={Boolean(governanceEdit)} title={governanceEdit?.kind === 'namespaces' ? '管理 Namespace' : '管理 Node Pool'} onClose={() => setGovernanceEdit(null)}>
+      <Modal open={Boolean(governanceEdit)} title={governanceEdit?.kind === 'namespaces' ? tr('管理 Namespace', 'Manage Namespace') : tr('管理 Node Pool', 'Manage Node Pool')} onClose={() => setGovernanceEdit(null)}>
         {governanceEdit && (
           <form className="space-y-3" onSubmit={(e) => {
             e.preventDefault();
@@ -904,17 +906,17 @@ export function NomadPage() {
             void request.then(() => { setGovernanceEdit(null); return loadGovernance(); }).catch((ex) => setErr(ex.message));
           }}>
             <ErrorAlert message={err} onClose={() => setErr('')} />
-            <Input label="名称" required disabled={!governanceEdit.creating} value={governanceEdit.name} onChange={(e) => setGovernanceEdit({ ...governanceEdit, name: e.target.value })} />
-            <Input label="描述" value={governanceEdit.description} onChange={(e) => setGovernanceEdit({ ...governanceEdit, description: e.target.value })} />
+            <Input label={tr('名称', 'Name')} required disabled={!governanceEdit.creating} value={governanceEdit.name} onChange={(e) => setGovernanceEdit({ ...governanceEdit, name: e.target.value })} />
+            <Input label={tr('描述', 'Description')} value={governanceEdit.description} onChange={(e) => setGovernanceEdit({ ...governanceEdit, description: e.target.value })} />
             <div className="flex justify-end gap-2">
-              {!governanceEdit.creating && <Button type="button" variant="danger" disabled={governanceEdit.name === 'default' || (governanceEdit.kind === 'node-pools' && governanceEdit.name === 'all')} onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/${governanceEdit.kind}/${encodeURIComponent(governanceEdit.name)}`).then(() => { setGovernanceEdit(null); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>删除对象</Button>}
-              <Button type="submit" variant="primary">保存对象</Button>
+              {!governanceEdit.creating && <Button type="button" variant="danger" disabled={governanceEdit.name === 'default' || (governanceEdit.kind === 'node-pools' && governanceEdit.name === 'all')} onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/${governanceEdit.kind}/${encodeURIComponent(governanceEdit.name)}`).then(() => { setGovernanceEdit(null); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>{tr('删除对象', 'Delete')}</Button>}
+              <Button type="submit" variant="primary">{tr('保存对象', 'Save')}</Button>
             </div>
           </form>
         )}
       </Modal>
 
-      <Modal open={Boolean(tokenModal)} title="签发 Nomad Client Token" onClose={() => setTokenModal(null)}>
+      <Modal open={Boolean(tokenModal)} title={tr('签发 Nomad Client Token', 'Issue Nomad Client Token')} onClose={() => setTokenModal(null)}>
         {tokenModal && (
           <form
             className="space-y-3 text-xs"
@@ -928,24 +930,24 @@ export function NomadPage() {
                 .then((r) => {
                   setTokenModal(null);
                   setNewToken(r.token?.secret_id || '');
-                  toast.success('已签发 Client Token');
+                  toast.success(tr('已签发 Client Token', 'Client Token issued'));
                   return loadGovernance();
                 })
                 .catch((ex) => setErr(ex.message));
             }}
           >
             <Input
-              label="Token 名称"
+              label={tr('Token 名称', 'Token Name')}
               required
-              placeholder="例如 ci-deployer"
+              placeholder={tr('例如 ci-deployer', 'e.g. ci-deployer')}
               value={tokenModal.name}
               onChange={(e) => setTokenModal({ ...tokenModal, name: e.target.value })}
             />
             <div className="space-y-1.5">
-              <div className="font-medium text-slate-700 dark:text-slate-300">关联 Policies</div>
+              <div className="font-medium text-slate-700 dark:text-slate-300">{tr('关联 Policies', 'Linked Policies')}</div>
               {policies.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-slate-200 p-2.5 text-slate-400 dark:border-slate-700">
-                  暂无可选 Policy，可先在「ACL Policies」页签创建后再关联。
+                  {tr('暂无可选 Policy，可先在「ACL Policies」页签创建后再关联。', 'No policies available yet. Create one under the "ACL Policies" tab first.')}
                 </div>
               ) : (
                 <div className="space-y-1 max-h-40 overflow-auto rounded-lg border border-slate-200 p-2.5 dark:border-slate-700">
@@ -971,17 +973,17 @@ export function NomadPage() {
             </div>
             <div className="flex justify-end gap-2 pt-1">
               <Button type="button" onClick={() => setTokenModal(null)}>
-                取消
+                {tr('取消', 'Cancel')}
               </Button>
               <Button type="submit" variant="primary" disabled={!tokenModal.name.trim()}>
-                确认签发
+                {tr('确认签发', 'Issue')}
               </Button>
             </div>
           </form>
         )}
       </Modal>
 
-      <Modal open={Boolean(roleEdit)} title="管理 ACL Role" onClose={() => setRoleEdit(null)}>
+      <Modal open={Boolean(roleEdit)} title={tr('管理 ACL Role', 'Manage ACL Role')} onClose={() => setRoleEdit(null)}>
         {roleEdit && (
           <form className="space-y-3" onSubmit={(e) => {
             e.preventDefault();
@@ -991,21 +993,21 @@ export function NomadPage() {
             void request.then(() => { setRoleEdit(null); return loadGovernance(); }).catch((ex) => setErr(ex.message));
           }}>
             <ErrorAlert message={err} onClose={() => setErr('')} />
-            <Input label="Role 名称" required value={roleEdit.name} onChange={(e) => setRoleEdit({ ...roleEdit, name: e.target.value })} />
-            <Input label="描述" value={roleEdit.description} onChange={(e) => setRoleEdit({ ...roleEdit, description: e.target.value })} />
+            <Input label={tr('Role 名称', 'Role Name')} required value={roleEdit.name} onChange={(e) => setRoleEdit({ ...roleEdit, name: e.target.value })} />
+            <Input label={tr('描述', 'Description')} value={roleEdit.description} onChange={(e) => setRoleEdit({ ...roleEdit, description: e.target.value })} />
             <div className="space-y-1 text-xs">
-              <div>关联 Policies</div>
+              <div>{tr('关联 Policies', 'Linked Policies')}</div>
               {policies.map((p) => <label key={p.name} className="flex items-center gap-2"><input type="checkbox" checked={roleEdit.policies.includes(p.name)} onChange={(e) => setRoleEdit({ ...roleEdit, policies: e.target.checked ? [...roleEdit.policies, p.name] : roleEdit.policies.filter((name) => name !== p.name) })} />{p.name}</label>)}
             </div>
             <div className="flex justify-end gap-2">
-              {roleEdit.id && <Button type="button" variant="danger" onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/acl/roles/${encodeURIComponent(roleEdit.id)}`).then(() => { setRoleEdit(null); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>删除 Role</Button>}
-              <Button type="submit" variant="primary">保存 Role</Button>
+              {roleEdit.id && <Button type="button" variant="danger" onClick={() => void apiDelete(`/api/v1/nomad/${selectedId}/acl/roles/${encodeURIComponent(roleEdit.id)}`).then(() => { setRoleEdit(null); return loadGovernance(); }).catch((ex) => setErr(ex.message))}>{tr('删除 Role', 'Delete Role')}</Button>}
+              <Button type="submit" variant="primary">{tr('保存 Role', 'Save Role')}</Button>
             </div>
           </form>
         )}
       </Modal>
 
-      <Modal open={showJoin} title="扩容 Nomad 节点" onClose={() => setShowJoin(false)}>
+      <Modal open={showJoin} title={tr('扩容 Nomad 节点', 'Add Nomad Node')} onClose={() => setShowJoin(false)}>
         <form
           className="space-y-3 text-xs"
           onSubmit={async (e) => {
@@ -1017,9 +1019,9 @@ export function NomadPage() {
                 advertise_addr: joinAdvertiseAddr.trim() || undefined,
               });
               setShowJoin(false);
-              if (r.task?.id) openTask(r.task.id, '扩容 Nomad 节点');
+              if (r.task?.id) openTask(r.task.id, tr('扩容 Nomad 节点', 'Add Nomad Node'));
             } catch (ex: any) {
-              setErr(ex?.message || '扩容失败');
+              setErr(ex?.message || tr('扩容失败', 'Failed to join node'));
             } finally {
               setJoinBusy(false);
             }
@@ -1027,7 +1029,7 @@ export function NomadPage() {
         >
           <ErrorAlert message={err} onClose={() => setErr('')} />
           <Select
-            label="待加入主机"
+            label={tr('待加入主机', 'Host to Join')}
             required
             value={joinNodeId}
             onChange={(e) => {
@@ -1037,50 +1039,50 @@ export function NomadPage() {
               setJoinAdvertiseAddr(matched?.host || '');
             }}
           >
-            <option value="">选择主机</option>
+            <option value="">{tr('选择主机', 'Select host')}</option>
             {nodes.filter((n) => !clusterNodes.some((m: any) => m.node_id === n.id)).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.host})</option>)}
           </Select>
           <div>
             <Input
-              label="集群通信地址 (advertise_addr)"
+              label={tr('集群通信地址 (advertise_addr)', 'Advertise Address (advertise_addr)')}
               required
-              placeholder="例如 10.0.0.12"
+              placeholder={tr('例如 10.0.0.12', 'e.g. 10.0.0.12')}
               value={joinAdvertiseAddr}
               onChange={(e) => setJoinAdvertiseAddr(e.target.value)}
-              hint="默认填入主机 SSH 地址；加入多节点集群请填写真实内网 IP（勿填 127.0.0.1）。"
+              hint={tr('默认填入主机 SSH 地址；加入多节点集群请填写真实内网 IP（勿填 127.0.0.1）。', 'Prefilled with SSH host address; use a reachable private IP for multi-node clusters (not 127.0.0.1).')}
             />
             {isLoopbackAddress(joinAdvertiseAddr) && (
               <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">
-                跨机加入集群不能使用回环地址（127.0.0.1 / localhost），请改为真实内网 IP。
+                {tr('跨机加入集群不能使用回环地址（127.0.0.1 / localhost），请改为真实内网 IP。', 'Loopback addresses (127.0.0.1 / localhost) cannot be used when joining a multi-node cluster.')}
               </p>
             )}
           </div>
-          <Select label="节点角色" value={joinRole} onChange={(e) => setJoinRole(e.target.value)}>
+          <Select label={tr('节点角色', 'Node Role')} value={joinRole} onChange={(e) => setJoinRole(e.target.value)}>
             <option value="server_client">server_client</option>
             <option value="server">server</option>
             <option value="client">client</option>
           </Select>
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
-            <span>下载网络：{proxyEnabled ? '通过系统代理' : '直连'}</span>
-            <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">前往下载代理设置</Link>
+            <span>{tr('下载网络：', 'Download Network: ')}{proxyEnabled ? tr('通过系统代理', 'Via system proxy') : tr('直连', 'Direct')}</span>
+            <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">{tr('前往下载代理设置', 'Configure download proxy')}</Link>
           </div>
           <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setShowJoin(false)}>取消</Button>
-            <Button type="submit" variant="primary" loading={joinBusy}>确认扩容</Button>
+            <Button type="button" onClick={() => setShowJoin(false)}>{tr('取消', 'Cancel')}</Button>
+            <Button type="submit" variant="primary" loading={joinBusy}>{tr('确认扩容', 'Join Node')}</Button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={Boolean(gateView)} title="仲裁门禁预览" onClose={() => setGateView(null)}>
+      <Modal open={Boolean(gateView)} title={tr('仲裁门禁预览', 'Quorum Safety Gate Preview')} onClose={() => setGateView(null)}>
         {gateView && (
           <div className="space-y-4 text-xs">
             <div className="flex items-center gap-2">
-              <span className="text-slate-500">结果：</span>
-              <Badge tone={gateView.allowed ? 'green' : 'red'}>{gateView.allowed ? '允许' : '拦截'}</Badge>
+              <span className="text-slate-500">{tr('结果：', 'Result: ')}</span>
+              <Badge tone={gateView.allowed ? 'green' : 'red'}>{gateView.allowed ? tr('允许', 'Allowed') : tr('拦截', 'Blocked')}</Badge>
             </div>
             <p className="leading-5 text-slate-700 dark:text-slate-200">{gateView.reason}</p>
             <div className="flex justify-end">
-              <Button size="sm" variant="primary" onClick={() => setGateView(null)}>关闭</Button>
+              <Button size="sm" variant="primary" onClick={() => setGateView(null)}>{tr('关闭', 'Close')}</Button>
             </div>
           </div>
         )}
@@ -1095,7 +1097,7 @@ export function NomadPage() {
           await loadList();
           setSelectedId(id);
           setTab('status');
-          toast.success('集群配置已创建，请继续部署服务');
+          toast.success(tr('集群配置已创建，请继续部署服务', 'Cluster config created. Continue to deploy.'));
         }}
       />
 
@@ -1110,11 +1112,11 @@ export function NomadPage() {
 
       <Modal
         open={Boolean(uiLoginModal)}
-        title={`免密登录 Nomad Web UI${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`}
+        title={tr(`免密登录 Nomad Web UI${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`, `SSO Login to Nomad Web UI${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`)}
         onClose={() => setUiLoginModal(null)}
         footer={
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button type="button" onClick={() => setUiLoginModal(null)}>关闭</Button>
+            <Button type="button" onClick={() => setUiLoginModal(null)}>{tr('关闭', 'Close')}</Button>
             {uiLoginModal && (
               <a
                 href={uiLoginModal.url}
@@ -1123,7 +1125,7 @@ export function NomadPage() {
                 onClick={() => setUiLoginModal(null)}
                 className="primary-button"
               >
-                <span>立即免密打开 Nomad UI</span>
+                <span>{tr('立即免密打开 Nomad UI', 'Open Nomad UI (SSO)')}</span>
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
             )}
@@ -1133,11 +1135,21 @@ export function NomadPage() {
         {uiLoginModal && (
           <div className="space-y-3 text-xs leading-5 text-slate-600 dark:text-slate-300">
             <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 px-3.5 py-2.5 text-indigo-950 dark:border-indigo-500/30 dark:bg-indigo-950/30 dark:text-indigo-100">
-              <p>已生成<strong>单次一次性票据链接（OTT）</strong>（约 {Math.max(1, Math.round(uiLoginModal.ottTTL / 60))} 分钟内有效，兑换一次即作废）。</p>
-              <p className="mt-1">打开后 Nomad UI 会自动兑换临时会话并清掉地址栏里的票据，会话有效期为 <strong>{uiLoginModal.tokenTTL}</strong>，到期自动失效。</p>
+              <p>
+                {tr(
+                  <>已生成<strong>单次一次性票据链接（OTT）</strong>（约 {Math.max(1, Math.round(uiLoginModal.ottTTL / 60))} 分钟内有效，兑换一次即作废）。</>,
+                  <>A <strong>One-Time Ticket (OTT)</strong> link has been generated (valid for ~{Math.max(1, Math.round(uiLoginModal.ottTTL / 60))} min, single use).</>,
+                )}
+              </p>
+              <p className="mt-1">
+                {tr(
+                  <>打开后 Nomad UI 会自动兑换临时会话并清掉地址栏里的票据，会话有效期为 <strong>{uiLoginModal.tokenTTL}</strong>，到期自动失效。</>,
+                  <>Nomad UI automatically exchanges it for a temporary session (TTL: <strong>{uiLoginModal.tokenTTL}</strong>) and clears the ticket from the URL bar.</>,
+                )}
+              </p>
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              提示：如果节点使用自签名 TLS 证书，浏览器首次打开提示“证书风险”时点击“继续访问”后，页面仍会自动完成登录。
+              {tr('提示：如果节点使用自签名 TLS 证书，浏览器首次打开提示“证书风险”时点击“继续访问”后，页面仍会自动完成登录。', 'Tip: If the node uses a self-signed TLS certificate, click Proceed on the browser warning page and SSO login will complete automatically.')}
             </p>
           </div>
         )}
@@ -1149,15 +1161,15 @@ export function NomadPage() {
         onClose={() => setMgmtToken('')}
         footer={
           <div className="flex justify-end">
-            <Button variant="primary" onClick={() => setMgmtToken('')}>关闭</Button>
+            <Button variant="primary" onClick={() => setMgmtToken('')}>{tr('关闭', 'Close')}</Button>
           </div>
         }
       >
         <div className="space-y-4">
           <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-xs leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-            这是 Nomad 集群的最高权限管理密钥（Root Token），可用于登录 Nomad 原生 Web UI 或通过 CLI 管理集群。关闭弹窗后将清除页面内存中的明文，下次查看需重新验证密码。
+            {tr('这是 Nomad 集群的最高权限管理密钥（Root Token），可用于登录 Nomad 原生 Web UI 或通过 CLI 管理集群。关闭弹窗后将清除页面内存中的明文，下次查看需重新验证密码。', 'This is the highest-privilege Root Token for this Nomad cluster. Closing this modal clears the plaintext from memory; next reveal requires password verification again.')}
           </div>
-          <MaskedSecret value={mgmtToken} label="Management (Root) Token：" />
+          <MaskedSecret value={mgmtToken} label="Management (Root) Token:" />
         </div>
       </Modal>
 
@@ -1167,7 +1179,7 @@ export function NomadPage() {
             e.preventDefault();
             if (!dlModal) return;
             if (dlPass && dlPass.length < 6) {
-              setDlErr('归档加密口令至少 6 位（或留空不加密）');
+              setDlErr(tr('归档加密口令至少 6 位（或留空不加密）', 'Archive passphrase must be at least 6 characters (or blank for unencrypted)'));
               return;
             }
             setDlBusy(true);
@@ -1176,7 +1188,7 @@ export function NomadPage() {
               await dlModal.run(dlPw, dlPass);
               setDlModal(null);
             } catch (ex: any) {
-              setDlErr(ex?.message || '操作失败');
+              setDlErr(ex?.message || tr('操作失败', 'Operation failed'));
             } finally {
               setDlBusy(false);
             }
@@ -1184,11 +1196,11 @@ export function NomadPage() {
           className="space-y-3 text-xs"
         >
           <ErrorAlert message={dlErr} />
-          <SecretInput label="当前管理员登录密码" required value={dlPw} onChangeValue={setDlPw} />
-          <SecretInput label="归档加密口令（可选，填写则至少 6 位）" value={dlPass} onChangeValue={setDlPass} />
+          <SecretInput label={tr('当前管理员登录密码', 'Current Admin Password')} required value={dlPw} onChangeValue={setDlPw} />
+          <SecretInput label={tr('归档加密口令（可选，填写则至少 6 位）', 'Archive Encryption Passphrase (optional, min 6 chars)')} value={dlPass} onChangeValue={setDlPass} />
           <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setDlModal(null)}>取消</Button>
-            <Button type="submit" variant="primary" disabled={dlBusy}>{dlBusy ? '导出中...' : '确认导出'}</Button>
+            <Button type="button" onClick={() => setDlModal(null)}>{tr('取消', 'Cancel')}</Button>
+            <Button type="submit" variant="primary" disabled={dlBusy}>{dlBusy ? tr('导出中...', 'Exporting...') : tr('确认导出', 'Export')}</Button>
           </div>
         </form>
       </Modal>
@@ -1199,7 +1211,7 @@ export function NomadPage() {
         plan={uninstallPlan}
         onClose={() => setUninstallPlan(null)}
         onSubmitted={(taskId) => {
-          if (taskId) openTask(taskId, `卸载 Nomad: ${cluster?.name || ''}`);
+          if (taskId) openTask(taskId, tr(`卸载 Nomad: ${cluster?.name || ''}`, `Uninstall Nomad: ${cluster?.name || ''}`));
           void loadList();
         }}
       />
@@ -1209,8 +1221,8 @@ export function NomadPage() {
         cluster={cluster || null}
         onClose={() => setShowClusterSettings(false)}
         onSaved={async (taskId) => {
-          if (taskId) openTask(taskId, `更新集群配置: ${cluster?.name || ''}`);
-          else toast.success('集群配置已保存');
+          if (taskId) openTask(taskId, tr(`更新集群配置: ${cluster?.name || ''}`, `Update Cluster Config: ${cluster?.name || ''}`));
+          else toast.success(tr('集群配置已保存', 'Cluster config saved'));
           await loadOpsTab();
         }}
       />
@@ -1222,8 +1234,8 @@ export function NomadPage() {
         nodePools={pools.map((p) => p.name)}
         onClose={() => setConfigMember(null)}
         onSubmitted={async (taskId, title) => {
-          if (taskId) openTask(taskId, title || '更新节点配置');
-          else toast.success('节点配置已保存（将在部署时生效）');
+          if (taskId) openTask(taskId, title || tr('更新节点配置', 'Update Node Config'));
+          else toast.success(tr('节点配置已保存（将在部署时生效）', 'Node config saved (takes effect on deploy)'));
           await loadOpsTab();
         }}
       />

@@ -1,3 +1,5 @@
+import { trText } from './locale.ts';
+
 export type NodePath = number[];
 
 export interface HCLDocument {
@@ -68,7 +70,7 @@ export function nodeAt(doc: HCLDocument, path: NodePath): HCLNode | undefined {
 // bodyAt resolves a block's children; the empty path denotes the document root.
 export function bodyAt(doc: HCLDocument, path: NodePath): HCLDocument {
   const body = path.length ? nodeAt(doc, path)?.body : doc;
-  if (!body) throw new Error('当前元素没有可添加的子层级');
+  if (!body) throw new Error(trText('当前元素没有可添加的子层级', 'Current element cannot contain child items'));
   return body;
 }
 
@@ -162,24 +164,24 @@ export function createBlock(doc: HCLDocument, parent: NodePath, rule: BlockRule,
 export function duplicateBlock(doc: HCLDocument, path: NodePath, schema: BuilderSchema): { document: HCLDocument; path: NodePath } {
   const node = nodeAt(doc, path);
   const parent = path.slice(0, -1);
-  if (!node || node.kind !== 'block') throw new Error('只能复制可重复的块');
+  if (!node || node.kind !== 'block') throw new Error(trText('只能复制可重复的块', 'Only repeatable blocks can be duplicated'));
   const rule = ruleAt(doc, parent, schema).blocks.find((item) => item.name === node.name);
-  if (!rule || rule.max === 1) throw new Error('单个块不能复制');
+  if (!rule || rule.max === 1) throw new Error(trText('单个块不能复制', 'Singleton blocks cannot be duplicated'));
   const copy = structuredClone(node);
   copy.leading = copy.leading || '\n';
   if (rule.labels) copy.labels = [uniqueLabel(bodyAt(doc, parent), node.name, `${node.labels?.[0] || node.name}-copy`), ...(node.labels || []).slice(1)];
-  if (!canInsert(doc, parent, copy, schema)) throw new Error('当前层级不能再添加该元素');
+  if (!canInsert(doc, parent, copy, schema)) throw new Error(trText('当前层级不能再添加该元素', 'Cannot add more of this element at this level'));
   const index = path[path.length - 1] + 1;
   return { document: editDocument(doc, (draft) => bodyAt(draft, parent).nodes.splice(index, 0, copy)), path: [...parent, index] };
 }
 
 // moveNode validates cross-parent drops and never allows a block to contain itself.
 export function moveNode(doc: HCLDocument, source: NodePath, target: NodePath, schema: BuilderSchema): { document: HCLDocument; path: NodePath } {
-  if (!source.length || target.length >= source.length && source.every((part, i) => target[i] === part)) throw new Error('不能把元素移入自身或它的子元素');
+  if (!source.length || target.length >= source.length && source.every((part, i) => target[i] === part)) throw new Error(trText('不能把元素移入自身或它的子元素', 'Cannot move an element into itself or its children'));
   const node = nodeAt(doc, source);
-  if (!node) throw new Error('待移动元素不存在');
+  if (!node) throw new Error(trText('待移动元素不存在', 'Element to move does not exist'));
   const same = JSON.stringify(source.slice(0, -1)) === JSON.stringify(target);
-  if (!same && !canInsert(doc, target, node, schema)) throw new Error('该层级不允许此元素，或已经存在同名单个元素');
+  if (!same && !canInsert(doc, target, node, schema)) throw new Error(trText('该层级不允许此元素，或已经存在同名单个元素', 'This element is not allowed here or a singleton with this name already exists'));
   const adjusted = [...target];
   const parent = source.slice(0, -1);
   if (target.length > parent.length && parent.every((part, i) => target[i] === part) && target[parent.length] > source[source.length - 1]) adjusted[parent.length]--;

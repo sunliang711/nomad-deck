@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut } from '../lib/api';
+import { useI18n } from '../lib/i18n';
+import { getLocale, trText, type Locale } from '../lib/locale';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { useToast } from './Toast';
 import { Badge, Button, ErrorAlert, Input, Modal, StatusBadge } from './UI';
@@ -10,15 +12,15 @@ export interface DockerManageTarget {
   name: string;
 }
 
-export function dockerModeLabelOf(mode?: string): string {
-  if (mode === 'managed') return '托管';
-  if (mode === 'external') return '外部';
-  if (mode === 'absent') return '未安装';
+export function dockerModeLabelOf(mode?: string, locale: Locale = getLocale()): string {
+  if (mode === 'managed') return trText('托管', 'Managed', locale);
+  if (mode === 'external') return trText('外部', 'External', locale);
+  if (mode === 'absent') return trText('未安装', 'Not Installed', locale);
   return mode || '-';
 }
 
-export function dockerStatusLabelOf(status?: string): string {
-  if (status === 'running' || status === 'active') return '运行中';
+export function dockerStatusLabelOf(status?: string, locale: Locale = getLocale()): string {
+  if (status === 'running' || status === 'active') return trText('运行中', 'Running', locale);
   if (status === 'absent') return '';
   return status || '';
 }
@@ -32,6 +34,7 @@ export function DockerManageModal({
   onClose: () => void;
   onTaskSubmitted?: () => Promise<void> | void;
 }) {
+  const { tr } = useI18n();
   const { openTask } = useOpsDrawer();
   const toast = useToast();
 
@@ -75,7 +78,7 @@ export function DockerManageModal({
         });
       })
       .catch((ex: any) => {
-        if (active) setDockerErr(ex?.message || '加载 Docker 信息失败');
+        if (active) setDockerErr(ex?.message || tr('加载 Docker 信息失败', 'Failed to load Docker info'));
       })
       .finally(() => {
         if (active) setDockerBusy(false);
@@ -100,12 +103,15 @@ export function DockerManageModal({
         onClose();
         openTask(
           res.task.id,
-          `Docker ${action === 'install' ? '安装' : action === 'upgrade' ? '升级' : '转为托管'}：${node.name}`,
+          tr(
+            `Docker ${action === 'install' ? '安装' : action === 'upgrade' ? '升级' : '转为托管'}：${node.name}`,
+            `Docker ${action === 'install' ? 'Install' : action === 'upgrade' ? 'Upgrade' : 'Adopt'}: ${node.name}`,
+          ),
         );
         await onTaskSubmitted?.();
       }
     } catch (ex: any) {
-      setDockerErr(ex?.message || `Docker ${action} 失败`);
+      setDockerErr(ex?.message || tr(`Docker ${action} 失败`, `Docker ${action} failed`));
     } finally {
       setDockerBusy(false);
     }
@@ -127,11 +133,11 @@ export function DockerManageModal({
       });
       if (res.task?.id) {
         onClose();
-        openTask(res.task.id, `更新 Docker 配置：${node.name}`);
+        openTask(res.task.id, tr(`更新 Docker 配置：${node.name}`, `Update Docker Config: ${node.name}`));
         await onTaskSubmitted?.();
       }
     } catch (ex: any) {
-      setDockerErr(ex?.message || '保存 Docker 配置失败');
+      setDockerErr(ex?.message || tr('保存 Docker 配置失败', 'Failed to save Docker config'));
     } finally {
       setDockerBusy(false);
     }
@@ -143,89 +149,99 @@ export function DockerManageModal({
     setDockerBusy(true);
     try {
       const res = await apiPost(`/api/v1/nodes/${node.id}/docker/proxy-test`, {});
-      toast.info(`镜像代理测试结果：${JSON.stringify(res.result)}`);
+      toast.info(tr(`镜像代理测试结果：${JSON.stringify(res.result)}`, `Registry proxy test result: ${JSON.stringify(res.result)}`));
     } catch (ex: any) {
-      setDockerErr(ex?.message || '代理测试失败');
+      setDockerErr(ex?.message || tr('代理测试失败', 'Proxy test failed'));
     } finally {
       setDockerBusy(false);
     }
   };
 
   return (
-    <Modal open={Boolean(node)} title={`Docker 管理：${node?.name || ''}`} busy={dockerBusy} onClose={onClose} wide>
+    <Modal open={Boolean(node)} title={tr(`Docker 管理：${node?.name || ''}`, `Docker Management: ${node?.name || ''}`)} busy={dockerBusy} onClose={onClose} wide>
       <ErrorAlert message={dockerErr} onClose={() => setDockerErr('')} />
       {!dockerInfo && (
         <p role="status" className="py-8 text-center text-sm text-slate-500">
-          {dockerBusy ? '正在读取 Docker 状态…' : '无法读取 Docker 信息，请关闭后重试。'}
+          {dockerBusy ? tr('正在读取 Docker 状态…', 'Loading Docker status...') : tr('无法读取 Docker 信息，请关闭后重试。', 'Unable to load Docker info; close and retry.')}
         </p>
       )}
       {dockerInfo && (
         <div className="space-y-4 text-xs">
           <div className="grid gap-3 rounded-xl bg-slate-50 p-3 dark:bg-slate-950 sm:grid-cols-3">
             <div>
-              管理方式：
+              {tr('管理方式：', 'Mode: ')}
               <span className="font-semibold">
-                {{ absent: '未安装', managed: '平台托管', external: '外部安装' }[dockerInfo.mode as string] || dockerInfo.mode}
+                {{
+                  absent: tr('未安装', 'Not Installed'),
+                  managed: tr('平台托管', 'Managed'),
+                  external: tr('外部安装', 'External'),
+                }[dockerInfo.mode as string] || dockerInfo.mode}
               </span>
             </div>
             <div>
-              版本：<span className="font-mono">{dockerInfo.version || '-'}</span>
+              {tr('版本：', 'Version: ')}<span className="font-mono">{dockerInfo.version || '-'}</span>
             </div>
             <div>
-              状态：{dockerInfo.mode === 'absent' ? <Badge tone="neutral">未安装</Badge> : <StatusBadge value={dockerInfo.status} />}
+              {tr('状态：', 'Status: ')}{dockerInfo.mode === 'absent' ? <Badge tone="neutral">{tr('未安装', 'Not Installed')}</Badge> : <StatusBadge value={dockerInfo.status} />}
             </div>
           </div>
           <div className="space-y-3 rounded-xl border border-slate-200 p-4 dark:border-slate-700">
-            <div className="text-sm font-semibold">{dockerInfo.mode === 'absent' ? '1. 安装容器运行环境' : '版本与维护'}</div>
+            <div className="text-sm font-semibold">{dockerInfo.mode === 'absent' ? tr('1. 安装容器运行环境', '1. Install Container Runtime') : tr('版本与维护', 'Version & Maintenance')}</div>
             <p className="text-xs leading-5 text-slate-500">
-              Docker 用于支撑 Nomad Client 运行容器任务。安装包由控制面下载、验签并分发到当前主机。
+              {tr(
+                'Docker 用于支撑 Nomad Client 运行容器任务。安装包由控制面下载、验签并分发到当前主机。',
+                'Docker powers Nomad Client container workloads. Packages are downloaded, verified, and distributed from the control plane.',
+              )}
             </p>
             <div className="flex flex-wrap items-end gap-2">
               <div className="w-48">
                 <Input
-                  label={dockerInfo.mode === 'absent' ? '安装版本（可选）' : '目标版本'}
-                  placeholder={dockerInfo.mode === 'absent' ? '留空安装仓库最新版' : '请输入完整版本号'}
+                  label={dockerInfo.mode === 'absent' ? tr('安装版本（可选）', 'Version (optional)') : tr('目标版本', 'Target Version')}
+                  placeholder={dockerInfo.mode === 'absent' ? tr('留空安装仓库最新版', 'Leave blank for latest') : tr('请输入完整版本号', 'Enter full version')}
                   value={dockerVer}
                   onChange={(e) => setDockerVer(e.target.value)}
                 />
               </div>
               {dockerInfo.mode === 'absent' && (
                 <Button variant="primary" loading={dockerBusy} onClick={() => void runDockerAction('install')}>
-                  安装 Docker
+                  {tr('安装 Docker', 'Install Docker')}
                 </Button>
               )}
               {dockerInfo.mode === 'managed' && (
                 <Button loading={dockerBusy} disabled={!dockerVer.trim()} onClick={() => void runDockerAction('upgrade')}>
-                  升级 Docker
+                  {tr('升级 Docker', 'Upgrade Docker')}
                 </Button>
               )}
               {dockerInfo.mode === 'external' && (
                 <Button loading={dockerBusy} onClick={() => void runDockerAction('adopt')}>
-                  转为托管
+                  {tr('转为托管', 'Adopt as Managed')}
                 </Button>
               )}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
-              <span>安装/升级下载：{dockerInstallProxyEnabled ? '通过系统代理' : '直连'}</span>
+              <span>{tr('安装/升级下载：', 'Install/Upgrade download: ')}{dockerInstallProxyEnabled ? tr('通过系统代理', 'Via System Proxy') : tr('直连', 'Direct')}</span>
               <Link to="/settings?tab=proxy" className="text-indigo-600 hover:underline dark:text-indigo-400">
-                前往下载代理设置
+                {tr('前往下载代理设置', 'Proxy Settings')}
               </Link>
             </div>
           </div>
           {dockerInfo.mode !== 'absent' && (
             <details className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
-              <summary className="cursor-pointer font-medium">升级策略与中断确认</summary>
+              <summary className="cursor-pointer font-medium">{tr('升级策略与中断确认', 'Upgrade Policy & Interruption Confirmations')}</summary>
               <div className="mt-3 space-y-3">
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={dockerDrain} onChange={(e) => setDockerDrain(e.target.checked)} />
-                  <span>升级前疏散 Nomad 工作负载</span>
+                  <span>{tr('升级前疏散 Nomad 工作负载', 'Drain Nomad workloads before upgrade')}</span>
                 </label>
                 <p className="text-slate-500">
-                  Nomad 客户端默认疏散，需有可调度的替代节点；关闭疏散时，Docker 驱动重连可能中断 Task。
+                  {tr(
+                    'Nomad 客户端默认疏散，需有可调度的替代节点；关闭疏散时，Docker 驱动重连可能中断 Task。',
+                    'Nomad Clients drain by default and require alternative schedulable nodes; disabling drain may interrupt tasks when Docker reconnects.',
+                  )}
                 </p>
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={dockerConfirm} onChange={(e) => setDockerConfirm(e.target.checked)} />
-                  <span>确认跨主版本升级</span>
+                  <span>{tr('确认跨主版本升级', 'Confirm major version upgrade')}</span>
                 </label>
                 <label className="flex items-center gap-2">
                   <input
@@ -233,37 +249,37 @@ export function DockerManageModal({
                     checked={dockerAllowInterruption}
                     onChange={(e) => setDockerAllowInterruption(e.target.checked)}
                   />
-                  <span>允许无法疏散节点的容器中断</span>
+                  <span>{tr('允许无法疏散节点的容器中断', 'Allow container interruption if node cannot be drained')}</span>
                 </label>
               </div>
             </details>
           )}
           {dockerInfo.mode !== 'absent' && (
             <div className="space-y-3 rounded-xl border border-slate-200 p-4 dark:border-slate-700">
-              <div className="text-sm font-semibold">镜像下载与代理</div>
+              <div className="text-sm font-semibold">{tr('镜像下载与代理', 'Image Registry & Proxy')}</div>
               <div className="flex flex-wrap items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
-                <span>默认镜像拉取代理：{dockerPullProxyEnabled ? '通过系统代理' : '直连'}</span>
+                <span>{tr('默认镜像拉取代理：', 'Default pull proxy: ')}{dockerPullProxyEnabled ? tr('通过系统代理', 'Via System Proxy') : tr('直连', 'Direct')}</span>
                 <Link to="/settings?tab=proxy" className="text-indigo-600 hover:underline dark:text-indigo-400">
-                  在系统设置中按需开启
+                  {tr('在系统设置中按需开启', 'Configure in Settings')}
                 </Link>
               </div>
               <Input
-                label="Registry Mirrors（逗号分隔）"
+                label={tr('Registry Mirrors（逗号分隔）', 'Registry Mirrors (comma-separated)')}
                 value={dockerCfg.registry_mirrors}
                 onChange={(e) => setDockerCfg({ ...dockerCfg, registry_mirrors: e.target.value })}
               />
               <Input
-                label="自定义镜像代理 URL（可选，覆盖系统设置）"
-                placeholder="留空则跟随「系统设置 → 下载代理」，例如 http://10.0.0.1:3128"
+                label={tr('自定义镜像代理 URL（可选，覆盖系统设置）', 'Custom Pull Proxy URL (optional, overrides system setting)')}
+                placeholder={tr('留空则跟随「系统设置 → 下载代理」，例如 http://10.0.0.1:3128', 'Leave blank to inherit System Proxy, e.g. http://10.0.0.1:3128')}
                 value={dockerCfg.proxy_url}
                 onChange={(e) => setDockerCfg({ ...dockerCfg, proxy_url: e.target.value })}
               />
               <div className="flex gap-2">
                 <Button variant="primary" loading={dockerBusy} onClick={() => void saveDockerCfg()}>
-                  应用守护进程配置
+                  {tr('应用守护进程配置', 'Apply Daemon Config')}
                 </Button>
                 <Button disabled={dockerBusy} onClick={() => void testDockerProxy()}>
-                  从节点测试代理
+                  {tr('从节点测试代理', 'Test Proxy from Host')}
                 </Button>
               </div>
             </div>

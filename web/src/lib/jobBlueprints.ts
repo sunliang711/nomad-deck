@@ -1,17 +1,37 @@
+import type { Locale } from './locale.ts';
+
 export interface JobBlueprint {
   id: string;
   label: string;
+  labelEn?: string;
   tags: string[];
+  tagsEn?: string[];
   desc: string;
+  descEn?: string;
   hcl: string;
+}
+
+export function getBlueprintLabel(bp: JobBlueprint, locale: Locale = 'zh'): string {
+  return locale === 'en' && bp.labelEn ? bp.labelEn : bp.label;
+}
+
+export function getBlueprintTags(bp: JobBlueprint, locale: Locale = 'zh'): string[] {
+  return locale === 'en' && bp.tagsEn ? bp.tagsEn : bp.tags;
+}
+
+export function getBlueprintDesc(bp: JobBlueprint, locale: Locale = 'zh'): string {
+  return locale === 'en' && bp.descEn ? bp.descEn : bp.desc;
 }
 
 export const STARTER_SAMPLES: JobBlueprint[] = [
   {
     id: 'docker',
     label: 'Nginx 容器服务',
+    labelEn: 'Nginx Container Service',
     tags: ['Docker', '入门'],
+    tagsEn: ['Docker', 'Starter'],
     desc: '标准 Docker Web 容器示例，无需额外前置配置即可在 Nomad Client 运行',
+    descEn: 'Standard Docker web container example ready to run on any Docker-enabled Nomad Client',
     hcl: `job "hello" {
   datacenters = ["dc1"]
   type        = "service"
@@ -35,8 +55,11 @@ export const STARTER_SAMPLES: JobBlueprint[] = [
   {
     id: 'caddy',
     label: 'Caddy 反向代理',
+    labelEn: 'Caddy Reverse Proxy',
     tags: ['Docker', '网关'],
+    tagsEn: ['Docker', 'Gateway'],
     desc: '轻量级 Web 服务器与自动 HTTPS 反向代理，内置 Caddyfile 模板并暴露 80 / 443 端口',
+    descEn: 'Lightweight web server & automatic HTTPS reverse proxy with built-in Caddyfile template and ports 80/443',
     hcl: `job "caddy" {
   datacenters = ["dc1"]
   type        = "service"
@@ -106,8 +129,11 @@ EOT
   {
     id: 'traefik',
     label: 'Traefik 服务网关',
+    labelEn: 'Traefik Service Gateway',
     tags: ['Docker', '网关'],
+    tagsEn: ['Docker', 'Gateway'],
     desc: '云原生边缘路由与反向代理网关，含 80 业务入口、8080 管理面板与动态路由模板',
+    descEn: 'Cloud-native edge router & reverse proxy with port 80 entrypoint, port 8080 dashboard, and dynamic routes',
     hcl: `job "traefik" {
   datacenters = ["dc1"]
   type        = "service"
@@ -200,8 +226,11 @@ EOT
   {
     id: 'postgres',
     label: 'PostgreSQL + Vault 密钥',
+    labelEn: 'PostgreSQL + Vault Secrets',
     tags: ['Docker', 'Vault', '数据库'],
+    tagsEn: ['Docker', 'Vault', 'Database'],
     desc: '需先配置 postgres Role 与 secret/apps/postgres（username、password、database），自动挂载 0600 密码文件与环境变量',
+    descEn: 'Requires postgres Role & secret/apps/postgres (username, password, database); mounts 0600 secret file & env',
     hcl: `job "postgres" {
   datacenters = ["dc1"]
   type        = "service"
@@ -270,8 +299,11 @@ EOT
   {
     id: 'mysql',
     label: 'MySQL 8 + Vault 密钥',
+    labelEn: 'MySQL 8 + Vault Secrets',
     tags: ['Docker', 'Vault', '数据库'],
+    tagsEn: ['Docker', 'Vault', 'Database'],
     desc: '需先配置 mysql Role 与 secret/apps/mysql（root_password、username、password、database），自动注入 0600 密码文件',
+    descEn: 'Requires mysql Role & secret/apps/mysql (root_password, username, password, database); injects 0600 password files',
     hcl: `job "mysql" {
   datacenters = ["dc1"]
   type        = "service"
@@ -350,8 +382,11 @@ EOT
   {
     id: 'redis',
     label: 'Redis + Vault 密钥',
+    labelEn: 'Redis + Vault Secrets',
     tags: ['Docker', 'Vault', '缓存'],
+    tagsEn: ['Docker', 'Vault', 'Cache'],
     desc: '需先配置 redis Role 与 secret/apps/redis（含 password 字段），通过 0600 内存密码文件安全注入 requirepass',
+    descEn: 'Requires redis Role & secret/apps/redis (password field); injects requirepass safely from a 0600 tmpfs file',
     hcl: `job "redis" {
   datacenters = ["dc1"]
   type        = "service"
@@ -405,8 +440,11 @@ EOT
   {
     id: 'rabbitmq',
     label: 'RabbitMQ + Vault 密钥',
+    labelEn: 'RabbitMQ + Vault Secrets',
     tags: ['Docker', 'Vault', '消息队列'],
+    tagsEn: ['Docker', 'Vault', 'Message Queue'],
     desc: '需先配置 rabbitmq Role 与 secret/apps/rabbitmq（username、password），含 AMQP (5672) 与 Web 管理面板 (15672)',
+    descEn: 'Requires rabbitmq Role & secret/apps/rabbitmq (username, password); exposes AMQP (5672) and Web UI (15672)',
     hcl: `job "rabbitmq" {
   datacenters = ["dc1"]
   type        = "service"
@@ -478,8 +516,11 @@ EOT
   {
     id: 'rocketmq',
     label: 'RocketMQ 单机服务',
+    labelEn: 'RocketMQ Single-Node',
     tags: ['Docker', '消息队列'],
+    tagsEn: ['Docker', 'Message Queue'],
     desc: '同 Group 协同运行 NameServer (9876) 与 Broker (10911)，内建 broker.conf 模板与持久化存储目录',
+    descEn: 'Runs NameServer (9876) and Broker (10911) together with a built-in broker.conf template and persistent disk',
     hcl: `job "rocketmq" {
   datacenters = ["dc1"]
   type        = "service"
@@ -585,8 +626,11 @@ EOT
   {
     id: 'prometheus',
     label: 'Prometheus 指标采集',
+    labelEn: 'Prometheus Metrics',
     tags: ['Docker', '监控'],
+    tagsEn: ['Docker', 'Monitoring'],
     desc: '时序指标采集与告警引擎，内置 prometheus.yml 模板（含 Nomad Telemetry 抓取示例）与 9090 端口',
+    descEn: 'Time-series metrics & alerting engine with built-in prometheus.yml template (including Nomad Telemetry) on port 9090',
     hcl: `job "prometheus" {
   datacenters = ["dc1"]
   type        = "service"
@@ -670,8 +714,11 @@ EOT
   {
     id: 'grafana',
     label: 'Grafana + Vault 密钥',
+    labelEn: 'Grafana + Vault Secrets',
     tags: ['Docker', 'Vault', '监控'],
+    tagsEn: ['Docker', 'Vault', 'Monitoring'],
     desc: '需先配置 grafana Role 与 secret/apps/grafana（admin_user、admin_password），可配合系统设置中的 Grafana 跳转链接使用',
+    descEn: 'Requires grafana Role & secret/apps/grafana (admin_user, admin_password); pairs with System Settings Grafana URL',
     hcl: `job "grafana" {
   datacenters = ["dc1"]
   type        = "service"
@@ -751,8 +798,11 @@ EOT
   {
     id: 'docker_registry',
     label: 'Docker Registry 镜像库',
+    labelEn: 'Docker Registry',
     tags: ['Docker', '镜像库'],
+    tagsEn: ['Docker', 'Registry'],
     desc: '私有容器镜像仓库与内网镜像缓存（5000 端口），支持删除镜像及切换为 Pull-through Cache',
+    descEn: 'Private container registry and pull-through cache (port 5000) with image deletion enabled',
     hcl: `job "docker-registry" {
   datacenters = ["dc1"]
   type        = "service"
@@ -811,8 +861,11 @@ EOT
   {
     id: 'raw_exec',
     label: 'Shell 守护脚本',
+    labelEn: 'Shell Daemon Script',
     tags: ['raw_exec', '轻量'],
+    tagsEn: ['raw_exec', 'Lightweight'],
     desc: '无需 Docker，直接在节点运行轻量脚本（需先在节点插件配置中开启 raw_exec 驱动）',
+    descEn: 'Runs a lightweight script directly on the host without Docker (requires raw_exec enabled on the Client node)',
     hcl: `job "hello-shell" {
   datacenters = ["dc1"]
   type        = "service"
@@ -837,8 +890,11 @@ EOT
   {
     id: 'batch',
     label: '一次性批处理任务',
+    labelEn: 'One-Shot Batch Task',
     tags: ['batch', 'raw_exec'],
+    tagsEn: ['batch', 'raw_exec'],
     desc: '执行完即退出的短任务示例，可搭配定时周期调度（需开启 raw_exec 驱动）',
+    descEn: 'Short-lived batch job example that exits upon completion, pairable with periodic scheduling (requires raw_exec)',
     hcl: `job "hello-batch" {
   datacenters = ["dc1"]
   type        = "batch"

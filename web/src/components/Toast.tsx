@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useState } from 'react';
 import { CheckCircle2, Info, X, XCircle } from 'lucide-react';
+import { useI18n } from '../lib/i18n';
 
 type ToastKind = 'success' | 'error' | 'info';
 type ToastPosition = 'bottom-right' | 'top-right';
@@ -94,6 +95,7 @@ function normalizeToastArg(arg?: ToastArg): ToastOptions {
 }
 
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { tr } = useI18n();
   const [items, setItems] = useState<ToastItem[]>([]);
   const [history, setHistory] = useState<ToastHistoryItem[]>(() => loadStoredHistory());
 
@@ -233,7 +235,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 type="button"
                 onClick={() => dismiss(item.id)}
                 className="p-0.5 rounded opacity-60 hover:opacity-100 shrink-0"
-                aria-label="关闭通知"
+                aria-label={tr('关闭通知', 'Close notification')}
               >
                 <X className="w-3.5 h-3.5" />
               </button>

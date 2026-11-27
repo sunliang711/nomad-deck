@@ -18,6 +18,11 @@
           var root = document.documentElement;
           root.classList.toggle('dark', theme === 'dark');
           root.style.colorScheme = theme;
+          var savedLocale = localStorage.getItem('nd_locale');
+          if (savedLocale === 'en') {
+            root.lang = 'en';
+            document.title = 'NomadDeck · Cluster Operations Control Plane';
+          }
         } catch (e) {}
       })();
     </script>

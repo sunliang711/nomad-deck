@@ -1,14 +1,21 @@
 import React, { useMemo } from 'react';
 import { CheckCircle2, Clock, Loader2, XCircle } from 'lucide-react';
+import { useI18n } from '../lib/i18n';
 import { formatMiB, type TaskProgress, type UpgradeStage } from '../lib/selfUpdate';
 
-const UPGRADE_STEPS: Array<{ key: Exclude<UpgradeStage, 'done'>; title: string; detail: string }> = [
-  { key: 'resolve', title: '查找版本', detail: '查询发布信息并核对当前平台程序包' },
-  { key: 'download', title: '下载', detail: '下载对应架构程序包与校验文件' },
-  { key: 'verify', title: '校验', detail: '核对 Ed25519 签名、SHA-256 并试运行新版本' },
-  { key: 'install', title: '替换程序', detail: '在线备份数据库并原子替换可执行文件，保留上一版本' },
-  { key: 'restart', title: '重启控制面服务', detail: '页面会短暂断开，托管中的 Nomad / Vault 集群不受影响' },
-  { key: 'confirm', title: '确认新版本', detail: '等待重启后的服务报告目标版本' },
+const UPGRADE_STEPS: Array<{
+  key: Exclude<UpgradeStage, 'done'>;
+  title: string;
+  titleEn: string;
+  detail: string;
+  detailEn: string;
+}> = [
+  { key: 'resolve', title: '查找版本', titleEn: 'Resolve Release', detail: '查询发布信息并核对当前平台程序包', detailEn: 'Fetch release metadata and match platform binary' },
+  { key: 'download', title: '下载', titleEn: 'Download', detail: '下载对应架构程序包与校验文件', detailEn: 'Download architecture binary and checksums' },
+  { key: 'verify', title: '校验', titleEn: 'Verify', detail: '核对 Ed25519 签名、SHA-256 并试运行新版本', detailEn: 'Verify Ed25519 signature, SHA-256, and dry-run binary' },
+  { key: 'install', title: '替换程序', titleEn: 'Install Binary', detail: '在线备份数据库并原子替换可执行文件，保留上一版本', detailEn: 'Back up DB online and atomically swap binary, keeping previous version' },
+  { key: 'restart', title: '重启控制面服务', titleEn: 'Restart Control Plane', detail: '页面会短暂断开，托管中的 Nomad / Vault 集群不受影响', detailEn: 'UI will briefly disconnect; managed Nomad / Vault clusters are unaffected' },
+  { key: 'confirm', title: '确认新版本', titleEn: 'Confirm Version', detail: '等待重启后的服务报告目标版本', detailEn: 'Wait for restarted service to report target version' },
 ];
 
 export function UpgradeProgress({
@@ -25,6 +32,7 @@ export function UpgradeProgress({
   speed?: number;
   target?: string;
 }) {
+  const { isEn, tr } = useI18n();
   const activeIdx = stage === 'done' ? UPGRADE_STEPS.length : Math.max(0, UPGRADE_STEPS.findIndex((s) => s.key === stage));
 
   const download = useMemo(() => {
@@ -32,15 +40,16 @@ export function UpgradeProgress({
     const done = progress.done ?? 0;
     const total = progress.total ?? 0;
     const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : null;
-    const parts = [total > 0 ? `${formatMiB(done)} / ${formatMiB(total)}` : `已下载 ${formatMiB(done)}`];
+    const parts = [total > 0 ? `${formatMiB(done)} / ${formatMiB(total)}` : tr(`已下载 ${formatMiB(done)}`, `Downloaded ${formatMiB(done)}`)];
     if (speed > 0 && !failed) {
       parts.push(`${formatMiB(speed)}/s`);
       if (total > done) {
-        parts.push(`剩余约 ${Math.max(1, Math.ceil((total - done) / speed))} 秒`);
+        const eta = Math.max(1, Math.ceil((total - done) / speed));
+        parts.push(tr(`剩余约 ${eta} 秒`, `~${eta}s remaining`));
       }
     }
     return { percent, text: parts.join(' · ') };
-  }, [failed, progress, speed, stage]);
+  }, [failed, progress, speed, stage, tr]);
 
   return (
     <ol className="space-y-3 text-left">
@@ -74,10 +83,10 @@ export function UpgradeProgress({
                     : 'text-slate-400 dark:text-slate-500'
                 }`}
               >
-                {step.title}
+                {isEn ? step.titleEn : step.title}
               </div>
               <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                {step.key === 'resolve' && target ? `目标版本 ${target}` : step.detail}
+                {step.key === 'resolve' && target ? tr(`目标版本 ${target}`, `Target version ${target}`) : isEn ? step.detailEn : step.detail}
               </div>
               {step.key === 'download' && download && (
                 <div className="pt-1 space-y-1">

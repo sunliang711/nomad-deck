@@ -20,6 +20,7 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api';
 import { copyText } from '../lib/clipboard';
 import { INTEGRATION_DRAFT_JOB_STORAGE_KEY, parseKVPath } from '../lib/vaultHelpers';
 import { useAuth } from '../lib/auth';
+import { useI18n } from '../lib/i18n';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { isTaskActiveStatus } from '../lib/actionLabels';
 import { useToast } from '../components/Toast';
@@ -42,34 +43,41 @@ import { ItemSwitcher } from '../components/ItemSwitcher';
 
 type ExampleKind = 'probe' | 'docker_env' | 'docker_file';
 
-const EXAMPLE_KINDS: Array<{ id: ExampleKind; label: string; desc: string }> = [
+const EXAMPLE_KINDS: Array<{ id: ExampleKind; label: string; labelEn: string; desc: string; descEn: string }> = [
   {
     id: 'probe',
     label: '连通性探针',
+    labelEn: 'Connectivity Probe',
     desc: '最轻量的批处理脚本，验证 Nomad 能换取 Vault Token 并读取指定 Secret 的键名（不输出密码明文）。',
+    descEn: 'Minimal batch probe verifying Nomad exchanges OIDC JWT for a Vault token and reads key names (never prints secret values).',
   },
   {
     id: 'docker_env',
     label: '容器环境变量注入',
+    labelEn: 'Docker Env Injection',
     desc: '适合一般容器应用：通过 env = true 把 Vault Secret 中的字段自动注入为容器环境变量。',
+    descEn: 'For standard container apps: injects Vault Secret fields as container environment variables via env = true.',
   },
   {
     id: 'docker_file',
     label: '容器密码文件挂载',
+    labelEn: 'Docker Secret File Mount',
     desc: '适合数据库或支持 *_FILE 的应用：把密码写入权限 0600 的内存文件 /secrets/app.secret，不暴露在环境变量中。',
+    descEn: 'For databases or *_FILE apps: renders secrets into /secrets/app.secret (0600 tmpfs) instead of environment variables.',
   },
 ];
 
-const STAGE_LABELS: Record<string, string> = {
-  '1-nomad-jwks': '1. Nomad JWKS 公钥',
-  '2-nomad-config': '2. Nomad 节点配置',
-  '3-vault-auth': '3. Vault JWT 挂载',
-  '4-vault-role': '4. Role 与 Policy',
-  '5-login': '5. 真实任务登录验证',
+const STAGE_LABELS: Record<string, { zh: string; en: string }> = {
+  '1-nomad-jwks': { zh: '1. Nomad JWKS 公钥', en: '1. Nomad JWKS Public Keys' },
+  '2-nomad-config': { zh: '2. Nomad 节点配置', en: '2. Nomad Node Config' },
+  '3-vault-auth': { zh: '3. Vault JWT 挂载', en: '3. Vault JWT Auth Mount' },
+  '4-vault-role': { zh: '4. Role 与 Policy', en: '4. Roles & Policies' },
+  '5-login': { zh: '5. 真实任务登录验证', en: '5. Live Job Login Test' },
 };
 
 export function IntegrationsPage() {
   const { isAdmin } = useAuth();
+  const { locale, isEn, tr } = useI18n();
   const navigate = useNavigate();
   const { tasks, openTask } = useOpsDrawer();
   const [deleting, setDeleting] = useState(false);
@@ -176,9 +184,9 @@ export function IntegrationsPage() {
         void loadClusterHints(readyNomad, readyVault);
       }
     } catch (ex: any) {
-      setErr(ex?.message || '加载联动配置失败');
+      setErr(ex?.message || tr('加载联动配置失败', 'Failed to load integrations'));
     }
-  }, [loadClusterHints]);
+  }, [loadClusterHints, tr]);
 
   useEffect(() => {
     void load();
@@ -218,16 +226,16 @@ export function IntegrationsPage() {
       const source = clusters.find((cluster) => cluster.id === selected.source_cluster_id);
       const confirmSingle = source?.mode === 'single' && preview.plan?.scope === 'vault_and_nomad';
       // 单节点配置下发需要重启服务，确认后才向后端传递维护授权。
-      if (confirmSingle && !(await askConfirm('启用联动需要重启这台 Nomad Server，期间调度与 API 会短暂中断。确认现在应用配置吗？', {
-        title: '确认单节点维护', confirmText: '确认并应用',
+      if (confirmSingle && !(await askConfirm(tr('启用联动需要重启这台 Nomad Server，期间调度与 API 会短暂中断。确认现在应用配置吗？', 'Applying this integration restarts the single-node Nomad Server, briefly interrupting scheduling and the API. Apply now?'), {
+        title: tr('确认单节点维护', 'Confirm Single-Node Maintenance'), confirmText: tr('确认并应用', 'Apply Now'),
       }))) return;
       const result = await apiPost(`/api/v1/integrations/${selected.id}/apply`, { confirm_single_node: confirmSingle });
       if (result.task?.id) {
         setApplyTaskId(result.task.id);
-        openTask(result.task.id, `应用联动：${selected.name}`);
+        openTask(result.task.id, tr(`应用联动：${selected.name}`, `Apply Integration: ${selected.name}`));
       }
     } catch (ex: any) {
-      setErr(ex?.message || '应用联动失败');
+      setErr(ex?.message || tr('应用联动失败', 'Failed to apply integration'));
     } finally {
       applyRef.current = false;
       setApplying(false);
@@ -244,7 +252,7 @@ export function IntegrationsPage() {
       setSelected(res.integration);
       void loadClusterHints(res.integration?.source_cluster_id, res.integration?.target_cluster_id);
     } catch (ex: any) {
-      setErr(ex?.message || '加载联动详情失败');
+      setErr(ex?.message || tr('加载联动详情失败', 'Failed to load integration details'));
     }
   };
 
@@ -304,10 +312,10 @@ export function IntegrationsPage() {
         target_cluster_id: createForm.target_cluster_id || vaultDefault,
       });
       setShowCreate(false);
-      toast.success(`已创建联动 ${createForm.name}，接下来请添加 Role 并点击「应用联动」`);
+      toast.success(tr(`已创建联动 ${createForm.name}，接下来请添加 Role 并点击「应用联动」`, `Integration ${createForm.name} created. Next add a Role and click "Apply Integration".`));
       await load(res.integration?.id);
     } catch (ex: any) {
-      const msg = ex?.message || '创建联动失败';
+      const msg = ex?.message || tr('创建联动失败', 'Failed to create integration');
       setCreateErr(msg);
       toast.error(msg);
     }
@@ -348,10 +356,10 @@ export function IntegrationsPage() {
       });
       setShowEditIntegration(false);
       setPlan(null);
-      toast.success('联动配置已更新，如需同步到集群请点击「应用联动」');
+      toast.success(tr('联动配置已更新，如需同步到集群请点击「应用联动」', 'Integration updated. Click "Apply Integration" to sync to clusters.'));
       await load(selected.id);
     } catch (ex: any) {
-      toast.error(ex?.message || '更新联动配置失败');
+      toast.error(ex?.message || tr('更新联动配置失败', 'Failed to update integration'));
     } finally {
       setSavingIntegration(false);
     }
@@ -393,7 +401,7 @@ export function IntegrationsPage() {
         .map((s) => s.trim())
         .filter(Boolean);
       const normalizedPaths = roleForm.policy_mode === 'explicit'
-        ? rawPaths.map((p) => parseKVPath(p).rolePath || p)
+        ? rawPaths.map((p) => parseKVPath(p, 'secret', locale).rolePath || p)
         : rawPaths.map((p) => p.replace(/^\/+|\/+$/g, ''));
       const payload: Record<string, any> = {
         role_name: editingRole ? editingRole.role_name : roleForm.role_name.trim(),
@@ -410,17 +418,17 @@ export function IntegrationsPage() {
 
       if (editingRole) {
         await apiPut(`/api/v1/integrations/${selected.id}/roles/${editingRole.id}`, payload);
-        toast.success(`已更新工作负载 Role ${payload.role_name}，请点击「应用联动」使其生效`);
+        toast.success(tr(`已更新工作负载 Role ${payload.role_name}，请点击「应用联动」使其生效`, `Updated role ${payload.role_name}. Click "Apply Integration" to take effect.`));
       } else {
         await apiPost(`/api/v1/integrations/${selected.id}/roles`, payload);
-        toast.success(`已保存工作负载 Role ${payload.role_name}，请点击「应用联动」使其生效`);
+        toast.success(tr(`已保存工作负载 Role ${payload.role_name}，请点击「应用联动」使其生效`, `Saved role ${payload.role_name}. Click "Apply Integration" to take effect.`));
       }
       setShowRole(false);
       setEditingRole(null);
       setPlan(null);
       await selectItem(selected.id);
     } catch (ex: any) {
-      toast.error(ex?.message || '保存 Role 失败');
+      toast.error(ex?.message || tr('保存 Role 失败', 'Failed to save role'));
     } finally {
       setSavingRole(false);
     }
@@ -429,9 +437,9 @@ export function IntegrationsPage() {
   const deleteIntegration = async () => {
     if (!selected || deleteRef.current || deletePending) return;
     if (
-      !(await askConfirm(`确定要删除联动配置「${selected.name}」吗？`, {
-        title: '删除集群联动',
-        confirmText: '确认删除',
+      !(await askConfirm(tr(`确定要删除联动配置「${selected.name}」吗？`, `Delete integration "${selected.name}"?`), {
+        title: tr('删除集群联动', 'Delete Integration'),
+        confirmText: tr('确认删除', 'Delete'),
         danger: true,
       }))
     ) {
@@ -444,14 +452,14 @@ export function IntegrationsPage() {
       const res = await apiDelete(`/api/v1/integrations/${selected.id}`);
       if (res?.task?.id) {
         setDeleteTaskId(res.task.id);
-        openTask(res.task.id, `删除联动：${selected.name}`);
+        openTask(res.task.id, tr(`删除联动：${selected.name}`, `Delete Integration: ${selected.name}`));
       } else {
         setSelected(null);
-        toast.success('联动配置已删除');
+        toast.success(tr('联动配置已删除', 'Integration deleted'));
         await load();
       }
     } catch (ex: any) {
-      toast.error(ex?.message || '删除联动失败');
+      toast.error(ex?.message || tr('删除联动失败', 'Failed to delete integration'));
     } finally {
       deleteRef.current = false;
       setDeleting(false);
@@ -461,9 +469,9 @@ export function IntegrationsPage() {
   const deleteRole = async (r: any) => {
     if (!selected) return;
     if (
-      !(await askConfirm(`确认删除工作负载 Role「${r.role_name}」吗？`, {
-        title: '删除 Role',
-        confirmText: '确认删除',
+      !(await askConfirm(tr(`确认删除工作负载 Role「${r.role_name}」吗？`, `Delete workload role "${r.role_name}"?`), {
+        title: tr('删除 Role', 'Delete Role'),
+        confirmText: tr('确认删除', 'Delete'),
         danger: true,
       }))
     ) {
@@ -471,10 +479,10 @@ export function IntegrationsPage() {
     }
     try {
       await apiDelete(`/api/v1/integrations/${selected.id}/roles/${r.id}`);
-      toast.success(`已删除 Role ${r.role_name}`);
+      toast.success(tr(`已删除 Role ${r.role_name}`, `Deleted role ${r.role_name}`));
       await selectItem(selected.id);
     } catch (ex: any) {
-      toast.error(ex?.message || '删除 Role 失败');
+      toast.error(ex?.message || tr('删除 Role 失败', 'Failed to delete role'));
     }
   };
 
@@ -488,7 +496,7 @@ export function IntegrationsPage() {
         payload.login_role = doctorLoginRole;
         payload.driver = doctorDriver;
         if (doctorSecretPath.trim()) {
-          payload.secret_path = parseKVPath(doctorSecretPath).rolePath;
+          payload.secret_path = parseKVPath(doctorSecretPath, 'secret', locale).rolePath;
         }
       }
       const r = await apiPost(`/api/v1/integrations/${selected.id}/doctor`, payload);
@@ -496,7 +504,7 @@ export function IntegrationsPage() {
       setDoctorOpen(true);
       await load(selected.id);
     } catch (ex: any) {
-      toast.error(ex?.message || '联动体检失败');
+      toast.error(ex?.message || tr('联动体检失败', 'Integration doctor check failed'));
     } finally {
       setDoctorRunning(false);
     }
@@ -539,7 +547,7 @@ export function IntegrationsPage() {
       });
     } catch (ex: any) {
       setExampleModal((prev) => (prev ? { ...prev, loading: false } : null));
-      toast.error(ex?.message || '生成示例 Job 失败');
+      toast.error(ex?.message || tr('生成示例 Job 失败', 'Failed to generate example job'));
     }
   };
 
@@ -593,45 +601,55 @@ export function IntegrationsPage() {
   const pipelineSteps = [
     {
       num: '1',
-      title: '准备 Nomad 与 Vault',
-      desc: hasBothClusters ? `${readyNomad.name} 与 ${readyVault.name} 已就绪` : '需要至少 1 个已部署 Nomad 和 1 个已解封 Vault',
+      title: tr('准备 Nomad 与 Vault', 'Prepare Nomad & Vault'),
+      desc: hasBothClusters
+        ? tr(`${readyNomad.name} 与 ${readyVault.name} 已就绪`, `${readyNomad.name} and ${readyVault.name} are ready`)
+        : tr('需要至少 1 个已部署 Nomad 和 1 个已解封 Vault', 'Requires at least 1 initialized Nomad and 1 unsealed Vault cluster'),
       done: hasBothClusters,
-      cta: !readyNomad ? { label: '去建 Nomad', to: '/nomad' } : !readyVault ? { label: '去建/解封 Vault', to: '/vault' } : null,
+      cta: !readyNomad ? { label: tr('去建 Nomad', 'Setup Nomad'), to: '/nomad' } : !readyVault ? { label: tr('去建/解封 Vault', 'Setup / Unseal Vault'), to: '/vault' } : null,
     },
     {
       num: '2',
-      title: '在 Vault 存入密钥',
-      desc: hasKVMounts ? `已启用 KV 存储：${vaultMounts.join(', ')}` : '在 Vault 启用 KV v2 并建一条应用密钥',
+      title: tr('在 Vault 存入密钥', 'Store Secrets in Vault'),
+      desc: hasKVMounts
+        ? tr(`已启用 KV 存储：${vaultMounts.join(', ')}`, `KV mounts enabled: ${vaultMounts.join(', ')}`)
+        : tr('在 Vault 启用 KV v2 并建一条应用密钥', 'Enable KV v2 in Vault and create an app secret'),
       done: hasKVMounts,
-      cta: targetVaultId ? { label: '去 Vault 管理密钥', to: `/vault?id=${targetVaultId}&tab=manage` } : { label: '前往 Vault', to: '/vault' },
+      cta: targetVaultId ? { label: tr('去 Vault 管理密钥', 'Manage Secrets'), to: `/vault?id=${targetVaultId}&tab=manage` } : { label: tr('前往 Vault', 'Go to Vault'), to: '/vault' },
     },
     {
       num: '3',
-      title: '建联动并添加 Role',
-      desc: hasIntegrationAndRole ? `已配置 ${(selected.roles || []).length} 个工作负载 Role` : 'Role 用来指定“哪个命名空间能读哪条路径”',
+      title: tr('建联动并添加 Role', 'Create Integration & Role'),
+      desc: hasIntegrationAndRole
+        ? tr(`已配置 ${(selected.roles || []).length} 个工作负载 Role`, `${(selected.roles || []).length} workload role(s) configured`)
+        : tr('Role 用来指定“哪个命名空间能读哪条路径”', 'A Role defines which Nomad namespace can read which secret paths'),
       done: hasIntegrationAndRole,
       cta: null,
     },
     {
       num: '4',
-      title: '点击「应用联动」',
-      desc: isApplied ? '配置已下发到 Nomad 与 Vault' : '草稿修改必须点「应用联动」后才真正生效',
+      title: tr('点击「应用联动」', 'Apply Integration'),
+      desc: isApplied
+        ? tr('配置已下发到 Nomad 与 Vault', 'Configuration synced to Nomad and Vault')
+        : tr('草稿修改必须点「应用联动」后才真正生效', 'Draft edits take effect only after clicking "Apply Integration"'),
       done: isApplied,
       cta: null,
     },
     {
       num: '5',
-      title: '体检与真实登录测试',
-      desc: doctorPassed ? `最近体检：${lastDoc.summary}` : '一键检验双向信任并可实测 Job 获取密钥',
+      title: tr('体检与真实登录测试', 'Doctor & Live Login Test'),
+      desc: doctorPassed
+        ? tr(`最近体检：${lastDoc.summary}`, `Latest check: ${lastDoc.summary}`)
+        : tr('一键检验双向信任并可实测 Job 获取密钥', 'Verify OIDC/JWT trust and test reading secrets from a live job'),
       done: doctorPassed,
       cta: null,
     },
     {
       num: '6',
-      title: '在 Job 中使用',
-      desc: '点 Role 旁的「示例 Job」一键带入 Job 中心运行',
+      title: tr('在 Job 中使用', 'Use in Nomad Jobs'),
+      desc: tr('点 Role 旁的「示例 Job」一键带入 Job 中心运行', 'Click "Sample Job" next to a Role to launch it in Job Center'),
       done: isApplied && doctorPassed,
-      cta: readyNomad ? { label: '打开 Job 中心', to: `/jobs?cluster_id=${readyNomad.id}` } : { label: '打开 Job 中心', to: '/jobs' },
+      cta: readyNomad ? { label: tr('打开 Job 中心', 'Open Job Center'), to: `/jobs?cluster_id=${readyNomad.id}` } : { label: tr('打开 Job 中心', 'Open Job Center'), to: '/jobs' },
     },
   ];
 
@@ -640,7 +658,7 @@ export function IntegrationsPage() {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((raw) => parseKVPath(raw, vaultMounts[0] || 'secret'));
+    .map((raw) => parseKVPath(raw, vaultMounts[0] || 'secret', locale));
   const validRolePreviews = roleParsedPreviews.filter((p) => p.path);
   const hasAccidentalDataPrefix = roleForm.policy_mode === 'explicit' && roleParsedPreviews.some((p) => p.hadDataPrefix);
   const hasTrailingSlashWarning = roleForm.policy_mode === 'explicit' && validRolePreviews.some((p) => p.hasTrailingSlash && !p.isWildcard);
@@ -648,18 +666,18 @@ export function IntegrationsPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="集群联动"
-        subtitle="让 Nomad 任务自动拿“动态门禁卡”去 Vault 安全读取密码，无需在 Job 中写死任何凭据"
+        title={tr('集群联动', 'Integrations')}
+        subtitle={tr('让 Nomad 任务自动拿“动态门禁卡”去 Vault 安全读取密码，无需在 Job 中写死任何凭据', 'Let Nomad jobs exchange OIDC workload identities for dynamic Vault tokens without hardcoding secrets')}
         actions={
           <>
             <Button onClick={() => void load()}>
               <RefreshCw className="h-4 w-4" />
-              <span>刷新</span>
+              <span>{tr('刷新', 'Refresh')}</span>
             </Button>
             {isAdmin && (
               <Button variant="primary" onClick={openCreateModal}>
                 <Plus className="h-4 w-4" />
-                <span>新建联动</span>
+                <span>{tr('新建联动', 'New Integration')}</span>
               </Button>
             )}
           </>
@@ -676,10 +694,13 @@ export function IntegrationsPage() {
               <div className="flex flex-wrap items-center gap-2.5 min-w-0">
                 <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700 dark:text-emerald-300 shrink-0">
                   <CheckCircle2 className="h-4 w-4" />
-                  联动配置已下发生效
+                  {tr('联动配置已下发生效', 'Integration Applied & Active')}
                 </span>
                 <span className="text-slate-500 dark:text-slate-400">
-                  已完成 {doneCount}/{pipelineSteps.length} 步 · Role 填路径不写 <code className="font-mono">data/</code>，Job 模板读 KV v2 需加 <code className="font-mono">/data/</code>
+                  {tr(
+                    <>已完成 {doneCount}/{pipelineSteps.length} 步 · Role 填路径不写 <code className="font-mono">data/</code>，Job 模板读 KV v2 需加 <code className="font-mono">/data/</code></>,
+                    <>Completed {doneCount}/{pipelineSteps.length} steps · Omit <code className="font-mono">data/</code> in Role paths; add <code className="font-mono">/data/</code> in KV v2 job templates</>,
+                  )}
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-3 shrink-0">
@@ -687,14 +708,14 @@ export function IntegrationsPage() {
                   to={targetVaultId ? `/vault?id=${targetVaultId}&tab=manage` : '/vault'}
                   className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                 >
-                  <span>Vault 密钥</span>
+                  <span>{tr('Vault 密钥', 'Vault Secrets')}</span>
                   <ArrowUpRight className="h-3 w-3" />
                 </Link>
                 <Link
                   to={readyNomad ? `/jobs?cluster_id=${readyNomad.id}` : '/jobs'}
                   className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                 >
-                  <span>Job 中心</span>
+                  <span>{tr('Job 中心', 'Job Center')}</span>
                   <ArrowUpRight className="h-3 w-3" />
                 </Link>
                 <button
@@ -702,7 +723,7 @@ export function IntegrationsPage() {
                   onClick={() => setGuideExpanded(true)}
                   className="inline-flex items-center gap-1 rounded-lg border border-slate-200/80 bg-white px-2.5 py-1 font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
                 >
-                  <span>展开 6 步指南</span>
+                  <span>{tr('展开 6 步指南', 'Show 6-Step Guide')}</span>
                   <ChevronDown className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -714,23 +735,26 @@ export function IntegrationsPage() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="flex items-center gap-2">
-                  <h2 className="font-semibold text-slate-900 dark:text-slate-100">联动上手 6 步通关路线</h2>
+                  <h2 className="font-semibold text-slate-900 dark:text-slate-100">{tr('联动上手 6 步通关路线', '6-Step Integration Setup Guide')}</h2>
                   <Badge tone={isApplied ? 'green' : 'blue'}>{doneCount} / {pipelineSteps.length}</Badge>
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                  照着顺序完成每一步。小提醒：<strong>Role 里填路径不写 data/，Job 模板里读 KV v2 必须多写一层 /data/</strong>。
+                  {tr(
+                    <>照着顺序完成每一步。小提醒：<strong>Role 里填路径不写 data/，Job 模板里读 KV v2 必须多写一层 /data/</strong>。</>,
+                    <>Follow each step in order. Tip: <strong>omit data/ in Role paths, and include /data/ inside KV v2 Job templates</strong>.</>,
+                  )}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {selected && isAdmin && !selected.roles?.length && (
                   <Button size="sm" variant="primary" onClick={openAddRole}>
                     <Plus className="h-3.5 w-3.5" />
-                    <span>添加第一个 Role</span>
+                    <span>{tr('添加第一个 Role', 'Add First Role')}</span>
                   </Button>
                 )}
                 {selected && isAdmin && needsApply && (
                   <Button size="sm" variant="primary" loading={applying} disabled={applyPending || deletePending} onClick={() => void applyIntegration()}>
-                    {applyPending ? '正在应用…' : '立即应用联动'}
+                    {applyPending ? tr('正在应用…', 'Applying...') : tr('立即应用联动', 'Apply Integration')}
                   </Button>
                 )}
                 {isApplied && (
@@ -739,7 +763,7 @@ export function IntegrationsPage() {
                     onClick={() => setGuideExpanded(false)}
                     className="inline-flex items-center gap-1 rounded-lg border border-slate-200/80 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
                   >
-                    <span>收起指南</span>
+                    <span>{tr('收起指南', 'Collapse Guide')}</span>
                     <ChevronUp className="h-3.5 w-3.5" />
                   </button>
                 )}
@@ -790,19 +814,22 @@ export function IntegrationsPage() {
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" />
             <span>
-              当前联动或部分 Role 处于<strong>待应用（草稿/异常）</strong>状态，尚未下发到 Nomad 和 Vault 集群。请先点击「应用联动」，否则 Job 运行时无法获取密钥。
+              {tr(
+                <>当前联动或部分 Role 处于<strong>待应用（草稿/异常）</strong>状态，尚未下发到 Nomad 和 Vault 集群。请先点击「应用联动」，否则 Job 运行时无法获取密钥。</>,
+                <>This integration or some roles are <strong>pending apply</strong> and not yet synced to Nomad & Vault. Click &quot;Apply Integration&quot; before submitting jobs.</>,
+              )}
             </span>
           </div>
           {isAdmin && (
             <Button size="sm" variant="primary" loading={applying} disabled={applyPending || deletePending} onClick={() => void applyIntegration()}>
-              {applyPending ? '正在应用…' : '立即应用联动'}
+              {applyPending ? tr('正在应用…', 'Applying...') : tr('立即应用联动', 'Apply Integration')}
             </Button>
           )}
         </div>
       )}
 
       <ItemSwitcher
-        label="联动配置"
+        label={tr('联动配置', 'Integration')}
         selectedId={selected?.id || ''}
         onSelect={(id) => void selectItem(id)}
         items={items.map((it) => ({
@@ -819,31 +846,31 @@ export function IntegrationsPage() {
         <Card>
           <EmptyState
             icon={<Link2 className="w-6 h-6" />}
-            title="暂无 Nomad-Vault 联动配置"
-            description="点击右上角「新建联动」，选好 Nomad 与 Vault 集群，即可打通自动认证并生成可直接使用的工作负载示例。"
+            title={tr('暂无 Nomad-Vault 联动配置', 'No Nomad-Vault Integrations')}
+            description={tr('点击右上角「新建联动」，选好 Nomad 与 Vault 集群，即可打通自动认证并生成可直接使用的工作负载示例。', 'Click "New Integration" above to link a Nomad cluster with a Vault cluster and generate ready-to-run workload examples.')}
           />
         </Card>
       ) : (
         <div className="space-y-4">
           <Card
-            title={`${selected.name}（${selected.source_cluster || selected.source_cluster_id} ↔ ${selected.target_cluster || selected.target_cluster_id}）`}
+            title={`${selected.name} (${selected.source_cluster || selected.source_cluster_id} ↔ ${selected.target_cluster || selected.target_cluster_id})`}
             actions={
               isAdmin && (
                 <div className="flex flex-wrap gap-1.5">
                   <Button size="sm" onClick={openEditIntegration}>
                     <Pencil className="h-3.5 w-3.5" />
-                    <span>编辑</span>
+                    <span>{tr('编辑', 'Edit')}</span>
                   </Button>
                   <Button
                     size="sm"
-                    title="对比 Nomad 联动配置、Vault JWT Auth 挂载、Role 与 Policy 期望状态与当前线上状态的差异"
+                    title={tr('对比 Nomad 联动配置、Vault JWT Auth 挂载、Role 与 Policy 期望状态与当前线上状态的差异', 'Preview changes across Nomad config, Vault JWT Auth mount, Roles, and Policies')}
                     onClick={() =>
                       void apiPost(`/api/v1/integrations/${selected.id}/plan`, {})
                         .then((r) => setPlan(r.plan))
                         .catch((ex) => toast.error(ex.message))
                     }
                   >
-                    Plan 预览
+                    {tr('Plan 预览', 'Plan Preview')}
                   </Button>
                   <Button
                     size="sm"
@@ -852,18 +879,18 @@ export function IntegrationsPage() {
                     disabled={applyPending || deletePending}
                     onClick={() => void applyIntegration()}
                   >
-                    {applyPending ? '正在应用…' : needsApply ? '应用联动' : '重新应用'}
+                    {applyPending ? tr('正在应用…', 'Applying...') : needsApply ? tr('应用联动', 'Apply Integration') : tr('重新应用', 'Re-apply')}
                   </Button>
                   <Button
                     size="sm"
-                    title="依次检验 Nomad JWKS 公钥、节点配置、Vault JWT 挂载与 Role，并支持直接跑一次真实任务验证登录读密钥"
+                    title={tr('依次检验 Nomad JWKS 公钥、节点配置、Vault JWT 挂载与 Role，并支持直接跑一次真实任务验证登录读密钥', 'Verify Nomad JWKS, node config, Vault JWT mount, and Roles, with optional live job test')}
                     onClick={openDoctorModal}
                   >
                     <ShieldCheck className="h-3.5 w-3.5" />
-                    <span>链路体检</span>
+                    <span>{tr('链路体检', 'Doctor Check')}</span>
                   </Button>
                   <Button size="sm" variant="danger-outline" loading={deleting} disabled={deletePending} onClick={() => void deleteIntegration()}>
-                    {deletePending ? '正在删除…' : '删除'}
+                    {deletePending ? tr('正在删除…', 'Deleting...') : tr('删除', 'Delete')}
                   </Button>
                 </div>
               )
@@ -873,12 +900,12 @@ export function IntegrationsPage() {
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-slate-950/40">
                 <div>
                   <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                    <TermLabel term="Auth Mount" tip="Vault 中启用 JWT 认证引擎的挂载路径，用于校验 Nomad 签发给工作负载的身份 JWT（OIDC / JWKS）。" />
+                    <TermLabel term="Auth Mount" tip={tr('Vault 中启用 JWT 认证引擎的挂载路径，用于校验 Nomad 签发给工作负载的身份 JWT（OIDC / JWKS）。', 'Vault JWT Auth mount path used to verify workload identity JWTs issued by Nomad.')} />
                   </div>
                   <div className="mt-1 font-mono font-semibold text-slate-900 dark:text-slate-100 truncate">{selected.auth_path}</div>
                 </div>
                 <div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400">JWKS 模式</div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">{tr('JWKS 模式', 'JWKS Mode')}</div>
                   <div className="mt-1 font-mono font-semibold text-slate-900 dark:text-slate-100">{selected.config?.jwks_mode || 'url'}</div>
                 </div>
                 <div>
@@ -886,15 +913,15 @@ export function IntegrationsPage() {
                   <div className="mt-1 font-mono font-semibold text-slate-900 dark:text-slate-100 truncate">{(selected.config?.aud || ['vault.io']).join(', ')}</div>
                 </div>
                 <div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400">身份 TTL</div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">{tr('身份 TTL', 'Identity TTL')}</div>
                   <div className="mt-1 font-mono font-semibold text-slate-900 dark:text-slate-100">{selected.config?.identity_ttl || '1h'}</div>
                 </div>
                 <div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400">当前状态</div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">{tr('当前状态', 'Status')}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     <StatusBadge value={selected.status} />
                     {selected.config?.default_role && (
-                      <Badge>默认 {selected.config.default_role}</Badge>
+                      <Badge>{tr('默认', 'Default')} {selected.config.default_role}</Badge>
                     )}
                   </div>
                 </div>
@@ -904,21 +931,21 @@ export function IntegrationsPage() {
                   to={`/nomad?id=${encodeURIComponent(selected.source_cluster_id)}`}
                   className="inline-flex items-center gap-0.5 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                 >
-                  <span>查看 Nomad 集群</span>
+                  <span>{tr('查看 Nomad 集群', 'Open Nomad Cluster')}</span>
                   <ArrowUpRight className="h-3 w-3" />
                 </Link>
                 <Link
                   to={`/vault?id=${encodeURIComponent(selected.target_cluster_id)}`}
                   className="inline-flex items-center gap-0.5 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                 >
-                  <span>查看 Vault 集群</span>
+                  <span>{tr('查看 Vault 集群', 'Open Vault Cluster')}</span>
                   <ArrowUpRight className="h-3 w-3" />
                 </Link>
                 <Link
                   to={`/jobs?cluster_id=${encodeURIComponent(selected.source_cluster_id)}`}
                   className="inline-flex items-center gap-0.5 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                 >
-                  <span>前往 Job 中心</span>
+                  <span>{tr('前往 Job 中心', 'Go to Job Center')}</span>
                   <ArrowUpRight className="h-3 w-3" />
                 </Link>
               </div>
@@ -926,18 +953,18 @@ export function IntegrationsPage() {
 
             <div className="mb-2.5 flex items-center justify-between gap-2">
               <div>
-                <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">工作负载 Roles</span>
-                <span className="ml-2 text-[11px] text-slate-500">每个 Role 决定 Job 的 vault.role 能读 Vault 里哪几条路径</span>
+                <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">{tr('工作负载 Roles', 'Workload Roles')}</span>
+                <span className="ml-2 text-[11px] text-slate-500">{tr('每个 Role 决定 Job 的 vault.role 能读 Vault 里哪几条路径', 'Each Role controls which Vault secret paths a Job referencing vault.role may access')}</span>
               </div>
               {isAdmin && (
                 <Button size="sm" onClick={openAddRole}>
                   <Plus className="h-3.5 w-3.5" />
-                  <span>添加 Role</span>
+                  <span>{tr('添加 Role', 'Add Role')}</span>
                 </Button>
               )}
             </div>
             {(selected.roles || []).length === 0 ? (
-              <EmptyState title="暂无 Role" description="添加至少一个工作负载 Role（例如 postgres），授权它读取 Vault 里的某个密钥路径。" />
+              <EmptyState title={tr('暂无 Role', 'No Roles')} description={tr('添加至少一个工作负载 Role（例如 postgres），授权它读取 Vault 里的某个密钥路径。', 'Add at least one workload Role (e.g. postgres) authorizing it to read a Vault secret path.')} />
             ) : (
               <div className="space-y-2 text-xs">
                 {selected.roles.map((r: any) => (
@@ -946,20 +973,20 @@ export function IntegrationsPage() {
                       <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">{r.role_name}</span>
                       <StatusBadge value={r.status} />
                       <span className="text-slate-500 break-all">
-                        {r.policy_mode === 'explicit' ? '指定固定路径' : '按任务自动隔离'} · {(r.secret_paths || []).join(', ') || '默认挂载'} · Namespace: {r.bound_claims?.nomad_namespace || 'default'} · 周期: {r.token_period || '1h'}
+                        {r.policy_mode === 'explicit' ? tr('指定固定路径', 'Explicit Paths') : tr('按任务自动隔离', 'Templated Per-Job')} · {(r.secret_paths || []).join(', ') || tr('默认挂载', 'Default Mount')} · Namespace: {r.bound_claims?.nomad_namespace || 'default'} · {tr('周期', 'Period')}: {r.token_period || '1h'}
                       </span>
                     </div>
                     {isAdmin && (
                       <div className="flex flex-wrap gap-1.5 shrink-0">
-                        <Button size="sm" aria-label={`编辑 Role ${r.role_name}`} onClick={() => openEditRole(r)}>
+                        <Button size="sm" aria-label={tr(`编辑 Role ${r.role_name}`, `Edit Role ${r.role_name}`)} onClick={() => openEditRole(r)}>
                           <Pencil className="h-3.5 w-3.5" />
-                          <span>编辑</span>
+                          <span>{tr('编辑', 'Edit')}</span>
                         </Button>
                         <Button size="sm" onClick={() => openExampleForRole(r)}>
                           <Play className="h-3.5 w-3.5 text-indigo-500" />
-                          <span>示例 Job</span>
+                          <span>{tr('示例 Job', 'Sample Job')}</span>
                         </Button>
-                        <Button size="sm" variant="danger-outline" aria-label={`删除 Role ${r.role_name}`} onClick={() => void deleteRole(r)}>
+                        <Button size="sm" variant="danger-outline" aria-label={tr(`删除 Role ${r.role_name}`, `Delete Role ${r.role_name}`)} onClick={() => void deleteRole(r)}>
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
@@ -973,12 +1000,12 @@ export function IntegrationsPage() {
       )}
 
       {/* Plan 预览弹窗：顶部人话摘要 + 下方原始 JSON */}
-      <Modal open={Boolean(plan)} title="联动 Plan 预览" onClose={() => setPlan(null)} wide>
+      <Modal open={Boolean(plan)} title={tr('联动 Plan 预览', 'Integration Plan Preview')} onClose={() => setPlan(null)} wide>
         {plan && (
           <div className="space-y-3 text-xs">
             {plan.errors?.length > 0 && (
               <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-rose-900 dark:border-rose-500/30 dark:bg-rose-950/30 dark:text-rose-200">
-                <div className="font-semibold mb-1">预检未通过（应用前需先处理）：</div>
+                <div className="font-semibold mb-1">{tr('预检未通过（应用前需先处理）：', 'Preflight errors (resolve before applying):')}</div>
                 <ul className="list-disc pl-4 space-y-1">
                   {plan.errors.map((e: string, idx: number) => <li key={idx}>{e}</li>)}
                 </ul>
@@ -986,7 +1013,7 @@ export function IntegrationsPage() {
             )}
             {plan.warnings?.length > 0 && (
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
-                <div className="font-semibold mb-1">注意事项：</div>
+                <div className="font-semibold mb-1">{tr('注意事项：', 'Warnings:')}</div>
                 <ul className="list-disc pl-4 space-y-1">
                   {plan.warnings.map((w: string, idx: number) => <li key={idx}>{w}</li>)}
                 </ul>
@@ -994,31 +1021,42 @@ export function IntegrationsPage() {
             )}
             <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-2 dark:border-slate-800 dark:bg-slate-950/50">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold text-slate-800 dark:text-slate-100">本次应用将会做什么</span>
+                <span className="font-semibold text-slate-800 dark:text-slate-100">{tr('本次应用将会做什么', 'What Apply Will Do')}</span>
                 <Badge tone={plan.scope === 'vault_and_nomad' ? 'amber' : 'green'}>
-                  {plan.scope === 'vault_and_nomad' ? '会更新 Vault 并滚动重启 Nomad 节点' : '仅更新 Vault，不重启 Nomad'}
+                  {plan.scope === 'vault_and_nomad' ? tr('会更新 Vault 并滚动重启 Nomad 节点', 'Updates Vault & restarts Nomad nodes') : tr('仅更新 Vault，不重启 Nomad', 'Vault-only update, no Nomad restart')}
                 </Badge>
               </div>
               <ul className="space-y-1 text-slate-600 dark:text-slate-300">
-                <li>• <strong>Vault 侧</strong>：配置 JWT 认证路径 <code className="font-mono">{plan.auth_path}</code>（公钥来源：<code className="font-mono">{plan.jwks_url}</code>），同步 {Object.keys(plan.roles || {}).length} 个 Role 与对应 Policy。</li>
-                <li>• <strong>Nomad 侧</strong>：{plan.scope === 'vault_and_nomad' ? `下发 Vault 联动地址（${plan.vault_address}）与 CA 证书到 Nomad 节点，并触发节点配置生效。` : 'Nomad 节点侧配置无变化，无需重启任何节点。'}</li>
+                <li>
+                  • <strong>{tr('Vault 侧', 'Vault')}</strong>
+                  {tr(
+                    <>：配置 JWT 认证路径 <code className="font-mono">{plan.auth_path}</code>（公钥来源：<code className="font-mono">{plan.jwks_url}</code>），同步 {Object.keys(plan.roles || {}).length} 个 Role 与对应 Policy。</>,
+                    <>: Configure JWT auth mount <code className="font-mono">{plan.auth_path}</code> (JWKS: <code className="font-mono">{plan.jwks_url}</code>) and sync {Object.keys(plan.roles || {}).length} role(s) and policies.</>,
+                  )}
+                </li>
+                <li>
+                  • <strong>{tr('Nomad 侧', 'Nomad')}</strong>
+                  {plan.scope === 'vault_and_nomad'
+                    ? tr(`：下发 Vault 联动地址（${plan.vault_address}）与 CA 证书到 Nomad 节点，并触发节点配置生效。`, `: Push Vault address (${plan.vault_address}) and CA cert to Nomad nodes and apply config.`)
+                    : tr('：Nomad 节点侧配置无变化，无需重启任何节点。', ': No Nomad node config changes required; zero restarts.')}
+                </li>
               </ul>
             </div>
             <details>
-              <summary className="cursor-pointer py-1 font-medium text-slate-600 dark:text-slate-300">查看完整 Plan JSON 详情</summary>
+              <summary className="cursor-pointer py-1 font-medium text-slate-600 dark:text-slate-300">{tr('查看完整 Plan JSON 详情', 'View Full Plan JSON')}</summary>
               <pre className="mt-2 max-h-80 overflow-auto rounded-xl bg-slate-950 p-4 font-mono text-[11px] text-slate-100">
                 {JSON.stringify(plan, null, 2)}
               </pre>
             </details>
             <div className="flex justify-end">
-              <Button size="sm" variant="primary" onClick={() => setPlan(null)}>关闭</Button>
+              <Button size="sm" variant="primary" onClick={() => setPlan(null)}>{tr('关闭', 'Close')}</Button>
             </div>
           </div>
         )}
       </Modal>
 
       {/* 链路体检 + 真实登录验证弹窗 */}
-      <Modal open={doctorOpen} title="联动链路体检" onClose={() => setDoctorOpen(false)} wide>
+      <Modal open={doctorOpen} title={tr('联动链路体检', 'Integration Doctor Check')} onClose={() => setDoctorOpen(false)} wide>
         <div className="space-y-4 text-xs">
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-3 dark:border-slate-800 dark:bg-slate-950/40">
             <label className="flex items-center gap-2 font-medium text-slate-800 dark:text-slate-100">
@@ -1027,12 +1065,12 @@ export function IntegrationsPage() {
                 checked={doctorWithLogin}
                 onChange={(e) => setDoctorWithLogin(e.target.checked)}
               />
-              <span>同时在 Nomad 真实提交一个短探针任务，实测换取 Vault Token 与读取密钥</span>
+              <span>{tr('同时在 Nomad 真实提交一个短探针任务，实测换取 Vault Token 与读取密钥', 'Also submit a short probe job in Nomad to verify live Vault token exchange & secret read')}</span>
             </label>
             {doctorWithLogin && (
               <div className="grid gap-2.5 sm:grid-cols-3">
                 <Select
-                  label="测试 Role"
+                  label={tr('测试 Role', 'Test Role')}
                   value={doctorLoginRole}
                   onChange={(e) => {
                     const next = e.target.value;
@@ -1042,33 +1080,33 @@ export function IntegrationsPage() {
                     if (p && !p.includes('*')) setDoctorSecretPath(p);
                   }}
                 >
-                  <option value="">请选择 Role</option>
+                  <option value="">{tr('请选择 Role', 'Select Role')}</option>
                   {(selected?.roles || []).map((r: any) => (
                     <option key={r.id} value={r.role_name}>{r.role_name}</option>
                   ))}
                 </Select>
                 <Input
-                  label="顺带测试读取的密钥路径（可选）"
-                  placeholder="例如 secret/apps/postgres"
+                  label={tr('顺带测试读取的密钥路径（可选）', 'Secret Path to Read (optional)')}
+                  placeholder={tr('例如 secret/apps/postgres', 'e.g. secret/apps/postgres')}
                   value={doctorSecretPath}
                   onChange={(e) => setDoctorSecretPath(e.target.value)}
                 />
                 <Select
-                  label="探针 Driver"
+                  label={tr('探针 Driver', 'Probe Driver')}
                   value={doctorDriver}
                   onChange={(e) => setDoctorDriver(e.target.value as 'raw_exec' | 'docker')}
                 >
-                  <option value="docker">docker（推荐，默认开箱可用）</option>
-                  <option value="raw_exec">raw_exec（需在节点启用 raw_exec）</option>
+                  <option value="docker">{tr('docker（推荐，默认开箱可用）', 'docker (recommended, out-of-the-box)')}</option>
+                  <option value="raw_exec">{tr('raw_exec（需在节点启用 raw_exec）', 'raw_exec (requires raw_exec enabled)')}</option>
                 </Select>
               </div>
             )}
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] text-slate-500">
-                {doctor?.summary ? `最近结果：${doctor.summary}` : '点击右侧按钮执行体检'}
+                {doctor?.summary ? tr(`最近结果：${doctor.summary}`, `Latest result: ${doctor.summary}`) : tr('点击右侧按钮执行体检', 'Click the button on the right to run checks')}
               </span>
               <Button size="sm" variant="primary" loading={doctorRunning} onClick={() => void runDoctor()}>
-                {doctorWithLogin ? '运行全链路实测体检' : '重新运行基础体检'}
+                {doctorWithLogin ? tr('运行全链路实测体检', 'Run Full Live Check') : tr('重新运行基础体检', 'Re-run Basic Check')}
               </Button>
             </div>
           </div>
@@ -1079,20 +1117,20 @@ export function IntegrationsPage() {
                 <div key={i} className="rounded-xl border border-slate-200 p-3 dark:border-slate-800 space-y-1">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-medium text-slate-800 dark:text-slate-100">
-                      <span className="text-slate-400 mr-1.5">{STAGE_LABELS[c.node] || c.node}</span>
+                      <span className="text-slate-400 mr-1.5">{(isEn ? STAGE_LABELS[c.node]?.en : STAGE_LABELS[c.node]?.zh) || c.node}</span>
                       <b>{c.name}</b>
                     </span>
                     <StatusBadge value={c.status} />
                   </div>
                   <p className="text-slate-600 dark:text-slate-300 break-all">{c.message}</p>
-                  {c.hint && <p className="text-[11px] text-amber-700 dark:text-amber-300">建议：{c.hint}</p>}
+                  {c.hint && <p className="text-[11px] text-amber-700 dark:text-amber-300">{tr('建议：', 'Hint: ')}{c.hint}</p>}
                 </div>
               ))}
             </div>
           )}
 
           <div className="flex justify-end">
-            <Button size="sm" onClick={() => setDoctorOpen(false)}>关闭</Button>
+            <Button size="sm" onClick={() => setDoctorOpen(false)}>{tr('关闭', 'Close')}</Button>
           </div>
         </div>
       </Modal>
@@ -1100,7 +1138,7 @@ export function IntegrationsPage() {
       {/* 多场景示例 Job 弹窗 + 一键带入 Job 中心 */}
       <Modal
         open={Boolean(exampleModal)}
-        title={`示例 Nomad Job · Role: ${exampleModal?.role?.role_name || ''}`}
+        title={tr(`示例 Nomad Job · Role: ${exampleModal?.role?.role_name || ''}`, `Sample Nomad Job · Role: ${exampleModal?.role?.role_name || ''}`)}
         onClose={() => setExampleModal(null)}
         wide
       >
@@ -1109,7 +1147,7 @@ export function IntegrationsPage() {
             {(selected?.status !== 'applied' || exampleModal.role?.status !== 'applied') && (
               <div className="flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
-                <span>提示：当前联动或该 Role 尚未点击「应用联动」下发，直接提交此 Job 会鉴权失败。</span>
+                <span>{tr('提示：当前联动或该 Role 尚未点击「应用联动」下发，直接提交此 Job 会鉴权失败。', 'Note: Integration or Role has not been applied yet; submitting this Job will fail Vault auth until applied.')}</span>
               </div>
             )}
 
@@ -1121,22 +1159,25 @@ export function IntegrationsPage() {
                   variant={exampleModal.kind === k.id ? 'primary' : 'secondary'}
                   onClick={() => void fetchExample(exampleModal.role, k.id, exampleModal.secretPath)}
                 >
-                  {k.label}
+                  {isEn ? k.labelEn : k.label}
                 </Button>
               ))}
             </div>
 
             <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-5 text-slate-600 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-300">
-              {EXAMPLE_KINDS.find((k) => k.id === exampleModal.kind)?.desc}
+              {(() => {
+                const found = EXAMPLE_KINDS.find((k) => k.id === exampleModal.kind);
+                return found ? (isEn ? found.descEn : found.desc) : '';
+              })()}
             </p>
 
             <div className="flex flex-wrap items-end gap-2">
               <div className="min-w-0 flex-1">
                 <Input
-                  label="示例要读取的 Secret 路径（格式 <KV挂载>/<路径>，无需写 data/）"
+                  label={tr('示例要读取的 Secret 路径（格式 <KV挂载>/<路径>，无需写 data/）', 'Secret Path to Read (<mount>/<path>, without data/)')}
                   value={exampleModal.secretPath}
                   onChange={(e) => setExampleModal({ ...exampleModal, secretPath: e.target.value })}
-                  placeholder="例如 secret/apps/postgres"
+                  placeholder={tr('例如 secret/apps/postgres', 'e.g. secret/apps/postgres')}
                 />
               </div>
               <Button
@@ -1144,7 +1185,7 @@ export function IntegrationsPage() {
                 loading={exampleModal.loading}
                 onClick={() => void fetchExample(exampleModal.role, exampleModal.kind, exampleModal.secretPath)}
               >
-                重新生成 HCL
+                {tr('重新生成 HCL', 'Regenerate HCL')}
               </Button>
             </div>
 
@@ -1155,17 +1196,17 @@ export function IntegrationsPage() {
                 size="sm"
                 onClick={() =>
                   void copyText(exampleModal.hcl)
-                    .then(() => toast.success('已复制示例 HCL'))
+                    .then(() => toast.success(tr('已复制示例 HCL', 'Copied sample HCL')))
                     .catch((ex) => toast.error(ex.message))
                 }
               >
                 <Copy className="h-3.5 w-3.5" />
-                <span>复制 HCL</span>
+                <span>{tr('复制 HCL', 'Copy HCL')}</span>
               </Button>
               <div className="flex gap-2">
-                <Button size="sm" onClick={() => setExampleModal(null)}>关闭</Button>
+                <Button size="sm" onClick={() => setExampleModal(null)}>{tr('关闭', 'Close')}</Button>
                 <Button size="sm" variant="primary" onClick={sendExampleToJobCenter}>
-                  <span>一键带入 Job 中心</span>
+                  <span>{tr('一键带入 Job 中心', 'Open in Job Center')}</span>
                   <ArrowRight className="h-3.5 w-3.5" />
                 </Button>
               </div>
@@ -1175,7 +1216,7 @@ export function IntegrationsPage() {
       </Modal>
 
       {/* 新建联动：智能推荐未绑定集群与不冲突名称/Auth Mount */}
-      <Modal open={showCreate} title="新建 Nomad-Vault 联动" onClose={() => setShowCreate(false)}>
+      <Modal open={showCreate} title={tr('新建 Nomad-Vault 联动', 'New Nomad-Vault Integration')} onClose={() => setShowCreate(false)}>
         {(() => {
           const nomadClusters = clusters.filter((c) => c.type === 'nomad');
           const vaultClusters = clusters.filter((c) => c.type === 'vault');
@@ -1186,9 +1227,9 @@ export function IntegrationsPage() {
             <form onSubmit={createIntegration} className="space-y-3 text-xs">
               <ErrorAlert message={createErr} onClose={() => setCreateErr('')} />
               <Input
-                label="联动名称"
+                label={tr('联动名称', 'Integration Name')}
                 required
-                placeholder="例如 nomad-vault"
+                placeholder={tr('例如 nomad-vault', 'e.g. nomad-vault')}
                 value={createForm.name}
                 onChange={(e) => {
                   setCreateTouched((prev) => ({ ...prev, name: true }));
@@ -1196,7 +1237,7 @@ export function IntegrationsPage() {
                 }}
               />
               <Select
-                label="Nomad 集群（使用密码的任务跑在这里）"
+                label={tr('Nomad 集群（使用密码的任务跑在这里）', 'Nomad Cluster (where workloads run)')}
                 value={selectedNomadId}
                 onChange={(e) => {
                   const nextNomad = e.target.value;
@@ -1213,18 +1254,21 @@ export function IntegrationsPage() {
                   const bound = items.find((it) => it.source_cluster_id === c.id);
                   return (
                     <option key={c.id} value={c.id}>
-                      {c.name}{bound ? `（已绑定联动：${bound.name}）` : ''}
+                      {c.name}{bound ? tr(`（已绑定联动：${bound.name}）`, ` (bound: ${bound.name})`) : ''}
                     </option>
                   );
                 })}
               </Select>
               {existingForNomad && (
                 <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-                  该 Nomad 集群已绑定联动「{existingForNomad.name}」（指向 {existingForNomad.target_cluster || existingForNomad.target_cluster_id}）。一个 Nomad 集群只能绑定一个 Vault；一个 Vault 可对接多个 Nomad 集群。
+                  {tr(
+                    `该 Nomad 集群已绑定联动「${existingForNomad.name}」（指向 ${existingForNomad.target_cluster || existingForNomad.target_cluster_id}）。一个 Nomad 集群只能绑定一个 Vault；一个 Vault 可对接多个 Nomad 集群。`,
+                    `This Nomad cluster is already bound to "${existingForNomad.name}" (${existingForNomad.target_cluster || existingForNomad.target_cluster_id}). A Nomad cluster can bind only one Vault, while one Vault can serve multiple Nomad clusters.`,
+                  )}
                 </p>
               )}
               <Select
-                label="Vault 集群（密码存在这里）"
+                label={tr('Vault 集群（密码存在这里）', 'Vault Cluster (where secrets live)')}
                 value={selectedVaultId}
                 onChange={(e) => {
                   const nextVault = e.target.value;
@@ -1240,12 +1284,12 @@ export function IntegrationsPage() {
               </Select>
               <details className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/40">
                 <summary className="cursor-pointer font-medium text-slate-700 dark:text-slate-200">
-                  高级参数（Auth Mount：<code className="font-mono">{createForm.auth_path || '自动生成'}</code>）
+                  {tr('高级参数（Auth Mount：', 'Advanced Options (Auth Mount: ')}<code className="font-mono">{createForm.auth_path || tr('自动生成', 'auto')}</code>）
                 </summary>
                 <div className="mt-3 space-y-2">
                   <Input
                     label="Vault JWT Auth Mount"
-                    hint="同一个 Vault 对接多个 Nomad 集群时需使用不同的 Auth 路径（已自动避开冲突，留空则按集群名自动生成）。"
+                    hint={tr('同一个 Vault 对接多个 Nomad 集群时需使用不同的 Auth 路径（已自动避开冲突，留空则按集群名自动生成）。', 'Each Nomad cluster sharing the same Vault needs a distinct auth mount path (auto-generated if blank).')}
                     value={createForm.auth_path}
                     onChange={(e) => {
                       setCreateTouched((prev) => ({ ...prev, auth_path: true }));
@@ -1255,8 +1299,8 @@ export function IntegrationsPage() {
                 </div>
               </details>
               <div className="flex justify-end gap-2">
-                <Button type="button" onClick={() => setShowCreate(false)}>取消</Button>
-                <Button type="submit" variant="primary" disabled={Boolean(existingForNomad)}>创建联动</Button>
+                <Button type="button" onClick={() => setShowCreate(false)}>{tr('取消', 'Cancel')}</Button>
+                <Button type="submit" variant="primary" disabled={Boolean(existingForNomad)}>{tr('创建联动', 'Create Integration')}</Button>
               </div>
             </form>
           );
@@ -1264,76 +1308,79 @@ export function IntegrationsPage() {
       </Modal>
 
       {/* 编辑联动：折叠高级参数并补充大白话说明 */}
-      <Modal open={showEditIntegration} title={`编辑联动：${selected?.name || ''}`} onClose={() => setShowEditIntegration(false)}>
+      <Modal open={showEditIntegration} title={tr(`编辑联动：${selected?.name || ''}`, `Edit Integration: ${selected?.name || ''}`)} onClose={() => setShowEditIntegration(false)}>
         <form onSubmit={updateIntegration} className="space-y-3 text-xs">
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-300">
-            源集群（<span className="font-mono">{selected?.source_cluster || selected?.source_cluster_id}</span>）、目标集群（<span className="font-mono">{selected?.target_cluster || selected?.target_cluster_id}</span>）与 Auth Mount（<span className="font-mono">{selected?.auth_path}</span>）创建后不可修改；保存变更后请点击「应用联动」下发。
+            {tr(
+              <>源集群（<span className="font-mono">{selected?.source_cluster || selected?.source_cluster_id}</span>）、目标集群（<span className="font-mono">{selected?.target_cluster || selected?.target_cluster_id}</span>）与 Auth Mount（<span className="font-mono">{selected?.auth_path}</span>）创建后不可修改；保存变更后请点击「应用联动」下发。</>,
+              <>Source (<span className="font-mono">{selected?.source_cluster || selected?.source_cluster_id}</span>), Target (<span className="font-mono">{selected?.target_cluster || selected?.target_cluster_id}</span>), and Auth Mount (<span className="font-mono">{selected?.auth_path}</span>) are immutable after creation. Click &quot;Apply Integration&quot; after saving.</>,
+            )}
           </div>
           <Input
-            label="联动名称"
+            label={tr('联动名称', 'Integration Name')}
             required
             value={editIntegrationForm.name}
             onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, name: e.target.value })}
           />
           <details className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/40">
             <summary className="cursor-pointer font-medium text-slate-700 dark:text-slate-200">
-              高级参数（JWKS、Audience 与地址覆盖，通常保持默认）
+              {tr('高级参数（JWKS、Audience 与地址覆盖，通常保持默认）', 'Advanced Options (JWKS, Audience & Address Overrides)')}
             </summary>
             <div className="mt-3 space-y-3">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
                   <Select
-                    label="JWKS 模式"
+                    label={tr('JWKS 模式', 'JWKS Mode')}
                     value={editIntegrationForm.jwks_mode}
                     onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, jwks_mode: e.target.value })}
                   >
-                    <option value="url">url（Vault 实时拉取 Nomad JWKS）</option>
-                    <option value="static">static（控制面静态下发公钥）</option>
+                    <option value="url">{tr('url（Vault 实时拉取 Nomad JWKS）', 'url (Vault fetches Nomad JWKS live)')}</option>
+                    <option value="static">{tr('static（控制面静态下发公钥）', 'static (Control plane pushes static JWKS)')}</option>
                   </Select>
-                  <p className="text-[11px] text-slate-500">url 表示 Vault 自动连 Nomad 拉公钥；仅当 Nomad 开启严格客户端证书校验时再换 static。</p>
+                  <p className="text-[11px] text-slate-500">{tr('url 表示 Vault 自动连 Nomad 拉公钥；仅当 Nomad 开启严格客户端证书校验时再换 static。', 'url lets Vault pull keys directly from Nomad; switch to static only if strict Nomad client certs block it.')}</p>
                 </div>
                 <Input
-                  label="身份令牌 TTL"
+                  label={tr('身份令牌 TTL', 'Identity Token TTL')}
                   required
-                  hint="Nomad 签发给任务的身份 JWT 有效期，例如 1h。"
-                  placeholder="例如 1h"
+                  hint={tr('Nomad 签发给任务的身份 JWT 有效期，例如 1h。', 'Lifetime of workload identity JWT issued by Nomad, e.g. 1h.')}
+                  placeholder={tr('例如 1h', 'e.g. 1h')}
                   value={editIntegrationForm.identity_ttl}
                   onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, identity_ttl: e.target.value })}
                 />
               </div>
               <Input
-                label="Audience（aud）"
-                hint="门禁卡上的适用标识，两边对上才认，默认 vault.io。"
-                placeholder="例如 vault.io，多个用逗号分隔"
+                label="Audience (aud)"
+                hint={tr('门禁卡上的适用标识，两边对上才认，默认 vault.io。', 'Audience claim expected by Vault; must match on both sides (default: vault.io).')}
+                placeholder={tr('例如 vault.io，多个用逗号分隔', 'e.g. vault.io (comma-separated)')}
                 value={editIntegrationForm.aud}
                 onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, aud: e.target.value })}
               />
               <Input
-                label="自定义 JWKS URL（可选）"
-                hint="留空则自动使用 Nomad 统一入口或 Server 地址。"
-                placeholder="留空自动推导"
+                label={tr('自定义 JWKS URL（可选）', 'Custom JWKS URL (optional)')}
+                hint={tr('留空则自动使用 Nomad 统一入口或 Server 地址。', 'Leave blank to derive automatically from Nomad public URL or servers.')}
+                placeholder={tr('留空自动推导', 'Auto-detected if blank')}
                 value={editIntegrationForm.jwks_url}
                 onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, jwks_url: e.target.value })}
               />
               <Input
-                label="自定义 Vault 地址（可选）"
-                hint="留空则自动使用 Vault 统一入口或节点地址。"
-                placeholder="留空自动推导"
+                label={tr('自定义 Vault 地址（可选）', 'Custom Vault Address (optional)')}
+                hint={tr('留空则自动使用 Vault 统一入口或节点地址。', 'Leave blank to derive automatically from Vault public URL or nodes.')}
+                placeholder={tr('留空自动推导', 'Auto-detected if blank')}
                 value={editIntegrationForm.vault_address}
                 onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, vault_address: e.target.value })}
               />
               <Input
-                label="默认 Role（可选）"
-                hint="Job 里如果只写了 vault {} 没写 role 名时兜底使用，一般留空更安全。"
-                placeholder="留空则要求 Job 显式指定 role"
+                label={tr('默认 Role（可选）', 'Default Role (optional)')}
+                hint={tr('Job 里如果只写了 vault {} 没写 role 名时兜底使用，一般留空更安全。', 'Fallback when a job defines vault {} without a role; safer left blank.')}
+                placeholder={tr('留空则要求 Job 显式指定 role', 'Require explicit role in jobs if blank')}
                 value={editIntegrationForm.default_role}
                 onChange={(e) => setEditIntegrationForm({ ...editIntegrationForm, default_role: e.target.value })}
               />
             </div>
           </details>
           <div className="flex justify-end gap-2">
-            <Button type="button" onClick={() => setShowEditIntegration(false)}>取消</Button>
-            <Button type="submit" variant="primary" loading={savingIntegration}>保存</Button>
+            <Button type="button" onClick={() => setShowEditIntegration(false)}>{tr('取消', 'Cancel')}</Button>
+            <Button type="submit" variant="primary" loading={savingIntegration}>{tr('保存', 'Save')}</Button>
           </div>
         </form>
       </Modal>
@@ -1341,7 +1388,7 @@ export function IntegrationsPage() {
       {/* 添加/编辑 Role：Namespace 候选 + KV 路径纠错 + 实时预览 */}
       <Modal
         open={showRole}
-        title={editingRole ? `编辑工作负载 Role：${editingRole.role_name}` : '添加工作负载 Role'}
+        title={editingRole ? tr(`编辑工作负载 Role：${editingRole.role_name}`, `Edit Workload Role: ${editingRole.role_name}`) : tr('添加工作负载 Role', 'Add Workload Role')}
         onClose={() => {
           setShowRole(false);
           setEditingRole(null);
@@ -1349,35 +1396,35 @@ export function IntegrationsPage() {
       >
         <form onSubmit={saveRole} className="space-y-3 text-xs">
           <Input
-            label="Role 名称"
-            placeholder="例如 postgres，在 Job 的 vault.role 中填写这个名字"
-            hint={editingRole ? 'Role 名称创建后不可修改。' : undefined}
+            label={tr('Role 名称', 'Role Name')}
+            placeholder={tr('例如 postgres，在 Job 的 vault.role 中填写这个名字', 'e.g. postgres (referenced in Job vault.role)')}
+            hint={editingRole ? tr('Role 名称创建后不可修改。', 'Role name cannot be changed after creation.') : undefined}
             disabled={Boolean(editingRole)}
             required
             value={roleForm.role_name}
             onChange={(e) => setRoleForm({ ...roleForm, role_name: e.target.value })}
           />
           <Select
-            label="授权方式（Policy 模式）"
+            label={tr('授权方式（Policy 模式）', 'Policy Mode')}
             value={roleForm.policy_mode}
             onChange={(e) => setRoleForm({ ...roleForm, policy_mode: e.target.value })}
           >
-            <option value="explicit">指定固定密钥路径（推荐新手，按路径精确授权）</option>
-            <option value="templated">按任务名自动隔离（读取 挂载/Namespace/Job名 下的密钥）</option>
+            <option value="explicit">{tr('指定固定密钥路径（推荐新手，按路径精确授权）', 'Explicit secret paths (recommended, grant exact paths)')}</option>
+            <option value="templated">{tr('按任务名自动隔离（读取 挂载/Namespace/Job名 下的密钥）', 'Templated per-job isolation (<mount>/<namespace>/<job>)')}</option>
           </Select>
 
           <div className="space-y-1.5">
             <Input
-              label={roleForm.policy_mode === 'templated' ? 'KV 存储空间名称' : '允许读取的 Secret 路径'}
+              label={roleForm.policy_mode === 'templated' ? tr('KV 存储空间名称', 'KV Mount Name') : tr('允许读取的 Secret 路径', 'Allowed Secret Paths')}
               placeholder={
                 roleForm.policy_mode === 'templated'
-                  ? '例如 secret'
-                  : '例如 secret/apps/postgres（多路径用逗号分隔，目录通配写 secret/apps/*）'
+                  ? tr('例如 secret', 'e.g. secret')
+                  : tr('例如 secret/apps/postgres（多路径用逗号分隔，目录通配写 secret/apps/*）', 'e.g. secret/apps/postgres (comma-separated, or secret/apps/*)')
               }
               hint={
                 roleForm.policy_mode === 'templated'
-                  ? '填写 Vault KV v2 挂载名（如 secret），多个用逗号分隔。'
-                  : '格式「挂载名/密钥路径」，多个用逗号分隔（不要写 data/）。注意：路径按精确匹配生效，不会自动包含子路径（如填 secret/apps 只能读 apps 本身，读不到 secret/apps/app）；需读子路径请写全路径，或末尾加 /* 放行整目录（如 secret/apps/*）。'
+                  ? tr('填写 Vault KV v2 挂载名（如 secret），多个用逗号分隔。', 'Vault KV v2 mount name (e.g. secret), comma-separated.')
+                  : tr('格式「挂载名/密钥路径」，多个用逗号分隔（不要写 data/）。注意：路径按精确匹配生效，不会自动包含子路径（如填 secret/apps 只能读 apps 本身，读不到 secret/apps/app）；需读子路径请写全路径，或末尾加 /* 放行整目录（如 secret/apps/*）。', 'Format: "<mount>/<path>", comma-separated (omit data/). Exact paths do not cover nested keys; use /* at the end (e.g. secret/apps/*) to allow a directory.')
               }
               required={roleForm.policy_mode === 'explicit' && !editingRole?.custom_policy_hcl}
               value={roleForm.secret_paths}
@@ -1385,7 +1432,7 @@ export function IntegrationsPage() {
             />
             {vaultMounts.length > 0 && (
               <div className="flex flex-wrap items-center gap-1 text-[11px] text-slate-500">
-                <span>Vault 已有挂载：</span>
+                <span>{tr('Vault 已有挂载：', 'Available KV Mounts: ')}</span>
                 {vaultMounts.map((m) => (
                   <button
                     key={m}
@@ -1404,7 +1451,7 @@ export function IntegrationsPage() {
             )}
             {hasAccidentalDataPrefix && (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
-                <span>检测到路径里多写了 <code className="font-mono">/data/</code>，保存时会自动帮您简化为 Role 授权路径。</span>
+                <span>{tr(<>检测到路径里多写了 <code className="font-mono">/data/</code>，保存时会自动帮您简化为 Role 授权路径。</>, <>Detected <code className="font-mono">/data/</code> in path; it will be stripped for the Role policy on save.</>)}</span>
                 <button
                   type="button"
                   className="font-semibold underline"
@@ -1415,14 +1462,17 @@ export function IntegrationsPage() {
                     })
                   }
                 >
-                  立即修正
+                  {tr('立即修正', 'Fix Now')}
                 </button>
               </div>
             )}
             {hasTrailingSlashWarning && (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
                 <span>
-                  末尾的 <code className="font-mono">/</code> 保存时会被去掉，仅授权该精确路径本身，<strong>不会</strong>包含子路径。如需放行整个目录请改为 <code className="font-mono">/*</code>，或补全具体密钥名（如 <code className="font-mono">secret/apps/app</code>）。
+                  {tr(
+                    <>末尾的 <code className="font-mono">/</code> 保存时会被去掉，仅授权该精确路径本身，<strong>不会</strong>包含子路径。如需放行整个目录请改为 <code className="font-mono">/*</code>，或补全具体密钥名（如 <code className="font-mono">secret/apps/app</code>）。</>,
+                    <>Trailing <code className="font-mono">/</code> is stripped on save, granting access to that exact path only (not children). Use <code className="font-mono">/*</code> to match a directory.</>,
+                  )}
                 </span>
                 <button
                   type="button"
@@ -1437,7 +1487,7 @@ export function IntegrationsPage() {
                     })
                   }
                 >
-                  改为 /* 通配
+                  {tr('改为 /* 通配', 'Switch to /*')}
                 </button>
               </div>
             )}
@@ -1445,10 +1495,10 @@ export function IntegrationsPage() {
 
           <div className="space-y-1.5">
             <Input
-              label="允许使用的 Nomad Namespace"
+              label={tr('允许使用的 Nomad Namespace', 'Allowed Nomad Namespace')}
               list="integration-ns-list"
               required
-              hint="只有在这个 Nomad Namespace 下运行的 Job 才能使用这个 Role。"
+              hint={tr('只有在这个 Nomad Namespace 下运行的 Job 才能使用这个 Role。', 'Only Nomad Jobs in this Namespace may assume this Role.')}
               value={roleForm.bound_namespace}
               onChange={(e) => setRoleForm({ ...roleForm, bound_namespace: e.target.value })}
             />
@@ -1457,7 +1507,7 @@ export function IntegrationsPage() {
             </datalist>
             {nomadNamespaces.length > 0 && (
               <div className="flex flex-wrap items-center gap-1 text-[11px] text-slate-500">
-                <span>快速选择：</span>
+                <span>{tr('快速选择：', 'Quick select: ')}</span>
                 {nomadNamespaces.map((ns) => (
                   <button
                     key={ns}
@@ -1478,31 +1528,34 @@ export function IntegrationsPage() {
 
           {roleForm.policy_mode === 'explicit' && validRolePreviews.length > 0 && (
             <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/50 p-2.5 text-[11px] leading-relaxed space-y-2 dark:border-indigo-500/30 dark:bg-indigo-950/20">
-              <div className="font-semibold text-indigo-950 dark:text-indigo-100">效果预览</div>
+              <div className="font-semibold text-indigo-950 dark:text-indigo-100">{tr('效果预览', 'Policy Preview')}</div>
               {validRolePreviews.map((p, idx) => (
                 <div key={`${p.rolePath}-${idx}`} className={idx > 0 ? 'border-t border-indigo-200/60 pt-1.5 space-y-0.5 dark:border-indigo-500/20' : 'space-y-0.5'}>
                   {p.isWildcard ? (
                     <>
                       <div>
-                        • Vault 通配授权：<code className="font-mono">{p.rolePath}</code>
-                        <span className="text-slate-600 dark:text-slate-300">（允许读取该前缀下所有子路径，请确认符合最小权限原则）</span>
+                        • {tr('Vault 通配授权：', 'Vault Wildcard Access: ')}<code className="font-mono">{p.rolePath}</code>
+                        <span className="text-slate-600 dark:text-slate-300">{tr('（允许读取该前缀下所有子路径，请确认符合最小权限原则）', ' (reads all child paths under this prefix; ensure least privilege)')}</span>
                       </div>
                       <div>
-                        • Job <code className="font-mono">template</code> 写法：需填具体密钥路径，如{' '}
+                        • {tr('Job ', 'Job ')}<code className="font-mono">template</code> {tr('写法：需填具体密钥路径，如 ', 'usage: specify a concrete path like ')}
                         <code className="font-mono">{`{{ with secret "${p.templateExamplePath}" }}`}</code>
-                        <span className="text-slate-600 dark:text-slate-300">（模板中不可写 *）</span>
+                        <span className="text-slate-600 dark:text-slate-300">{tr('（模板中不可写 *）', ' (wildcards not allowed in templates)')}</span>
                       </div>
                     </>
                   ) : (
                     <>
                       <div>
-                        • Vault 精确授权：<code className="font-mono">{p.rolePath}</code>
+                        • {tr('Vault 精确授权：', 'Vault Exact Access: ')}<code className="font-mono">{p.rolePath}</code>
                         <span className="text-slate-600 dark:text-slate-300">
-                          （仅此一条，<strong>不含</strong>其下的子路径如 <code className="font-mono">{`${p.rolePath}/xxx`}</code>）
+                          {tr(
+                            <>（仅此一条，<strong>不含</strong>其下的子路径如 <code className="font-mono">{`${p.rolePath}/xxx`}</code>）</>,
+                            <> (this exact key only; <strong>excludes</strong> child paths such as <code className="font-mono">{`${p.rolePath}/xxx`}</code>)</>,
+                          )}
                         </span>
                       </div>
                       <div>
-                        • Job <code className="font-mono">template</code> 写法：
+                        • {tr('Job ', 'Job ')}<code className="font-mono">template</code> {tr('写法：', 'usage: ')}
                         <code className="font-mono">{`{{ with secret "${p.templatePath}" }}`}</code>
                       </div>
                     </>
@@ -1513,11 +1566,11 @@ export function IntegrationsPage() {
           )}
 
           <details className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 dark:border-slate-800 dark:bg-slate-950/40">
-            <summary className="cursor-pointer font-medium text-slate-700 dark:text-slate-200">高级选项（Token 续期周期）</summary>
+            <summary className="cursor-pointer font-medium text-slate-700 dark:text-slate-200">{tr('高级选项（Token 续期周期）', 'Advanced Options (Token Renewal Period)')}</summary>
             <div className="mt-2">
               <Input
-                label="Token 续期周期"
-                hint="Nomad 客户端自动向 Vault 续期令牌的时间间隔，默认 1h。"
+                label={tr('Token 续期周期', 'Token Period')}
+                hint={tr('Nomad 客户端自动向 Vault 续期令牌的时间间隔，默认 1h。', 'Renewal interval for Vault tokens managed by Nomad Client, default 1h.')}
                 value={roleForm.token_period}
                 onChange={(e) => setRoleForm({ ...roleForm, token_period: e.target.value })}
               />
@@ -1532,9 +1585,9 @@ export function IntegrationsPage() {
                 setEditingRole(null);
               }}
             >
-              取消
+              {tr('取消', 'Cancel')}
             </Button>
-            <Button type="submit" variant="primary" loading={savingRole}>保存</Button>
+            <Button type="submit" variant="primary" loading={savingRole}>{tr('保存', 'Save')}</Button>
           </div>
         </form>
       </Modal>

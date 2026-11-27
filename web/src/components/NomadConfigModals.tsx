@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Container, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '../lib/api';
+import { useI18n } from '../lib/i18n';
 import { useConfirm } from './ConfirmDialog';
 import { useToast } from './Toast';
 import { DockerManageModal, dockerModeLabelOf, dockerStatusLabelOf } from './DockerManageModal';
@@ -160,6 +161,7 @@ export function ClientPluginFields({
   reinstallCNI?: boolean;
   onChangeReinstallCNI?: (v: boolean) => void;
 }) {
+  const { locale, tr } = useI18n();
   const toggleDeny = (drv: string, checked: boolean) => {
     const next = checked
       ? Array.from(new Set([...value.driver_denylist, drv]))
@@ -174,8 +176,8 @@ export function ClientPluginFields({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="font-semibold text-slate-800 dark:text-slate-100">
             <TermLabel
-              term="CNI 网络插件"
-              tip="安装 containernetworking/plugins 到 /opt/cni/bin 并启用 bridge 内核参数与 83-cni.hcl，支持 Nomad bridge 网络模式及端口映射。"
+              term={tr('CNI 网络插件', 'CNI Network Plugins')}
+              tip={tr('安装 containernetworking/plugins 到 /opt/cni/bin 并启用 bridge 内核参数与 83-cni.hcl，支持 Nomad bridge 网络模式及端口映射。', 'Installs containernetworking/plugins to /opt/cni/bin and enables bridge sysctls + 83-cni.hcl for Nomad bridge networking and port mapping.')}
             />
           </div>
           <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700 dark:text-slate-200">
@@ -190,18 +192,18 @@ export function ClientPluginFields({
                 }
               }}
             />
-            <span>启用 CNI</span>
+            <span>{tr('启用 CNI', 'Enable CNI')}</span>
           </label>
         </div>
         {(value.cni || cniVersion) && (
           <div className="space-y-2.5">
             {cniVersionEditable && onChangeCNIVersion ? (
               <Select
-                label="集群 CNI 插件版本"
+                label={tr('集群 CNI 插件版本', 'Cluster CNI Plugin Version')}
                 value={cniVersion}
                 onChange={(e) => onChangeCNIVersion(e.target.value)}
               >
-                <option value="">请选择 CNI 版本…</option>
+                <option value="">{tr('请选择 CNI 版本…', 'Select CNI version...')}</option>
                 {cniVersions.map((v) => (
                   <option key={v} value={v}>
                     {v}
@@ -210,7 +212,7 @@ export function ClientPluginFields({
               </Select>
             ) : (
               <div className="text-slate-500">
-                集群 CNI 版本：<span className="font-mono font-medium text-slate-800 dark:text-slate-200">{cniVersion || '未设置'}</span>
+                {tr('集群 CNI 版本：', 'Cluster CNI version: ')}<span className="font-mono font-medium text-slate-800 dark:text-slate-200">{cniVersion || tr('未设置', 'Unset')}</span>
               </div>
             )}
             {showReinstallCNI && value.cni && onChangeReinstallCNI && (
@@ -220,7 +222,7 @@ export function ClientPluginFields({
                   checked={reinstallCNI}
                   onChange={(e) => onChangeReinstallCNI(e.target.checked)}
                 />
-                <span>重新下载并修复安装 CNI 插件二进制（对应 Doctor 缺少 CNI 插件告警）</span>
+                <span>{tr('重新下载并修复安装 CNI 插件二进制（对应 Doctor 缺少 CNI 插件告警）', 'Re-download and reinstall CNI plugin binaries')}</span>
               </label>
             )}
           </div>
@@ -232,8 +234,8 @@ export function ClientPluginFields({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="font-semibold text-slate-800 dark:text-slate-100">
             <TermLabel
-              term="Host Volumes（宿主机挂载卷）"
-              tip="在 Client 节点生成 70-host-volume-<name>.hcl，Job 可通过 volume 块按名称挂载宿主机目录。禁止使用 /etc、/usr 等系统目录。"
+              term={tr('Host Volumes（宿主机挂载卷）', 'Host Volumes')}
+              tip={tr('在 Client 节点生成 70-host-volume-<name>.hcl，Job 可通过 volume 块按名称挂载宿主机目录。禁止使用 /etc、/usr 等系统目录。', 'Generates 70-host-volume-<name>.hcl on Client nodes so Jobs can mount host paths by volume name. System dirs like /etc and /usr are disallowed.')}
             />
           </div>
           <Button
@@ -249,20 +251,20 @@ export function ClientPluginFields({
             }
           >
             <Plus className="h-3.5 w-3.5" />
-            <span>添加卷</span>
+            <span>{tr('添加卷', 'Add Volume')}</span>
           </Button>
         </div>
         {value.host_volumes.length === 0 ? (
-          <p className="text-slate-500">未配置 Host Volume。</p>
+          <p className="text-slate-500">{tr('未配置 Host Volume。', 'No Host Volumes configured.')}</p>
         ) : (
           <div className="space-y-2.5">
             {value.host_volumes.map((hv, idx) => (
               <div key={idx} className="rounded-lg border border-slate-200/80 dark:border-slate-800 p-2.5 space-y-2 bg-slate-50/50 dark:bg-slate-950/30">
                 <div className="grid grid-cols-1 sm:grid-cols-[140px_1fr_auto] gap-2 items-end">
                   <Input
-                    label="卷名称"
+                    label={tr('卷名称', 'Volume Name')}
                     required
-                    placeholder="例如 data"
+                    placeholder={tr('例如 data', 'e.g. data')}
                     pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,62}"
                     value={hv.name}
                     onChange={(e) => {
@@ -282,7 +284,7 @@ export function ClientPluginFields({
                     }}
                   />
                   <Input
-                    label="宿主机路径"
+                    label={tr('宿主机路径', 'Host Path')}
                     required
                     placeholder="/opt/nomad-deck/nomad/volumes/data"
                     value={hv.path}
@@ -299,7 +301,7 @@ export function ClientPluginFields({
                   <Button
                     size="sm"
                     variant="ghost"
-                    title="移除该 Host Volume"
+                    title={tr('移除该 Host Volume', 'Remove Host Volume')}
                     onClick={() =>
                       onChange({
                         ...value,
@@ -324,7 +326,7 @@ export function ClientPluginFields({
                         })
                       }
                     />
-                    <span>只读（read_only）</span>
+                    <span>{tr('只读（read_only）', 'Read-only (read_only)')}</span>
                   </label>
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <input
@@ -339,7 +341,7 @@ export function ClientPluginFields({
                         })
                       }
                     />
-                    <span>目录不存在时自动创建</span>
+                    <span>{tr('目录不存在时自动创建', 'Create directory if missing')}</span>
                   </label>
                 </div>
               </div>
@@ -350,7 +352,7 @@ export function ClientPluginFields({
 
       {/* Task Drivers: Docker / raw_exec / Denylist */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5 space-y-3">
-        <div className="font-semibold text-slate-800 dark:text-slate-100">任务驱动插件（Docker / raw_exec / 驱动黑白名单）</div>
+        <div className="font-semibold text-slate-800 dark:text-slate-100">{tr('任务驱动插件（Docker / raw_exec / 驱动黑白名单）', 'Task Drivers (Docker / raw_exec / Denylist)')}</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
           <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-200">
             <input
@@ -358,7 +360,7 @@ export function ClientPluginFields({
               checked={value.docker.volumes}
               onChange={(e) => onChange({ ...value, docker: { ...value.docker, volumes: e.target.checked } })}
             />
-            <span>Docker 允许卷挂载（volumes）</span>
+            <span>{tr('Docker 允许卷挂载（volumes）', 'Docker Allow Volumes')}</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-200">
             <input
@@ -366,7 +368,7 @@ export function ClientPluginFields({
               checked={value.docker.allow_privileged}
               onChange={(e) => onChange({ ...value, docker: { ...value.docker, allow_privileged: e.target.checked } })}
             />
-            <span>Docker 允许特权容器（privileged）</span>
+            <span>{tr('Docker 允许特权容器（privileged）', 'Docker Allow Privileged')}</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-200">
             <input
@@ -374,7 +376,7 @@ export function ClientPluginFields({
               checked={value.docker.disable_image_gc}
               onChange={(e) => onChange({ ...value, docker: { ...value.docker, disable_image_gc: e.target.checked } })}
             />
-            <span>关闭 Docker 镜像自动 GC</span>
+            <span>{tr('关闭 Docker 镜像自动 GC', 'Disable Docker Image Auto-GC')}</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer text-amber-700 dark:text-amber-300">
             <input
@@ -382,25 +384,25 @@ export function ClientPluginFields({
               checked={value.raw_exec}
               onChange={(e) => onChange({ ...value, raw_exec: e.target.checked })}
             />
-            <span>启用 raw_exec（宿主机直接执行，无隔离）</span>
+            <span>{tr('启用 raw_exec（宿主机直接执行，无隔离）', 'Enable raw_exec (unisolated host execution)')}</span>
           </label>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Input
-            label="Docker 镜像 GC 延迟"
+            label={tr('Docker 镜像 GC 延迟', 'Docker Image GC Delay')}
             placeholder="3m"
             value={value.docker.image_gc_delay}
             onChange={(e) => onChange({ ...value, docker: { ...value.docker, image_gc_delay: e.target.value } })}
           />
           <Input
-            label="Docker 私有仓库 Auth 文件路径（可选）"
+            label={tr('Docker 私有仓库 Auth 文件路径（可选）', 'Docker Registry Auth File (optional)')}
             placeholder="/root/.docker/config.json"
             value={value.docker.auth_config}
             onChange={(e) => onChange({ ...value, docker: { ...value.docker, auth_config: e.target.value } })}
           />
         </div>
         <div className="space-y-2 pt-1">
-          <div className="text-slate-700 dark:text-slate-300 font-medium">驱动禁用列表（driver.denylist）</div>
+          <div className="text-slate-700 dark:text-slate-300 font-medium">{tr('驱动禁用列表（driver.denylist）', 'Driver Denylist (driver.denylist)')}</div>
           <div className="flex flex-wrap gap-3">
             {COMMON_DRIVERS.map((drv) => (
               <label key={drv} className="flex items-center gap-1.5 cursor-pointer text-slate-600 dark:text-slate-300">
@@ -414,8 +416,8 @@ export function ClientPluginFields({
             ))}
           </div>
           <Input
-            label="其他禁用驱动（逗号分隔，可选）"
-            placeholder="例如 rkt, singularity"
+            label={tr('其他禁用驱动（逗号分隔，可选）', 'Additional Denied Drivers (comma-separated)')}
+            placeholder={tr('例如 rkt, singularity', 'e.g. rkt, singularity')}
             value={value.extra_denylist}
             onChange={(e) => onChange({ ...value, extra_denylist: e.target.value })}
           />
@@ -424,11 +426,11 @@ export function ClientPluginFields({
 
       {/* Node Pool / CPU / Meta */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5 space-y-3">
-        <div className="font-semibold text-slate-800 dark:text-slate-100">节点资源池、算力与 Client Meta 标签</div>
+        <div className="font-semibold text-slate-800 dark:text-slate-100">{tr('节点资源池、算力与 Client Meta 标签', 'Node Pool, CPU Compute & Client Meta')}</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <Input
-              label="Node Pool（留空为 default）"
+              label={tr('Node Pool（留空为 default）', 'Node Pool (blank = default)')}
               list="nomad-node-pool-list"
               placeholder="default"
               value={value.node_pool}
@@ -443,7 +445,7 @@ export function ClientPluginFields({
             )}
           </div>
           <Input
-            label="CPU 总算力覆盖（MHz，0=自动探测）"
+            label={tr('CPU 总算力覆盖（MHz，0=自动探测）', 'CPU Total Compute Override (MHz, 0=auto)')}
             type="number"
             min={0}
             placeholder="0"
@@ -459,13 +461,13 @@ export function ClientPluginFields({
               onClick={() => onChange({ ...value, meta: [...value.meta, { key: '', value: '' }] })}
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>添加标签</span>
+              <span>{tr('添加标签', 'Add Tag')}</span>
             </Button>
           </div>
           {value.meta.map((row, idx) => (
             <div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
               <Input
-                placeholder="键，例如 rack"
+                placeholder={tr('键，例如 rack', 'Key, e.g. rack')}
                 value={row.key}
                 onChange={(e) =>
                   onChange({
@@ -475,7 +477,7 @@ export function ClientPluginFields({
                 }
               />
               <Input
-                placeholder="值，例如 r1"
+                placeholder={tr('值，例如 r1', 'Value, e.g. r1')}
                 value={row.value}
                 onChange={(e) =>
                   onChange({
@@ -510,6 +512,7 @@ export function NomadClusterSettingsModal({
   onClose: () => void;
   onSaved: (taskId?: string) => Promise<void>;
 }) {
+  const { locale, tr } = useI18n();
   const toast = useToast();
   const [cniVersions, setCniVersions] = useState<string[]>([]);
   const [cniVersion, setCniVersion] = useState('');
@@ -578,19 +581,19 @@ export function NomadClusterSettingsModal({
       await onSaved(res?.task?.id);
       onClose();
     } catch (ex: any) {
-      setErr(ex?.message || '更新集群配置失败');
+      setErr(ex?.message || tr('更新集群配置失败', 'Failed to update cluster settings'));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Modal open={open} title={`集群配置：${cluster?.name || ''}`} size="lg" busy={busy} onClose={onClose}>
+    <Modal open={open} title={tr(`集群配置：${cluster?.name || ''}`, `Cluster Settings: ${cluster?.name || ''}`)} size="lg" busy={busy} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4 text-xs">
         <ErrorAlert message={err} onClose={() => setErr('')} />
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Select label="集群 CNI 插件版本" value={cniVersion} onChange={(e) => setCniVersion(e.target.value)}>
-            <option value="">未选择</option>
+          <Select label={tr('集群 CNI 插件版本', 'Cluster CNI Plugin Version')} value={cniVersion} onChange={(e) => setCniVersion(e.target.value)}>
+            <option value="">{tr('未选择', 'Not selected')}</option>
             {cniVersions.map((v) => (
               <option key={v} value={v}>
                 {v}
@@ -598,46 +601,46 @@ export function NomadClusterSettingsModal({
             ))}
           </Select>
           <Input
-            label="Job GC 回收阈值（例如 4h）"
-            placeholder="留空保持 Nomad 默认"
+            label={tr('Job GC 回收阈值（例如 4h）', 'Job GC Threshold (e.g. 4h)')}
+            placeholder={tr('留空保持 Nomad 默认', 'Leave blank for Nomad default')}
             value={jobGC}
             onChange={(e) => setJobGC(e.target.value)}
           />
         </div>
         <Input
-          label="统一业务入口 URL（Public API URL）"
+          label={tr('统一业务入口 URL（Public API URL）', 'Public API URL')}
           placeholder="https://nomad.example.com"
           value={publicURL}
           onChange={(e) => setPublicURL(e.target.value)}
         />
         <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5 space-y-3">
-          <div className="font-semibold text-slate-800 dark:text-slate-100">Nomad 原生 UI 与运行指标</div>
+          <div className="font-semibold text-slate-800 dark:text-slate-100">{tr('Nomad 原生 UI 与运行指标', 'Nomad Native UI & Telemetry')}</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={uiEnabled} onChange={(e) => setUiEnabled(e.target.checked)} />
-              <span>启用 Nomad 原生 UI（35-ui.hcl）</span>
+              <span>{tr('启用 Nomad 原生 UI（35-ui.hcl）', 'Enable Nomad Native UI (35-ui.hcl)')}</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={telemetry} onChange={(e) => setTelemetry(e.target.checked)} />
-              <span>启用 Prometheus Telemetry（40-telemetry.hcl）</span>
+              <span>{tr('启用 Prometheus Telemetry（40-telemetry.hcl）', 'Enable Prometheus Telemetry (40-telemetry.hcl)')}</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={execEnabled} onChange={(e) => setExecEnabled(e.target.checked)} />
-              <span>允许交互式终端与 Job Action（Exec）</span>
+              <span>{tr('允许交互式终端与 Job Action（Exec）', 'Allow Interactive Terminal & Job Exec')}</span>
             </label>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-slate-500 dark:text-slate-400">
-            <span>CNI 下载网络：{nomadProxyEnabled ? '通过系统代理' : '直连'}</span>
+            <span>{tr('CNI 下载网络：', 'CNI Download Network: ')}{nomadProxyEnabled ? tr('通过系统代理', 'Via system proxy') : tr('直连', 'Direct')}</span>
             <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">
-              前往下载代理设置
+              {tr('前往下载代理设置', 'Configure download proxy')}
             </Link>
           </div>
           {uiEnabled && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-              <Input label="UI 环境标签文字（例如 prod）" value={uiLabel} onChange={(e) => setUiLabel(e.target.value)} />
-              <Input label="关联 Vault UI 地址（可选）" placeholder="https://vault.example.com" value={vaultUIURL} onChange={(e) => setVaultUIURL(e.target.value)} />
-              <Input label="标签背景色（可选）" placeholder="#dc2626 或 red" value={uiLabelBG} onChange={(e) => setUiLabelBG(e.target.value)} />
-              <Input label="标签文字色（可选）" placeholder="#ffffff" value={uiLabelFG} onChange={(e) => setUiLabelFG(e.target.value)} />
+              <Input label={tr('UI 环境标签文字（例如 prod）', 'UI Environment Label (e.g. prod)')} value={uiLabel} onChange={(e) => setUiLabel(e.target.value)} />
+              <Input label={tr('关联 Vault UI 地址（可选）', 'Linked Vault UI URL (optional)')} placeholder="https://vault.example.com" value={vaultUIURL} onChange={(e) => setVaultUIURL(e.target.value)} />
+              <Input label={tr('标签背景色（可选）', 'Label Background Color (optional)')} placeholder={tr('#dc2626 或 red', '#dc2626 or red')} value={uiLabelBG} onChange={(e) => setUiLabelBG(e.target.value)} />
+              <Input label={tr('标签文字色（可选）', 'Label Text Color (optional)')} placeholder="#ffffff" value={uiLabelFG} onChange={(e) => setUiLabelFG(e.target.value)} />
             </div>
           )}
         </div>
@@ -650,15 +653,15 @@ export function NomadClusterSettingsModal({
               checked={confirmSingle}
               onChange={(e) => setConfirmSingle(e.target.checked)}
             />
-            <span>单机模式滚动下发配置会重启唯一节点并短时中断 API 与调度，我已知悉并确认执行。</span>
+            <span>{tr('单机模式滚动下发配置会重启唯一节点并短时中断 API 与调度，我已知悉并确认执行。', 'In single-node mode, rolling config deployment restarts the sole node and briefly interrupts API and scheduling. I understand and confirm.')}</span>
           </label>
         )}
         <div className="flex justify-end gap-2 pt-2">
           <Button type="button" disabled={busy} onClick={onClose}>
-            取消
+            {tr('取消', 'Cancel')}
           </Button>
           <Button type="submit" variant="primary" loading={busy}>
-            保存并下发配置
+            {tr('保存并下发配置', 'Save & Apply Config')}
           </Button>
         </div>
       </form>
@@ -681,6 +684,7 @@ export function NomadNodeConfigModal({
   onClose: () => void;
   onSubmitted: (taskId?: string, title?: string) => Promise<void>;
 }) {
+  const { locale, tr } = useI18n();
   const toast = useToast();
   const askConfirm = useConfirm();
   const [draft, setDraft] = useState<ClientPluginDraft>(defaultClientPluginDraft);
@@ -746,7 +750,7 @@ export function NomadNodeConfigModal({
     try {
       if (isClient && draft.cni) {
         if (!cniVersion) {
-          setErr('启用 CNI 时请先选择集群 CNI 插件版本');
+          setErr(tr('启用 CNI 时请先选择集群 CNI 插件版本', 'Please select a cluster CNI plugin version when enabling CNI'));
           setBusy(false);
           return;
         }
@@ -768,10 +772,10 @@ export function NomadNodeConfigModal({
         reinstall_cni: reinstallCNI,
         confirm_single_node: confirmSingle,
       });
-      await onSubmitted(res?.task?.id, `更新节点配置: ${member.name}`);
+      await onSubmitted(res?.task?.id, tr(`更新节点配置: ${member.name}`, `Update Node Config: ${member.name}`));
       onClose();
     } catch (ex: any) {
-      setErr(ex?.message || '更新节点配置失败');
+      setErr(ex?.message || tr('更新节点配置失败', 'Failed to update node config'));
     } finally {
       setBusy(false);
     }
@@ -780,13 +784,13 @@ export function NomadNodeConfigModal({
   const handleRollback = async () => {
     if (!cluster || !member) return;
     if (isInstalled && isSingleServer && !confirmSingle) {
-      setErr('单机模式回滚配置会重启唯一节点，请先勾选下方单机维护确认框。');
+      setErr(tr('单机模式回滚配置会重启唯一节点，请先勾选下方单机维护确认框。', 'Rolling back config in single-node mode restarts the sole node; please check the confirmation box below.'));
       return;
     }
     if (
-      !(await askConfirm(`确认将节点「${member.name}」的配置切回上一代际并重启 Nomad 服务吗？`, {
-        title: '回滚节点配置代际',
-        confirmText: '确认回滚',
+      !(await askConfirm(tr(`确认将节点「${member.name}」的配置切回上一代际并重启 Nomad 服务吗？`, `Roll back node "${member.name}" to the previous config generation and restart Nomad?`), {
+        title: tr('回滚节点配置代际', 'Rollback Node Config Generation'),
+        confirmText: tr('确认回滚', 'Rollback'),
       }))
     ) {
       return;
@@ -797,11 +801,11 @@ export function NomadNodeConfigModal({
       const res = await apiPost(`/api/v1/clusters/${cluster.id}/nodes/${member.node_id}/config/rollback`, {
         confirm_single_node: confirmSingle,
       });
-      toast.success('已发起配置代际回滚任务');
-      await onSubmitted(res?.task?.id, `回滚节点配置: ${member.name}`);
+      toast.success(tr('已发起配置代际回滚任务', 'Config generation rollback started'));
+      await onSubmitted(res?.task?.id, tr(`回滚节点配置: ${member.name}`, `Rollback Node Config: ${member.name}`));
       onClose();
     } catch (ex: any) {
-      setErr(ex?.message || '回滚配置失败');
+      setErr(ex?.message || tr('回滚配置失败', 'Failed to rollback config'));
     } finally {
       setBusy(false);
     }
@@ -813,8 +817,8 @@ export function NomadNodeConfigModal({
       open={open}
       title={
         <span className="inline-flex items-center gap-2">
-          <span>节点插件与配置：{member?.name}</span>
-          {gen > 0 && <Badge>配置代际 #{gen}</Badge>}
+          <span>{tr(`节点插件与配置：${member?.name}`, `Node Plugins & Config: ${member?.name}`)}</span>
+          {gen > 0 && <Badge>{tr(`配置代际 #${gen}`, `Gen #${gen}`)}</Badge>}
         </span>
       }
       size="xl"
@@ -830,8 +834,8 @@ export function NomadNodeConfigModal({
                 <Container className="h-4 w-4 text-indigo-500 shrink-0" />
                 <span className="font-semibold text-slate-800 dark:text-slate-100">
                   <TermLabel
-                    term="Docker Engine（容器运行时）"
-                    tip="Nomad Client 运行 Docker 类型容器任务所需的宿主机引擎；可直接在此安装、转为托管或配置镜像加速与代理。"
+                    term={tr('Docker Engine（容器运行时）', 'Docker Engine (Container Runtime)')}
+                    tip={tr('Nomad Client 运行 Docker 类型容器任务所需的宿主机引擎；可直接在此安装、转为托管或配置镜像加速与代理。', 'Host container engine required for Nomad Docker tasks; install, adopt, or configure mirrors & proxy here.')}
                   />
                 </span>
               </div>
@@ -842,27 +846,27 @@ export function NomadNodeConfigModal({
                 disabled={busy || dockerLoading}
                 onClick={() => setDockerModalOpen(true)}
               >
-                {dockerInfo?.mode === 'absent' ? '安装 Docker' : '管理 Docker（版本 / 镜像 / 代理）'}
+                {dockerInfo?.mode === 'absent' ? tr('安装 Docker', 'Install Docker') : tr('管理 Docker（版本 / 镜像 / 代理）', 'Manage Docker (Version / Mirrors / Proxy)')}
               </Button>
             </div>
             {dockerLoading && !dockerInfo ? (
-              <div className="text-slate-500">正在检查节点 Docker 状态…</div>
+              <div className="text-slate-500">{tr('正在检查节点 Docker 状态…', 'Checking Docker status...')}</div>
             ) : dockerInfo ? (
               <div className="flex flex-wrap items-center gap-2 text-slate-600 dark:text-slate-300">
-                <Badge tone={dockerInfo.mode === 'absent' ? 'amber' : 'blue'}>{dockerModeLabelOf(dockerInfo.mode)}</Badge>
+                <Badge tone={dockerInfo.mode === 'absent' ? 'amber' : 'blue'}>{dockerModeLabelOf(dockerInfo.mode, locale)}</Badge>
                 {dockerInfo.version && <span className="font-mono text-slate-800 dark:text-slate-100">{dockerInfo.version}</span>}
                 {dockerInfo.mode !== 'absent' && <StatusBadge value={dockerInfo.status} />}
                 {dockerInfo.mode === 'absent' && (
                   <span className="text-amber-700 dark:text-amber-300">
-                    尚未安装 Docker Engine，无法在该节点调度 Docker 容器任务。
+                    {tr('尚未安装 Docker Engine，无法在该节点调度 Docker 容器任务。', 'Docker Engine is not installed; Docker tasks cannot run on this node.')}
                   </span>
                 )}
-                {dockerInfo.mode !== 'absent' && dockerStatusLabelOf(dockerInfo.status) && (
-                  <span className="text-slate-500">（{dockerStatusLabelOf(dockerInfo.status)}）</span>
+                {dockerInfo.mode !== 'absent' && dockerStatusLabelOf(dockerInfo.status, locale) && (
+                  <span className="text-slate-500">({dockerStatusLabelOf(dockerInfo.status, locale)})</span>
                 )}
               </div>
             ) : (
-              <div className="text-slate-500">暂未获取到节点 Docker 状态，可点击右侧按钮进入管理或重试。</div>
+              <div className="text-slate-500">{tr('暂未获取到节点 Docker 状态，可点击右侧按钮进入管理或重试。', 'Docker status unavailable; click the button on the right to manage or retry.')}</div>
             )}
           </div>
         )}
@@ -881,14 +885,14 @@ export function NomadNodeConfigModal({
           />
         ) : (
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-slate-600 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-300">
-            纯 Server 节点不运行任务，仅支持配置 TLS 附加 SAN 与配置代际回滚；CNI、Host Volume、Docker 驱动等仅适用于 Client 或 Server + Client 节点。
+            {tr('纯 Server 节点不运行任务，仅支持配置 TLS 附加 SAN 与配置代际回滚；CNI、Host Volume、Docker 驱动等仅适用于 Client 或 Server + Client 节点。', 'Server-only nodes do not run tasks; only extra TLS SANs and config rollback apply. CNI, Host Volumes, and Docker apply to Client or Server+Client nodes.')}
           </div>
         )}
 
         {cluster?.tls_enabled && (
           <Input
-            label="节点 TLS 证书附加 SAN（可选，逗号分隔）"
-            placeholder="例如 nomad-node.internal, 192.168.10.20"
+            label={tr('节点 TLS 证书附加 SAN（可选，逗号分隔）', 'Extra Node TLS SANs (optional, comma-separated)')}
+            placeholder={tr('例如 nomad-node.internal, 192.168.10.20', 'e.g. nomad-node.internal, 192.168.10.20')}
             value={extraSANs}
             onChange={(e) => setExtraSANs(e.target.value)}
           />
@@ -896,9 +900,9 @@ export function NomadNodeConfigModal({
 
         {showCNIProxyOption && (
           <div className="flex flex-wrap items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
-            <span>CNI 插件下载：{nomadProxyEnabled ? '通过系统代理' : '直连'}</span>
+            <span>{tr('CNI 插件下载：', 'CNI plugin download: ')}{nomadProxyEnabled ? tr('通过系统代理', 'Via System Proxy') : tr('直连', 'Direct')}</span>
             <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">
-              前往下载代理设置
+              {tr('前往下载代理设置', 'Proxy Settings')}
             </Link>
           </div>
         )}
@@ -912,7 +916,7 @@ export function NomadNodeConfigModal({
               checked={confirmSingle}
               onChange={(e) => setConfirmSingle(e.target.checked)}
             />
-            <span>单机模式更新节点配置会重启唯一节点并短时中断服务，我已知悉并确认继续。</span>
+            <span>{tr('单机模式更新节点配置会重启唯一节点并短时中断服务，我已知悉并确认继续。', 'Updating node config in single-node mode restarts the sole node and causes brief downtime. Confirm?')}</span>
           </label>
         )}
 
@@ -921,16 +925,16 @@ export function NomadNodeConfigModal({
             {isInstalled && gen > 1 && (
               <Button type="button" disabled={busy} onClick={() => void handleRollback()}>
                 <RotateCcw className="h-3.5 w-3.5" />
-                <span>回滚上一配置代际</span>
+                <span>{tr('回滚上一配置代际', 'Rollback Previous Gen')}</span>
               </Button>
             )}
           </div>
           <div className="flex gap-2">
             <Button type="button" disabled={busy} onClick={onClose}>
-              取消
+              {tr('取消', 'Cancel')}
             </Button>
             <Button type="submit" variant="primary" loading={busy}>
-              {isInstalled ? '保存并滚动生效' : '保存配置'}
+              {isInstalled ? tr('保存并滚动生效', 'Save & Roll Out') : tr('保存配置', 'Save Config')}
             </Button>
           </div>
         </div>

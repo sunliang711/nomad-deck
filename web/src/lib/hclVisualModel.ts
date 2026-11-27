@@ -7,6 +7,7 @@ import {
   type HCLNode,
   type NodePath,
 } from './hclBuilder.ts';
+import { trText } from './locale.ts';
 
 export interface IndexedBlock {
   path: NodePath;
@@ -749,7 +750,7 @@ export function addTaskTemplateBlock(
       {
         kind: 'attribute',
         name: 'data',
-        expression: wrapHeredoc(opts.data || '# 模板内容'),
+        expression: wrapHeredoc(opts.data || trText('# 模板内容', '# template content')),
         leading: '\n',
       },
     ];

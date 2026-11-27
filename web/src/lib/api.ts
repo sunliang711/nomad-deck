@@ -1,3 +1,5 @@
+import { getLocale, type Locale } from './locale.ts';
+
 export class ApiError extends Error {
   status: number;
   code: string;
@@ -217,11 +219,11 @@ export function wsURL(path: string): string {
 }
 
 // fmtTime renders absent Go timestamps as an empty value in management views.
-export function fmtTime(v?: string | null): string {
+export function fmtTime(v?: string | null, locale: Locale = getLocale()): string {
   if (!v || v.startsWith('0001-01-01T00:00:00')) return '-';
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return v;
-  return d.toLocaleString('zh-CN', { hour12: false });
+  return d.toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN', { hour12: false });
 }
 
 export function fmtBytes(n?: number): string {

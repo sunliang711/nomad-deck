@@ -29,6 +29,7 @@ import {
   type VaultRoleOption,
 } from '../lib/vaultHelpers';
 import { useAuth } from '../lib/auth';
+import { useI18n } from '../lib/i18n';
 import {
   JOB_CENTER_CLUSTER_KEY,
   readStoredSelection,
@@ -55,12 +56,13 @@ import { CodeEditor } from '../components/CodeEditor';
 import { ItemSwitcher } from '../components/ItemSwitcher';
 import { VisualJobBuilder, type VisualJobBuilderHandle } from '../components/VisualJobBuilder';
 import { JobRuntimePanel, type JobRuntimeRef } from '../components/JobRuntimePanel';
-import { STARTER_SAMPLES } from '../lib/jobBlueprints';
+import { getBlueprintDesc, getBlueprintLabel, getBlueprintTags, STARTER_SAMPLES } from '../lib/jobBlueprints';
 
 const sampleHCL = STARTER_SAMPLES[0].hcl;
 
 export function JobCenterPage() {
   const { isAdmin } = useAuth();
+  const { locale, tr } = useI18n();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClusterId = searchParams.get('cluster_id') || '';
   const queryNamespace = searchParams.get('namespace') || '';
@@ -155,7 +157,10 @@ export function JobCenterPage() {
         }
         window.sessionStorage.removeItem(INTEGRATION_DRAFT_JOB_STORAGE_KEY);
         toast.info(
-          `已载入联动示例（Role: ${draft?.roleName || 'default'}），核对后请依次点击「1. 校验配置 → 2. 预览计划 → 3. 确认运行」`,
+          tr(
+            `已载入联动示例（Role: ${draft?.roleName || 'default'}），核对后请依次点击「1. 校验配置 → 2. 预览计划 → 3. 确认运行」`,
+            `Loaded integration sample (Role: ${draft?.roleName || 'default'}). Review it, then click "1. Validate -> 2. Plan -> 3. Apply".`,
+          ),
         );
       }
     } catch {
@@ -182,7 +187,7 @@ export function JobCenterPage() {
         );
       }
     } catch (ex: any) {
-      setErr(ex?.message || '加载集群或模板列表失败');
+      setErr(ex?.message || tr('加载集群或模板列表失败', 'Failed to load clusters or templates'));
     } finally {
       setLoadingClusters(false);
     }
@@ -228,7 +233,7 @@ export function JobCenterPage() {
       const res = await apiGet(`/api/v1/nomad/${clusterId}/jobs?namespace=${encodeURIComponent(namespace)}`);
       setJobs(res.jobs || []);
     } catch (ex: any) {
-      setErr(ex?.message || '加载 Job 列表失败');
+      setErr(ex?.message || tr('加载 Job 列表失败', 'Failed to load jobs'));
     }
   }, [clusterId, namespace, needsDeployment]);
 
@@ -309,7 +314,7 @@ export function JobCenterPage() {
           const parsed = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/json-to-visual`, { job_json: job });
           if (request !== modeRequestRef.current) return;
           if (!parsed.lossless || !parsed.hcl) {
-            throw new Error('该 JSON 含有无法完整转换的字段，请继续使用 JSON 编辑，避免丢失配置');
+            throw new Error(tr('该 JSON 含有无法完整转换的字段，请继续使用 JSON 编辑，避免丢失配置', 'This JSON contains fields that cannot convert cleanly; keep using JSON mode to avoid losing config'));
           }
           setHcl(parsed.hcl);
           setJobVariables({});
@@ -322,7 +327,7 @@ export function JobCenterPage() {
       if (next === 'visual') setVisualReady(false);
       setEditMode(next);
     } catch (ex: any) {
-      if (request === modeRequestRef.current) setErr(ex?.message || '无法切换编辑模式');
+      if (request === modeRequestRef.current) setErr(ex?.message || tr('无法切换编辑模式', 'Failed to switch editor mode'));
     } finally {
       if (request === modeRequestRef.current) setModeBusy(false);
     }
@@ -333,7 +338,7 @@ export function JobCenterPage() {
     if (editMode === 'visual' && visualRef.current) {
       const result = await visualRef.current.flush();
       if (!result.valid) {
-        throw new Error(result.diagnostics.map((issue) => issue.message).join('；') || '请先完成积木配置');
+        throw new Error(result.diagnostics.map((issue) => issue.message).join(tr('；', '; ')) || tr('请先完成积木配置', 'Please complete visual builder fields first'));
       }
       current = result.hcl;
     }
@@ -356,14 +361,14 @@ export function JobCenterPage() {
       setValidationWarnings(warns);
       setPreflightErrors(preErrs);
       if (preErrs.length > 0) {
-        toast.error(`环境前置检查未通过：发现 ${preErrs.length} 项阻塞问题`);
+        toast.error(tr(`环境前置检查未通过：发现 ${preErrs.length} 项阻塞问题`, `Preflight checks failed: ${preErrs.length} blocker(s) found`));
       } else if (warns.length > 0) {
-        toast.info(`Job 语法校验通过，但有 ${warns.length} 条提醒请查看`);
+        toast.info(tr(`Job 语法校验通过，但有 ${warns.length} 条提醒请查看`, `Job syntax valid, with ${warns.length} warning(s)`));
       } else {
-        toast.success('Job 校验通过');
+        toast.success(tr('Job 校验通过', 'Job validation passed'));
       }
     } catch (ex: any) {
-      setErr(ex?.message || '校验失败');
+      setErr(ex?.message || tr('校验失败', 'Validation failed'));
     }
   };
 
@@ -377,7 +382,7 @@ export function JobCenterPage() {
         current = (await visualRef.current.flush()).hcl;
       }
       if (editMode === 'json') {
-        throw new Error('JSON 模式下请先切换回可视化编排或原生 HCL 后再插入');
+        throw new Error(tr('JSON 模式下请先切换回可视化编排或原生 HCL 后再插入', 'Switch from JSON mode to Visual or HCL mode before inserting'));
       }
       const treeRes = await apiPost<{ document: HCLDocument }>(`/api/v1/nomad/${clusterId}/job-ops/hcl-tree`, { hcl: current });
       const doc = treeRes.document;
@@ -398,9 +403,9 @@ export function JobCenterPage() {
       };
       walk(doc.nodes, []);
       if (!firstTaskPath) {
-        throw new Error('当前 HCL 中未找到 task 块，请先添加 task 块或复制下方片段手动粘贴');
+        throw new Error(tr('当前 HCL 中未找到 task 块，请先添加 task 块或复制下方片段手动粘贴', 'No task block found in current HCL; add a task block first or copy the snippet below'));
       }
-      const parsed = parseKVPath(vaultWizard.secretPath);
+      const parsed = parseKVPath(vaultWizard.secretPath, 'secret', locale);
       const keys = vaultWizard.keys
         .split(',')
         .map((s) => s.trim())
@@ -417,9 +422,9 @@ export function JobCenterPage() {
       setHcl(rendered.hcl);
       clearPlan();
       setShowVaultWizard(false);
-      toast.success('已将 vault 与 template 配置插入第一个 Task，可点击「1. 校验配置」核对');
+      toast.success(tr('已将 vault 与 template 配置插入第一个 Task，可点击「1. 校验配置」核对', 'Inserted vault and template config into first Task; click "1. Validate" to verify'));
     } catch (ex: any) {
-      toast.error(ex?.message || '插入 Vault 密钥配置失败');
+      toast.error(ex?.message || tr('插入 Vault 密钥配置失败', 'Failed to insert Vault secret config'));
     } finally {
       setVaultWizardBusy(false);
     }
@@ -439,11 +444,11 @@ export function JobCenterPage() {
         const pre = Array.isArray(res.plan?.preflight_errors) ? res.plan.preflight_errors : [];
         const sched = Array.isArray(res.plan?.scheduling_errors) ? res.plan.scheduling_errors : [];
         if (pre.length > 0 || sched.length > 0) {
-          toast.error('当前集群环境或调度条件不满足，请查看预览中的阻塞原因');
+          toast.error(tr('当前集群环境或调度条件不满足，请查看预览中的阻塞原因', 'Cluster environment or scheduling constraints not met; check blockers in plan'));
         }
       }
     } catch (ex: any) {
-      setErr(ex?.message || 'Plan 失败');
+      setErr(ex?.message || tr('Plan 失败', 'Plan failed'));
     }
   };
 
@@ -458,14 +463,14 @@ export function JobCenterPage() {
         ignore_preflight: ignorePreflight,
       });
       clearPlan();
-      toast.success(`Job「${targetJobId || '任务'}」已提交运行`);
+      toast.success(tr(`Job「${targetJobId || '任务'}」已提交运行`, `Job "${targetJobId || 'job'}" submitted`));
       await loadJobs();
       if (targetJobId) {
         setInspectingJob({ id: targetJobId, namespace: targetNs });
         setPageTab('list');
       }
     } catch (ex: any) {
-      setErr(ex?.message || 'Apply 失败');
+      setErr(ex?.message || tr('Apply 失败', 'Apply failed'));
     }
   };
 
@@ -497,14 +502,14 @@ export function JobCenterPage() {
           setEditMode('json');
         } else {
           setHcl('');
-          setErr('该 Job 没有可用的编辑定义');
+          setErr(tr('该 Job 没有可用的编辑定义', 'No editable definition available for this Job'));
         }
         setJobVariables(source?.variables || {});
         setNamespace(ns);
         if (source?.drifted && source?.reason) toast.info(source.reason);
         setRevisions(rev.revisions || []);
       } catch (ex: any) {
-        if (request === editRequestRef.current) setErr(ex?.message || '读取 Job 编辑源码失败');
+        if (request === editRequestRef.current) setErr(ex?.message || tr('读取 Job 编辑源码失败', 'Failed to load Job edit source'));
       }
     },
     [clusterId, effectiveBuilderNamespace, isAdmin],
@@ -579,21 +584,21 @@ export function JobCenterPage() {
     return templates.filter((t) => String(t.name || '').toLowerCase().includes(q));
   }, [templates, searchQuery]);
 
-  if (loadingClusters) return <LoadingState label="正在加载 Job 工作区…" />;
+  if (loadingClusters) return <LoadingState label={tr('正在加载 Job 工作区…', 'Loading Job workspace...')} />;
 
   if (!clusters.length) {
     return (
       <div className="space-y-5">
-        <PageHeader title="Nomad Job 中心" subtitle="统一管理工作负载运行态、可视化编排、日志终端与模板复用" />
+        <PageHeader title={tr('Nomad Job 中心', 'Nomad Job Center')} subtitle={tr('统一管理工作负载运行态、可视化编排、日志终端与模板复用', 'Manage workload runtime, visual composer, logs/exec, and reusable blueprints')} />
         <ErrorAlert message={err} onClose={() => setErr('')} />
         <Card>
           <EmptyState
             icon={<Boxes className="h-6 w-6" />}
-            title="先搭建一个 Nomad 集群"
-            description="Job 需要在 Nomad Client 上运行。集群部署完成后，即可在这里可视化编排并运行第一个任务。"
+            title={tr('先搭建一个 Nomad 集群', 'Set up a Nomad cluster first')}
+            description={tr('Job 需要在 Nomad Client 上运行。集群部署完成后，即可在这里可视化编排并运行第一个任务。', 'Jobs run on Nomad Clients. Once a cluster is deployed, you can visually compose and run your first job here.')}
             action={
               <Link to="/nomad" className="primary-button">
-                前往 Nomad 集群
+                {tr('前往 Nomad 集群', 'Go to Nomad Clusters')}
               </Link>
             }
           />
@@ -623,8 +628,8 @@ export function JobCenterPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Nomad Job 中心"
-        subtitle="一站式完成工作负载运行监控、日志终端排障、可视化编排与模板复用"
+        title={tr('Nomad Job 中心', 'Nomad Job Center')}
+        subtitle={tr('一站式完成工作负载运行监控、日志终端排障、可视化编排与模板复用', 'Unified workload runtime monitoring, live logs & shell exec, visual composer, and templates')}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -634,7 +639,7 @@ export function JobCenterPage() {
               }}
             >
               <RefreshCw className="h-4 w-4" />
-              <span>刷新</span>
+              <span>{tr('刷新', 'Refresh')}</span>
             </Button>
             {isAdmin && clusterId && (
               <>
@@ -648,11 +653,11 @@ export function JobCenterPage() {
                   }
                 >
                   <Download className="h-4 w-4" />
-                  <span>导出 HCL</span>
+                  <span>{tr('导出 HCL', 'Export HCL')}</span>
                 </Button>
                 <Button variant="primary" onClick={startFreshDraft}>
                   <FilePlus2 className="h-4 w-4" />
-                  <span>新建任务</span>
+                  <span>{tr('新建任务', 'New Job')}</span>
                 </Button>
               </>
             )}
@@ -664,7 +669,7 @@ export function JobCenterPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <ItemSwitcher
-            label="Nomad 集群"
+            label={tr('Nomad 集群', 'Nomad Cluster')}
             selectedId={clusterId}
             disabled={modeBusy || (pageTab === 'builder' && editMode === 'visual' && !visualReady)}
             onSelect={(id) => {
@@ -679,10 +684,10 @@ export function JobCenterPage() {
             }))}
           />
           <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-            <span className="shrink-0">命名空间</span>
+            <span className="shrink-0">{tr('命名空间', 'Namespace')}</span>
             <div className="w-40">
               <Select
-                aria-label="任务命名空间"
+                aria-label={tr('任务命名空间', 'Job Namespace')}
                 size="sm"
                 value={pageTab === 'builder' ? effectiveBuilderNamespace : namespace}
                 disabled={modeBusy || (pageTab === 'builder' && editMode === 'visual' && !visualReady)}
@@ -692,7 +697,7 @@ export function JobCenterPage() {
                   clearPlan();
                 }}
               >
-                {pageTab === 'list' && <option value="*">全部 Namespace (*)</option>}
+                {pageTab === 'list' && <option value="*">{tr('全部 Namespace (*)', 'All Namespaces (*)')}</option>}
                 {namespaceOptions.map((ns) => (
                   <option key={ns} value={ns}>
                     {ns}
@@ -705,12 +710,12 @@ export function JobCenterPage() {
 
         <SectionTabs
           tabs={[
-            { id: 'list', label: '运行态 Jobs', badge: jobs.length },
+            { id: 'list', label: tr('运行态 Jobs', 'Runtime Jobs'), badge: jobs.length },
             {
               id: 'builder',
-              label: selectedJobId ? `编排工作台 · ${selectedJobId}` : '编排工作台',
+              label: selectedJobId ? tr(`编排工作台 · ${selectedJobId}`, `Composer · ${selectedJobId}`) : tr('编排工作台', 'Composer'),
             },
-            { id: 'templates', label: '模板库', badge: STARTER_SAMPLES.length + templates.length },
+            { id: 'templates', label: tr('模板库', 'Templates'), badge: STARTER_SAMPLES.length + templates.length },
           ]}
           active={pageTab}
           onChange={(next) => {
@@ -727,9 +732,9 @@ export function JobCenterPage() {
           role="status"
           className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200"
         >
-          <p>「{selectedCluster.name}」尚未部署。可以先编写配置，部署完成后再校验和运行。</p>
+          <p>{tr(`「${selectedCluster.name}」尚未部署。可以先编写配置，部署完成后再校验和运行。`, `"${selectedCluster.name}" is not deployed yet. You can draft configs now and validate or apply once deployed.`)}</p>
           <Link to={`/nomad?id=${clusterId}`} className="primary-button">
-            前往部署集群
+            {tr('前往部署集群', 'Deploy Cluster')}
           </Link>
         </div>
       )}
@@ -757,10 +762,10 @@ export function JobCenterPage() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-1.5">
                 {[
-                  { id: 'all', label: '全部', count: jobStats.total },
-                  { id: 'running', label: '运行中', count: jobStats.running },
-                  { id: 'pending', label: '等待中', count: jobStats.pending },
-                  { id: 'stopped', label: '已停止', count: jobStats.stopped },
+                  { id: 'all', label: tr('全部', 'All'), count: jobStats.total },
+                  { id: 'running', label: tr('运行中', 'Running'), count: jobStats.running },
+                  { id: 'pending', label: tr('等待中', 'Pending'), count: jobStats.pending },
+                  { id: 'stopped', label: tr('已停止', 'Stopped'), count: jobStats.stopped },
                 ].map((f) => {
                   const active = statusFilter === f.id;
                   return (
@@ -787,47 +792,47 @@ export function JobCenterPage() {
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="搜索 Job 名称、类型或命名空间…"
+                  placeholder={tr('搜索 Job 名称、类型或命名空间…', 'Search job name, type, or namespace...')}
                   className="w-full rounded-xl border border-slate-200 bg-white py-1.5 pl-9 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100"
                 />
               </div>
             </div>
 
             <Card
-              title={`运行态 Jobs (${filteredJobs.length})`}
-              description="点击任意 Job 名称或「运行态」可直接查看副本状态、实时日志、资源监控、文件浏览器与 Web 终端"
+              title={tr(`运行态 Jobs (${filteredJobs.length})`, `Runtime Jobs (${filteredJobs.length})`)}
+              description={tr('点击任意 Job 名称或「运行态」可直接查看副本状态、实时日志、资源监控、文件浏览器与 Web 终端', 'Click any job name or "Runtime" to inspect allocations, live logs, metrics, files, and Web Exec')}
             >
               {jobs.length === 0 ? (
                 <EmptyState
-                  title="当前命名空间暂无运行中的 Job"
-                  description="内置 Nginx、PostgreSQL + Vault、Redis + Vault 等开箱蓝图，一键即可可视化编排并提交运行。"
+                  title={tr('当前命名空间暂无运行中的 Job', 'No jobs in this namespace')}
+                  description={tr('内置 Nginx、PostgreSQL + Vault、Redis + Vault 等开箱蓝图，一键即可可视化编排并提交运行。', 'Built-in blueprints like Nginx, PostgreSQL + Vault, and Redis + Vault are ready for one-click visual composition.')}
                   action={
                     isAdmin ? (
                       <div className="flex flex-wrap justify-center gap-2">
                         <Button size="sm" variant="primary" onClick={startFreshDraft}>
                           <FilePlus2 className="h-3.5 w-3.5" />
-                          <span>可视化新建任务</span>
+                          <span>{tr('可视化新建任务', 'New Visual Job')}</span>
                         </Button>
                         <Button size="sm" onClick={() => setPageTab('templates')}>
                           <Sparkles className="h-3.5 w-3.5" />
-                          <span>浏览场景蓝图</span>
+                          <span>{tr('浏览场景蓝图', 'Browse Blueprints')}</span>
                         </Button>
                       </div>
                     ) : undefined
                   }
                 />
               ) : filteredJobs.length === 0 ? (
-                <div className="py-8 text-center text-xs text-slate-400 dark:text-slate-500">没有符合筛选条件的任务</div>
+                <div className="py-8 text-center text-xs text-slate-400 dark:text-slate-500">{tr('没有符合筛选条件的任务', 'No jobs match the current filter')}</div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[620px] text-left text-xs whitespace-nowrap">
                     <thead>
                       <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                        <th className="py-2.5 pr-4 font-medium">Job 名称</th>
-                        <th className="py-2.5 pr-4 font-medium">运行状态</th>
-                        <th className="py-2.5 pr-4 font-medium">类型</th>
-                        <th className="py-2.5 pr-4 font-medium">命名空间</th>
-                        <th className="py-2.5 text-right font-medium">操作</th>
+                        <th className="py-2.5 pr-4 font-medium">{tr('Job 名称', 'Job Name')}</th>
+                        <th className="py-2.5 pr-4 font-medium">{tr('运行状态', 'Status')}</th>
+                        <th className="py-2.5 pr-4 font-medium">{tr('类型', 'Type')}</th>
+                        <th className="py-2.5 pr-4 font-medium">{tr('命名空间', 'Namespace')}</th>
+                        <th className="py-2.5 text-right font-medium">{tr('操作', 'Actions')}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
@@ -841,12 +846,12 @@ export function JobCenterPage() {
                                 <button
                                   type="button"
                                   onClick={() => setInspectingJob({ ...j, namespace: jobNs })}
-                                  title="查看 Allocations、实时日志与终端"
+                                  title={tr('查看 Allocations、实时日志与终端', 'Inspect Allocations, live logs, and terminal')}
                                   className="font-mono text-[13px] font-semibold text-slate-900 hover:text-indigo-600 hover:underline dark:text-slate-100 dark:hover:text-indigo-400 text-left"
                                 >
                                   {j.id}
                                 </button>
-                                {isEditing && <Badge tone="blue">编排中</Badge>}
+                                {isEditing && <Badge tone="blue">{tr('编排中', 'Editing')}</Badge>}
                               </div>
                             </td>
                             <td className="py-3 pr-4">
@@ -862,20 +867,20 @@ export function JobCenterPage() {
                                   onClick={() => setInspectingJob({ ...j, namespace: jobNs })}
                                 >
                                   <Activity className="h-3.5 w-3.5" />
-                                  <span>运行态</span>
+                                  <span>{tr('运行态', 'Runtime')}</span>
                                 </Button>
                                 {isAdmin && (
                                   <Button size="sm" onClick={() => void loadJobForEdit({ id: j.id, namespace: jobNs })}>
                                     <Pencil className="h-3.5 w-3.5" />
-                                    <span>编排编辑</span>
+                                    <span>{tr('编排编辑', 'Edit')}</span>
                                   </Button>
                                 )}
                                 {isAdmin && (
                                   <>
                                     <button
                                       type="button"
-                                      title="启动 Job"
-                                      aria-label={`启动 ${j.id}`}
+                                      title={tr('启动 Job', 'Start Job')}
+                                      aria-label={tr(`启动 ${j.id}`, `Start ${j.id}`)}
                                       disabled={!j.stop}
                                       onClick={() =>
                                         void apiPost(
@@ -883,7 +888,7 @@ export function JobCenterPage() {
                                           {},
                                         )
                                           .then(() => {
-                                            toast.success(`已启动 Job ${j.id}`);
+                                            toast.success(tr(`已启动 Job ${j.id}`, `Started Job ${j.id}`));
                                             return loadJobs();
                                           })
                                           .catch((ex) => setErr(ex.message))
@@ -894,14 +899,14 @@ export function JobCenterPage() {
                                     </button>
                                     <button
                                       type="button"
-                                      title="停止 Job"
-                                      aria-label={`停止 ${j.id}`}
+                                      title={tr('停止 Job', 'Stop Job')}
+                                      aria-label={tr(`停止 ${j.id}`, `Stop ${j.id}`)}
                                       disabled={j.stop}
                                       onClick={async () => {
                                         if (
-                                          !(await askConfirm(`确认停止运行中的 Job「${j.id}」（Namespace: ${jobNs}）吗？`, {
-                                            title: '停止 Job',
-                                            confirmText: '确认停止',
+                                          !(await askConfirm(tr(`确认停止运行中的 Job「${j.id}」（Namespace: ${jobNs}）吗？`, `Stop running Job "${j.id}" (Namespace: ${jobNs})?`), {
+                                            title: tr('停止 Job', 'Stop Job'),
+                                            confirmText: tr('确认停止', 'Stop'),
                                             danger: true,
                                           }))
                                         ) {
@@ -912,7 +917,7 @@ export function JobCenterPage() {
                                           {},
                                         )
                                           .then(() => {
-                                            toast.success(`已停止 Job ${j.id}`);
+                                            toast.success(tr(`已停止 Job ${j.id}`, `Stopped Job ${j.id}`));
                                             return loadJobs();
                                           })
                                           .catch((ex) => setErr(ex.message));
@@ -923,13 +928,13 @@ export function JobCenterPage() {
                                     </button>
                                     <button
                                       type="button"
-                                      title="清理并彻底删除 Job"
-                                      aria-label={`清理 ${j.id}`}
+                                      title={tr('清理并彻底删除 Job', 'Purge and delete Job')}
+                                      aria-label={tr(`清理 ${j.id}`, `Purge ${j.id}`)}
                                       onClick={async () => {
                                         if (
-                                          !(await askConfirm(`确认清理并彻底删除 Job「${j.id}」（Namespace: ${jobNs}）吗？`, {
-                                            title: '清理删除 Job',
-                                            confirmText: '确认 Purge',
+                                          !(await askConfirm(tr(`确认清理并彻底删除 Job「${j.id}」（Namespace: ${jobNs}）吗？`, `Purge and permanently delete Job "${j.id}" (Namespace: ${jobNs})?`), {
+                                            title: tr('清理删除 Job', 'Purge Job'),
+                                            confirmText: tr('确认 Purge', 'Purge'),
                                             danger: true,
                                           }))
                                         ) {
@@ -940,7 +945,7 @@ export function JobCenterPage() {
                                           { confirm_job_id: j.id },
                                         )
                                           .then(() => {
-                                            toast.success(`已清理 Job ${j.id}`);
+                                            toast.success(tr(`已清理 Job ${j.id}`, `Purged Job ${j.id}`));
                                             if (selectedJobId === j.id) setSelectedJobId('');
                                             return loadJobs();
                                           })
@@ -971,9 +976,9 @@ export function JobCenterPage() {
           className="min-w-0"
           title={
             <div className="flex flex-wrap items-center gap-2">
-              <span>编排工作台</span>
+              <span>{tr('编排工作台', 'Job Composer')}</span>
               <Badge tone={selectedJobId ? 'blue' : 'neutral'}>
-                {selectedJobId ? `编辑运行中任务：${selectedJobId}` : '新建任务草稿'}
+                {selectedJobId ? tr(`编辑运行中任务：${selectedJobId}`, `Editing job: ${selectedJobId}`) : tr('新建任务草稿', 'New job draft')}
               </Badge>
             </div>
           }
@@ -988,17 +993,17 @@ export function JobCenterPage() {
                   }}
                 >
                   <Activity className="h-3.5 w-3.5" />
-                  <span>查看 {selectedJobId} 运行态</span>
+                  <span>{tr(`查看 ${selectedJobId} 运行态`, `View ${selectedJobId} Runtime`)}</span>
                 </Button>
               )}
               {isAdmin && (
                 <>
                   <Button size="sm" disabled={needsDeployment} onClick={() => setShowVaultWizard(true)}>
                     <KeyRound className="h-3.5 w-3.5" />
-                    <span>插入 Vault 密钥</span>
+                    <span>{tr('插入 Vault 密钥', 'Insert Vault Secret')}</span>
                   </Button>
                   <Button size="sm" onClick={() => setShowCompose(true)}>
-                    Compose 导入
+                    {tr('Compose 导入', 'Import Compose')}
                   </Button>
                 </>
               )}
@@ -1010,9 +1015,9 @@ export function JobCenterPage() {
               <SectionTabs
                 variant="underline"
                 tabs={[
-                  ...(isAdmin ? [{ id: 'visual', label: '可视化编排', title: '所见即所得的卡片式表单 + 高级结构树 + 实时 HCL 分栏预览' }] : []),
-                  { id: 'hcl', label: '原生 HCL', title: 'Nomad 原生 HashiCorp Configuration Language 声明式任务定义' },
-                  { id: 'json', label: 'JSON 定义' },
+                  ...(isAdmin ? [{ id: 'visual', label: tr('可视化编排', 'Visual Builder'), title: tr('所见即所得的卡片式表单 + 高级结构树 + 实时 HCL 分栏预览', 'WYSIWYG card forms + advanced AST tree + live HCL preview') }] : []),
+                  { id: 'hcl', label: tr('原生 HCL', 'Native HCL'), title: tr('Nomad 原生 HashiCorp Configuration Language 声明式任务定义', 'Native Nomad HashiCorp Configuration Language job spec') },
+                  { id: 'json', label: tr('JSON 定义', 'JSON Spec') },
                 ]}
                 active={editMode}
                 onChange={(m) => {
@@ -1021,10 +1026,10 @@ export function JobCenterPage() {
               />
               {isAdmin && (
                 <div className="flex items-center gap-2">
-                  <span className="text-slate-400 dark:text-slate-500 shrink-0">快速载入蓝图</span>
+                  <span className="text-slate-400 dark:text-slate-500 shrink-0">{tr('快速载入蓝图', 'Load Blueprint')}</span>
                   <div className="w-48">
                     <Select
-                      aria-label="选择入门示例"
+                      aria-label={tr('选择入门示例', 'Select starter blueprint')}
                       size="sm"
                       value={activeSample?.id || ''}
                       onChange={(e) => {
@@ -1033,10 +1038,10 @@ export function JobCenterPage() {
                         loadDraftIntoComposer(found.hcl);
                       }}
                     >
-                      <option value="">选择场景示例…</option>
+                      <option value="">{tr('选择场景示例…', 'Select a blueprint...')}</option>
                       {STARTER_SAMPLES.map((s) => (
                         <option key={s.id} value={s.id}>
-                          {s.label}
+                          {getBlueprintLabel(s, locale)}
                         </option>
                       ))}
                     </Select>
@@ -1047,7 +1052,7 @@ export function JobCenterPage() {
 
             {activeSample && (
               <p className="rounded-lg bg-slate-50 px-3 py-1.5 text-[11px] text-slate-600 dark:bg-slate-950/50 dark:text-slate-400">
-                当前蓝图：{activeSample.desc}
+                {tr('当前蓝图：', 'Current blueprint: ')}{getBlueprintDesc(activeSample, locale)}
               </p>
             )}
 
@@ -1083,7 +1088,7 @@ export function JobCenterPage() {
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/50">
                 <div className="flex flex-wrap items-center gap-2">
                   <input
-                    placeholder="输入名称保存为模板…"
+                    placeholder={tr('输入名称保存为模板…', 'Template name...')}
                     value={tplName}
                     onChange={(e) => setTplName(e.target.value)}
                     className="w-44 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
@@ -1096,13 +1101,13 @@ export function JobCenterPage() {
                       void apiPost('/api/v1/job-templates', { name: tplName.trim(), edit_mode: 'hcl', hcl })
                         .then(() => {
                           setTplName('');
-                          toast.success('模板已保存至模板库');
+                          toast.success(tr('模板已保存至模板库', 'Saved to template library'));
                           return loadClusters();
                         })
                         .catch((ex) => setErr(ex.message))
                     }
                   >
-                    存为模板
+                    {tr('存为模板', 'Save Template')}
                   </Button>
                 </div>
 
@@ -1112,7 +1117,7 @@ export function JobCenterPage() {
                     disabled={needsDeployment || modeBusy || (editMode === 'visual' && !visualReady)}
                     onClick={() => void validateJob()}
                   >
-                    1. 校验配置
+                    {tr('1. 校验配置', '1. Validate')}
                   </Button>
                   <Button
                     size="sm"
@@ -1120,7 +1125,7 @@ export function JobCenterPage() {
                     disabled={needsDeployment || modeBusy || (editMode === 'visual' && !visualReady)}
                     onClick={() => void runPlan()}
                   >
-                    2. 预览计划
+                    {tr('2. 预览计划', '2. Plan')}
                   </Button>
                   <Button
                     size="sm"
@@ -1135,15 +1140,15 @@ export function JobCenterPage() {
                     }
                     title={
                       !plan?.plan_id
-                        ? '请先点击「2. 预览计划」生成执行计划'
+                        ? tr('请先点击「2. 预览计划」生成执行计划', 'Click "2. Plan" first to generate an execution plan')
                         : planBlockingReasons.length > 0 && !ignorePreflight
-                          ? '当前集群环境或调度条件未满足，请先处理问题或勾选忽略检查'
-                          : '确认将任务提交至 Nomad 集群运行并跳转查看运行态'
+                          ? tr('当前集群环境或调度条件未满足，请先处理问题或勾选忽略检查', 'Cluster environment or scheduling checks failed; resolve blockers or check ignore')
+                          : tr('确认将任务提交至 Nomad 集群运行并跳转查看运行态', 'Submit job to Nomad cluster and open runtime view')
                     }
                     onClick={() => void runApply()}
                   >
                     <Play className="h-3.5 w-3.5" />
-                    <span>3. 确认运行</span>
+                    <span>{tr('3. 确认运行', '3. Apply')}</span>
                   </Button>
                 </div>
               </div>
@@ -1154,7 +1159,7 @@ export function JobCenterPage() {
                 role="alert"
                 className="rounded-xl border border-rose-300 bg-rose-50/90 p-3 text-xs text-rose-950 space-y-1 dark:border-rose-500/40 dark:bg-rose-950/35 dark:text-rose-100"
               >
-                <div className="font-semibold">环境前置检查未通过（当前无法在该集群调度运行）：</div>
+                <div className="font-semibold">{tr('环境前置检查未通过（当前无法在该集群调度运行）：', 'Preflight checks failed (cannot schedule on this cluster):')}</div>
                 {preflightErrors.map((msg, idx) => (
                   <p key={idx} className="leading-5">
                     • {msg}
@@ -1168,7 +1173,7 @@ export function JobCenterPage() {
                 role="alert"
                 className="rounded-xl border border-amber-300 bg-amber-50/90 p-3 text-xs text-amber-950 space-y-1 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100"
               >
-                <div className="font-semibold">校验提醒（含 Nomad-Vault 联动核对）：</div>
+                <div className="font-semibold">{tr('校验提醒（含 Nomad-Vault 联动核对）：', 'Validation warnings (including Nomad-Vault checks):')}</div>
                 {validationWarnings.map((w, idx) => (
                   <p key={idx} className="leading-5">
                     • {w}
@@ -1182,12 +1187,15 @@ export function JobCenterPage() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-semibold text-indigo-950 dark:text-indigo-100">
-                      调度变更预览 · 请核对后点击上方「3. 确认运行」
+                      {tr('调度变更预览 · 请核对后点击上方「3. 确认运行」', 'Plan Preview · Review and click "3. Apply" above')}
                     </span>
                     <Badge tone="blue">
-                      {({ Added: '创建任务', Edited: '更新任务', None: '配置无变化', Deleted: '删除任务' } as Record<string, string>)[
-                        plan.diff?.Type
-                      ] || '配置变更'}
+                      {({
+                        Added: tr('创建任务', 'Create Job'),
+                        Edited: tr('更新任务', 'Update Job'),
+                        None: tr('配置无变化', 'No Changes'),
+                        Deleted: tr('删除任务', 'Delete Job'),
+                      } as Record<string, string>)[plan.diff?.Type] || tr('配置变更', 'Config Diff')}
                     </Badge>
                   </div>
                   <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400" title={plan.plan_id}>
@@ -1195,7 +1203,7 @@ export function JobCenterPage() {
                   </span>
                 </div>
                 <p className="leading-5 text-slate-700 dark:text-slate-200">
-                  任务 <code className="font-mono font-semibold">{plan.job_id}</code> · 命名空间{' '}
+                  {tr('任务', 'Job')} <code className="font-mono font-semibold">{plan.job_id}</code> · {tr('命名空间', 'Namespace')}{' '}
                   <code className="font-mono">{plan.namespace}</code>
                 </p>
                 {(plan.warnings || plan.validation_warnings) && (
@@ -1208,7 +1216,7 @@ export function JobCenterPage() {
                     role="alert"
                     className="rounded-xl border border-rose-300 bg-rose-50/90 p-3 text-xs text-rose-950 space-y-2 dark:border-rose-500/40 dark:bg-rose-950/35 dark:text-rose-100"
                   >
-                    <div className="font-semibold">环境或调度检查未通过（已阻止直接提交）：</div>
+                    <div className="font-semibold">{tr('环境或调度检查未通过（已阻止直接提交）：', 'Environment or scheduling checks failed (submission blocked):')}</div>
                     <div className="space-y-1">
                       {planBlockingReasons.map((msg, idx) => (
                         <p key={idx} className="leading-5">
@@ -1222,13 +1230,13 @@ export function JobCenterPage() {
                         checked={ignorePreflight}
                         onChange={(e) => setIgnorePreflight(e.target.checked)}
                       />
-                      <span>忽略环境与调度检查，仍强行提交为待调度状态（pending）</span>
+                      <span>{tr('忽略环境与调度检查，仍强行提交为待调度状态（pending）', 'Ignore environment & scheduling checks and force submit as pending')}</span>
                     </label>
                   </div>
                 )}
                 <details>
                   <summary className="cursor-pointer py-1 font-medium text-indigo-700 dark:text-indigo-300">
-                    查看调度变更详情
+                    {tr('查看调度变更详情', 'View plan diff details')}
                   </summary>
                   <pre className="mt-2 max-h-56 overflow-auto rounded-lg bg-slate-950 p-2.5 font-mono text-[11px] text-slate-100">
                     {JSON.stringify(
@@ -1244,7 +1252,7 @@ export function JobCenterPage() {
             {revisions.length > 0 && selectedJobId && (
               <details className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 dark:border-slate-800 dark:bg-slate-950/40">
                 <summary className="cursor-pointer font-semibold text-slate-700 dark:text-slate-200">
-                  历史修订记录：{selectedJobId}（{revisions.length} 条）
+                  {tr(`历史修订记录：${selectedJobId}（${revisions.length} 条）`, `Revision History: ${selectedJobId} (${revisions.length})`)}
                 </summary>
                 <div className="mt-2.5 space-y-1.5">
                   {revisions.slice(0, 8).map((rv) => (
@@ -1253,7 +1261,7 @@ export function JobCenterPage() {
                       className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 dark:border-slate-800 dark:bg-slate-900"
                     >
                       <span>
-                        v{rv.revision_no} · {rv.source} · {rv.submit_status} · {fmtTime(rv.created_at)}
+                        v{rv.revision_no} · {rv.source} · {rv.submit_status} · {fmtTime(rv.created_at, locale)}
                       </span>
                       {isAdmin && rv.remote_job_version != null && (
                         <Button
@@ -1263,11 +1271,11 @@ export function JobCenterPage() {
                               `/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(effectiveBuilderNamespace)}/jobs/${encodeURIComponent(selectedJobId)}/revert`,
                               { version: rv.remote_job_version },
                             )
-                              .then(() => toast.success('已回滚 Job 版本'))
+                              .then(() => toast.success(tr('已回滚 Job 版本', 'Job version reverted')))
                               .catch((ex) => setErr(ex.message))
                           }
                         >
-                          <RotateCcw className="h-3 w-3" /> 回滚
+                          <RotateCcw className="h-3 w-3" /> {tr('回滚', 'Revert')}
                         </Button>
                       )}
                     </div>
@@ -1283,8 +1291,8 @@ export function JobCenterPage() {
       {pageTab === 'templates' && (
         <div className="space-y-5">
           <Card
-            title={`内置场景蓝图 (${STARTER_SAMPLES.length})`}
-            description="点击即可载入可视化编排工作台，快速修改镜像、端口、资源与 Vault 密钥并运行"
+            title={tr(`内置场景蓝图 (${STARTER_SAMPLES.length})`, `Starter Blueprints (${STARTER_SAMPLES.length})`)}
+            description={tr('点击即可载入可视化编排工作台，快速修改镜像、端口、资源与 Vault 密钥并运行', 'Click to load into Visual Composer to customize image, ports, resources, and Vault secrets')}
           >
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 text-xs">
               {STARTER_SAMPLES.map((s) => (
@@ -1294,24 +1302,24 @@ export function JobCenterPage() {
                 >
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-semibold text-sm text-slate-900 dark:text-slate-100">{s.label}</span>
+                      <span className="font-semibold text-sm text-slate-900 dark:text-slate-100">{getBlueprintLabel(s, locale)}</span>
                       <div className="flex flex-wrap gap-1">
-                        {s.tags.map((tag) => (
+                        {getBlueprintTags(s, locale).map((tag) => (
                           <Badge key={tag} tone={tag === 'Vault' ? 'green' : tag === 'Docker' ? 'blue' : 'neutral'}>
                             {tag}
                           </Badge>
                         ))}
                       </div>
                     </div>
-                    <p className="leading-5 text-slate-500 dark:text-slate-400">{s.desc}</p>
+                    <p className="leading-5 text-slate-500 dark:text-slate-400">{getBlueprintDesc(s, locale)}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 border-t border-slate-200/70 pt-3 dark:border-slate-800">
                     <Button size="sm" variant="primary" onClick={() => loadDraftIntoComposer(s.hcl, isAdmin ? 'visual' : 'hcl')}>
                       <LayoutGrid className="h-3.5 w-3.5" />
-                      <span>可视化编排</span>
+                      <span>{tr('可视化编排', 'Visual Builder')}</span>
                     </Button>
                     <Button size="sm" onClick={() => loadDraftIntoComposer(s.hcl, 'hcl')}>
-                      HCL 源码编辑
+                      {tr('HCL 源码编辑', 'Edit HCL')}
                     </Button>
                   </div>
                 </div>
@@ -1320,7 +1328,7 @@ export function JobCenterPage() {
           </Card>
 
           <Card
-            title={`自定义模板库 (${templates.length})`}
+            title={tr(`自定义模板库 (${templates.length})`, `Custom Templates (${templates.length})`)}
             actions={
               templates.length > 0 && (
                 <div className="relative w-52">
@@ -1329,7 +1337,7 @@ export function JobCenterPage() {
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="筛选模板名称…"
+                    placeholder={tr('筛选模板名称…', 'Filter templates...')}
                     className="w-full rounded-lg border border-slate-200 bg-white py-1 pl-8 pr-2.5 text-xs dark:border-slate-700 dark:bg-slate-900"
                   />
                 </div>
@@ -1338,11 +1346,11 @@ export function JobCenterPage() {
           >
             {templates.length === 0 ? (
               <EmptyState
-                title="暂无自定义模板"
-                description="在「编排工作台」底部输入模板名称并点击「存为模板」，方便团队一键复用。"
+                title={tr('暂无自定义模板', 'No custom templates')}
+                description={tr('在「编排工作台」底部输入模板名称并点击「存为模板」，方便团队一键复用。', 'Enter a template name at the bottom of the Composer and click "Save Template" for reuse.')}
               />
             ) : filteredTemplates.length === 0 ? (
-              <div className="py-8 text-center text-xs text-slate-400">没有匹配的模板</div>
+              <div className="py-8 text-center text-xs text-slate-400">{tr('没有匹配的模板', 'No matching templates')}</div>
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 text-xs">
                 {filteredTemplates.map((t) => (
@@ -1352,22 +1360,22 @@ export function JobCenterPage() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-semibold text-slate-800 dark:text-slate-100">{t.name}</div>
-                      <div className="mt-0.5 text-[11px] text-slate-400">自定义 HCL 模板</div>
+                      <div className="mt-0.5 text-[11px] text-slate-400">{tr('自定义 HCL 模板', 'Custom HCL Template')}</div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
                       <Button size="sm" onClick={() => loadDraftIntoComposer(t.hcl || '', isAdmin ? 'visual' : 'hcl')}>
-                        载入编排
+                        {tr('载入编排', 'Load')}
                       </Button>
                       {isAdmin && (
                         <button
                           type="button"
-                          title="删除模板"
-                          aria-label={`删除模板 ${t.name}`}
+                          title={tr('删除模板', 'Delete template')}
+                          aria-label={tr(`删除模板 ${t.name}`, `Delete template ${t.name}`)}
                           onClick={async () => {
                             if (
-                              !(await askConfirm(`确认删除 Job 模板「${t.name}」吗？`, {
-                                title: '删除模板',
-                                confirmText: '确认删除',
+                              !(await askConfirm(tr(`确认删除 Job 模板「${t.name}」吗？`, `Delete job template "${t.name}"?`), {
+                                title: tr('删除模板', 'Delete Template'),
+                                confirmText: tr('确认删除', 'Delete'),
                                 danger: true,
                               }))
                             ) {
@@ -1375,7 +1383,7 @@ export function JobCenterPage() {
                             }
                             void apiDelete(`/api/v1/job-templates/${t.id}`)
                               .then(() => {
-                                toast.success(`已删除模板 ${t.name}`);
+                                toast.success(tr(`已删除模板 ${t.name}`, `Deleted template ${t.name}`));
                                 return loadClusters();
                               })
                               .catch((ex) => setErr(ex.message));
@@ -1395,11 +1403,11 @@ export function JobCenterPage() {
       )}
 
       {/* Docker Compose Import Modal */}
-      <Modal open={showCompose} title="导入 Docker Compose 转 HCL" onClose={() => setShowCompose(false)} wide>
+      <Modal open={showCompose} title={tr('导入 Docker Compose 转 HCL', 'Import Docker Compose to HCL')} onClose={() => setShowCompose(false)} wide>
         <div className="space-y-3 text-xs">
           <CodeEditor value={composeText} onChange={setComposeText} height="260px" />
           <div className="flex justify-end gap-2">
-            <Button onClick={() => setShowCompose(false)}>取消</Button>
+            <Button onClick={() => setShowCompose(false)}>{tr('取消', 'Cancel')}</Button>
             <Button
               variant="primary"
               onClick={() =>
@@ -1407,21 +1415,21 @@ export function JobCenterPage() {
                   .then((r) => {
                     if (r.hcl) loadDraftIntoComposer(r.hcl, isAdmin ? 'visual' : 'hcl');
                     setShowCompose(false);
-                    toast.success('已转换为 Nomad HCL 并载入编排工作台');
+                    toast.success(tr('已转换为 Nomad HCL 并载入编排工作台', 'Converted to Nomad HCL and loaded into composer'));
                   })
                   .catch((ex) => setErr(ex.message))
               }
             >
-              转换并载入工作台
+              {tr('转换并载入工作台', 'Convert & Load')}
             </Button>
           </div>
         </div>
       </Modal>
 
       {/* Vault Secret Wizard Modal */}
-      <Modal open={showVaultWizard} title="插入 Vault 密钥读取模板" onClose={() => setShowVaultWizard(false)} wide>
+      <Modal open={showVaultWizard} title={tr('插入 Vault 密钥读取模板', 'Insert Vault Secret Template')} onClose={() => setShowVaultWizard(false)} wide>
         {(() => {
-          const parsed = parseKVPath(vaultWizard.secretPath);
+          const parsed = parseKVPath(vaultWizard.secretPath, 'secret', locale);
           const keys = vaultWizard.keys
             .split(',')
             .map((s) => s.trim())
@@ -1439,26 +1447,26 @@ export function JobCenterPage() {
             <div className="space-y-3 text-xs">
               {vaultIntegrations.length === 0 ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
-                  当前 Nomad 集群尚未创建 Nomad-Vault 联动。可先前往{' '}
+                  {tr('当前 Nomad 集群尚未创建 Nomad-Vault 联动。可先前往 ', 'No Nomad-Vault integration configured for this cluster yet. Visit ')}
                   <Link to="/integrations" className="font-semibold underline">
-                    集群联动
-                  </Link>{' '}
-                  创建并应用。
+                    {tr('集群联动', 'Integrations')}
+                  </Link>
+                  {tr(' 创建并应用。', ' to create and apply one.')}
                 </div>
               ) : vaultIntegrations.some((ig) => ig.status !== 'applied') ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
-                  检测到联动尚未应用生效，请记得在{' '}
+                  {tr('检测到联动尚未应用生效，请记得在 ', 'Integration is not applied yet. Remember to click "Apply" in ')}
                   <Link to="/integrations" className="font-semibold underline">
-                    集群联动
-                  </Link>{' '}
-                  点击「应用联动」后再运行 Job。
+                    {tr('集群联动', 'Integrations')}
+                  </Link>
+                  {tr(' 点击「应用联动」后再运行 Job。', ' before running this Job.')}
                 </div>
               ) : null}
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
                   <Input
-                    label="Vault Role 名称"
+                    label={tr('Vault Role 名称', 'Vault Role Name')}
                     list="jc-vault-role-list"
                     value={vaultWizard.role}
                     onChange={(e) => {
@@ -1470,7 +1478,7 @@ export function JobCenterPage() {
                         secretPath: matched?.secret_paths?.[0] || prev.secretPath,
                       }));
                     }}
-                    placeholder="例如 postgres"
+                    placeholder={tr('例如 postgres', 'e.g. postgres')}
                   />
                   <datalist id="jc-vault-role-list">
                     {vaultRoles.map((r) => (
@@ -1479,50 +1487,52 @@ export function JobCenterPage() {
                   </datalist>
                   {pickedRole && (
                     <p className="text-[11px] text-slate-500">
-                      状态：{pickedRole.status === 'applied' ? '已应用' : '草稿（待应用）'} · 允许 Namespace：
+                      {tr('状态：', 'Status: ')}
+                      {pickedRole.status === 'applied' ? tr('已应用', 'Applied') : tr('草稿（待应用）', 'Draft (Pending)')}
+                      {tr(' · 允许 Namespace：', ' · Allowed Namespace: ')}
                       <code className="font-mono">{pickedRole.namespace || 'default'}</code>
                     </p>
                   )}
                 </div>
                 <Input
-                  label="Secret 路径（自动补全 /data/）"
+                  label={tr('Secret 路径（自动补全 /data/）', 'Secret Path (auto /data/)')}
                   value={vaultWizard.secretPath}
                   onChange={(e) => setVaultWizard((prev) => ({ ...prev, secretPath: e.target.value }))}
-                  placeholder="例如 secret/apps/postgres"
-                  hint={`模板读取路径：${parsed.templatePath || 'secret/data/apps/demo'}`}
+                  placeholder={tr('例如 secret/apps/postgres', 'e.g. secret/apps/postgres')}
+                  hint={tr(`模板读取路径：${parsed.templatePath || 'secret/data/apps/demo'}`, `Template path: ${parsed.templatePath || 'secret/data/apps/demo'}`)}
                 />
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <Select
-                  label="密钥注入方式"
+                  label={tr('密钥注入方式', 'Secret Injection Mode')}
                   value={vaultWizard.mode}
                   onChange={(e) => setVaultWizard((prev) => ({ ...prev, mode: e.target.value as 'env' | 'file' }))}
                 >
-                  <option value="env">注入为容器环境变量（env = true）</option>
-                  <option value="file">挂载为 0600 密码文件（/secrets/xxx）</option>
+                  <option value="env">{tr('注入为容器环境变量（env = true）', 'Container environment variables (env = true)')}</option>
+                  <option value="file">{tr('挂载为 0600 密码文件（/secrets/xxx）', 'Mount as 0600 secret file (/secrets/xxx)')}</option>
                 </Select>
                 <Input
                   label={
                     vaultWizard.mode === 'file'
-                      ? '提取字段名（留空则写入完整 JSON）'
-                      : '提取字段名（逗号分隔，留空则注入全部字段）'
+                      ? tr('提取字段名（留空则写入完整 JSON）', 'Secret key (leave blank for full JSON)')
+                      : tr('提取字段名（逗号分隔，留空则注入全部字段）', 'Secret keys (comma-separated, blank for all)')
                   }
                   value={vaultWizard.keys}
                   onChange={(e) => setVaultWizard((prev) => ({ ...prev, keys: e.target.value }))}
-                  placeholder={vaultWizard.mode === 'file' ? '例如 password' : '例如 username, password'}
+                  placeholder={vaultWizard.mode === 'file' ? tr('例如 password', 'e.g. password') : tr('例如 username, password', 'e.g. username, password')}
                 />
               </div>
 
               {vaultWizard.mode === 'file' && (
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Input
-                    label="容器内密码文件名（/secrets/ 下）"
+                    label={tr('容器内密码文件名（/secrets/ 下）', 'Secret filename in container (/secrets/)')}
                     value={vaultWizard.fileName}
                     onChange={(e) => setVaultWizard((prev) => ({ ...prev, fileName: e.target.value }))}
                   />
                   <Input
-                    label="指向该文件的环境变量名"
+                    label={tr('指向该文件的环境变量名', 'Env var pointing to file')}
                     value={vaultWizard.envVarName}
                     onChange={(e) => setVaultWizard((prev) => ({ ...prev, envVarName: e.target.value }))}
                   />
@@ -1530,7 +1540,7 @@ export function JobCenterPage() {
               )}
 
               <div>
-                <div className="mb-1 font-semibold text-slate-700 dark:text-slate-200">生成代码预览（放入 task 块内）</div>
+                <div className="mb-1 font-semibold text-slate-700 dark:text-slate-200">{tr('生成代码预览（放入 task 块内）', 'Generated HCL Preview (inside task block)')}</div>
                 <CodeEditor value={snippet} readOnly height="200px" />
               </div>
 
@@ -1539,19 +1549,19 @@ export function JobCenterPage() {
                   size="sm"
                   onClick={() =>
                     void copyText(snippet)
-                      .then(() => toast.success('已复制代码片段'))
+                      .then(() => toast.success(tr('已复制代码片段', 'Snippet copied')))
                       .catch((ex) => toast.error(ex.message))
                   }
                 >
                   <Copy className="h-3.5 w-3.5" />
-                  <span>仅复制片段</span>
+                  <span>{tr('仅复制片段', 'Copy Snippet')}</span>
                 </Button>
                 <div className="flex gap-2">
                   <Button size="sm" onClick={() => setShowVaultWizard(false)}>
-                    取消
+                    {tr('取消', 'Cancel')}
                   </Button>
                   <Button size="sm" variant="primary" loading={vaultWizardBusy} onClick={() => void insertVaultIntoJob()}>
-                    插入当前 Job 第一个 Task
+                    {tr('插入当前 Job 第一个 Task', 'Insert into First Task')}
                   </Button>
                 </div>
               </div>

@@ -18,6 +18,7 @@ import {
 import { apiDownload, apiGet, apiPost, fmtBytes, fmtTime, openSSE } from '../lib/api';
 import { copyText } from '../lib/clipboard';
 import { useAuth } from '../lib/auth';
+import { useI18n } from '../lib/i18n';
 import { useToast } from './Toast';
 import { useConfirm } from './ConfirmDialog';
 import {
@@ -72,6 +73,7 @@ export function JobRuntimePanel({
   onDeleted,
 }: JobRuntimePanelProps) {
   const { isAdmin } = useAuth();
+  const { locale, tr } = useI18n();
   const toast = useToast();
   const askConfirm = useConfirm();
 
@@ -202,10 +204,10 @@ export function JobRuntimePanel({
         }
         setGroupCounts((prev) => (silent && Object.keys(prev).length > 0 ? prev : nextCounts));
       } catch (ex: any) {
-        if (request === jobRequestRef.current) setErr(ex?.message || '加载 Job 运行态失败');
+        if (request === jobRequestRef.current) setErr(ex?.message || tr('加载 Job 运行态失败', 'Failed to load Job runtime'));
       }
     },
-    [clusterId, jobId, jobNs],
+    [clusterId, jobId, jobNs, tr],
   );
 
   useEffect(() => {
@@ -272,7 +274,7 @@ export function JobRuntimePanel({
       setMemHist((p) => (sameAlloc ? appendResourceSample(p, samples.mem) : [samples.mem]));
       setFsFiles(ls.files || ls || []);
     } catch (ex: any) {
-      if (request === allocRequestRef.current) setErr(ex?.message || '加载 Allocation 详情失败');
+      if (request === allocRequestRef.current) setErr(ex?.message || tr('加载 Allocation 详情失败', 'Failed to load Allocation details'));
     }
   };
 
@@ -293,7 +295,7 @@ export function JobRuntimePanel({
         setFsFiles(r.files || r || []);
       } catch (ex: any) {
         if (allocReq === allocRequestRef.current && fsReq === fsRequestRef.current) {
-          setErr(ex?.message || '读取目录失败');
+          setErr(ex?.message || tr('读取目录失败', 'Failed to list directory'));
         }
       } finally {
         if (allocReq === allocRequestRef.current && fsReq === fsRequestRef.current) {
@@ -301,7 +303,7 @@ export function JobRuntimePanel({
         }
       }
     },
-    [clusterId, selectedAlloc?.ID],
+    [clusterId, selectedAlloc?.ID, tr],
   );
 
   const previewAllocFile = useCallback(
@@ -316,10 +318,10 @@ export function JobRuntimePanel({
           text: typeof r === 'string' ? r : r.data || JSON.stringify(r),
         });
       } catch (ex: any) {
-        setErr(ex?.message || '预览文件失败');
+        setErr(ex?.message || tr('预览文件失败', 'Failed to preview file'));
       }
     },
-    [clusterId, selectedAlloc?.ID],
+    [clusterId, selectedAlloc?.ID, tr],
   );
 
   useEffect(() => {
@@ -370,16 +372,16 @@ export function JobRuntimePanel({
     const nsEnc = encodeURIComponent(selectedJob.namespace || 'default');
     const jidEnc = encodeURIComponent(selectedJob.id);
     if (action === 'stop') {
-      const ok = await askConfirm(`确认停止运行中的 Job「${selectedJob.id}」（Namespace: ${selectedJob.namespace}）吗？`, {
-        title: '停止 Job',
-        confirmText: '确认停止',
+      const ok = await askConfirm(tr(`确认停止运行中的 Job「${selectedJob.id}」（Namespace: ${selectedJob.namespace}）吗？`, `Stop running Job "${selectedJob.id}" (Namespace: ${selectedJob.namespace})?`), {
+        title: tr('停止 Job', 'Stop Job'),
+        confirmText: tr('确认停止', 'Stop'),
         danger: true,
       });
       if (!ok) return;
     } else if (action === 'purge') {
-      const ok = await askConfirm(`确认清理并彻底删除 Job「${selectedJob.id}」（Namespace: ${selectedJob.namespace}）吗？此操作不可恢复。`, {
-        title: '清理删除 Job',
-        confirmText: '确认 Purge',
+      const ok = await askConfirm(tr(`确认清理并彻底删除 Job「${selectedJob.id}」（Namespace: ${selectedJob.namespace}）吗？此操作不可恢复。`, `Purge and permanently delete Job "${selectedJob.id}" (Namespace: ${selectedJob.namespace})? This cannot be undone.`), {
+        title: tr('清理删除 Job', 'Purge Job'),
+        confirmText: tr('确认 Purge', 'Purge'),
         danger: true,
       });
       if (!ok) return;
@@ -392,15 +394,15 @@ export function JobRuntimePanel({
         action === 'purge' ? { confirm_job_id: selectedJob.id } : {},
       );
       if (action === 'purge') {
-        toast.success(`已清理 Job ${selectedJob.id}`);
+        toast.success(tr(`已清理 Job ${selectedJob.id}`, `Purged Job ${selectedJob.id}`));
         onDeleted?.();
         return;
       }
-      toast.success(action === 'start' ? `已启动 Job ${selectedJob.id}` : `已停止 Job ${selectedJob.id}`);
+      toast.success(action === 'start' ? tr(`已启动 Job ${selectedJob.id}`, `Started Job ${selectedJob.id}`) : tr(`已停止 Job ${selectedJob.id}`, `Stopped Job ${selectedJob.id}`));
       onChanged?.();
       await loadJobRuntime(true);
     } catch (ex: any) {
-      setErr(ex?.message || `执行 ${action} 失败`);
+      setErr(ex?.message || tr(`执行 ${action} 失败`, `Failed to ${action} job`));
     } finally {
       setBusyAction('');
     }
@@ -414,11 +416,11 @@ export function JobRuntimePanel({
         `/api/v1/nomad/${clusterId}/namespaces/${encodeURIComponent(selectedJob.namespace)}/jobs/${encodeURIComponent(selectedJob.id)}/scale`,
         { group: groupName, count },
       );
-      toast.success(`已提交任务组「${groupName}」扩缩容至 ${count}`);
+      toast.success(tr(`已提交任务组「${groupName}」扩缩容至 ${count}`, `Scaled task group "${groupName}" to ${count}`));
       onChanged?.();
       await loadJobRuntime(true);
     } catch (ex: any) {
-      setErr(ex?.message || '扩缩容失败');
+      setErr(ex?.message || tr('扩缩容失败', 'Failed to scale group'));
     } finally {
       setScalingGroup('');
     }
@@ -430,14 +432,14 @@ export function JobRuntimePanel({
     <div className="space-y-4">
       {/* Top Breadcrumb & Quick Actions */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#e3e8f1] bg-white px-4 py-3 text-xs shadow-[0_2px_10px_rgba(15,23,42,0.03)] dark:border-slate-800 dark:bg-[#0f172a]/95">
-        <nav aria-label="Job 运行态路径" className="flex flex-wrap items-center gap-2 min-w-0">
+        <nav aria-label={tr('Job 运行态路径', 'Job runtime breadcrumb')} className="flex flex-wrap items-center gap-2 min-w-0">
           <button
             type="button"
             onClick={onBack}
             className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:underline dark:text-indigo-400"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            <span>返回 Jobs 列表</span>
+            <span>{tr('返回 Jobs 列表', 'Back to Jobs')}</span>
           </button>
           <ChevronRight className="h-3.5 w-3.5 text-slate-400 shrink-0" />
           <span className="font-mono text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
@@ -453,7 +455,7 @@ export function JobRuntimePanel({
             <>
               <Button size="sm" variant="primary" onClick={() => onEdit(selectedJob)}>
                 <Pencil className="h-3.5 w-3.5" />
-                <span>编排编辑</span>
+                <span>{tr('编排编辑', 'Edit Spec')}</span>
               </Button>
               {selectedJob.periodic && (
                 <Button
@@ -464,13 +466,13 @@ export function JobRuntimePanel({
                       {},
                     )
                       .then(() => {
-                        toast.success('已立即触发 Periodic 运行');
+                        toast.success(tr('已立即触发 Periodic 运行', 'Forced periodic run'));
                         return loadJobRuntime(true);
                       })
                       .catch((ex) => setErr(ex.message))
                   }
                 >
-                  立即触发
+                  {tr('立即触发', 'Force Run')}
                 </Button>
               )}
               {selectedJob.parameterized && (
@@ -482,24 +484,24 @@ export function JobRuntimePanel({
                       { meta: {} },
                     )
                       .then(() => {
-                        toast.success('已派发 Parameterized 子任务');
+                        toast.success(tr('已派发 Parameterized 子任务', 'Dispatched parameterized job'));
                         return loadJobRuntime(true);
                       })
                       .catch((ex) => setErr(ex.message))
                   }
                 >
-                  Dispatch 派发
+                  {tr('Dispatch 派发', 'Dispatch')}
                 </Button>
               )}
               {selectedJob.stop ? (
                 <Button size="sm" loading={busyAction === 'start'} onClick={() => void handleLifecycle('start')}>
                   <Play className="h-3.5 w-3.5" />
-                  <span>启动</span>
+                  <span>{tr('启动', 'Start')}</span>
                 </Button>
               ) : (
                 <Button size="sm" loading={busyAction === 'stop'} onClick={() => void handleLifecycle('stop')}>
                   <Square className="h-3.5 w-3.5" />
-                  <span>停止</span>
+                  <span>{tr('停止', 'Stop')}</span>
                 </Button>
               )}
               <Button
@@ -509,13 +511,13 @@ export function JobRuntimePanel({
                 onClick={() => void handleLifecycle('purge')}
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                <span>清理</span>
+                <span>{tr('清理', 'Purge')}</span>
               </Button>
             </>
           )}
           <Button size="sm" onClick={() => void loadJobRuntime(true)}>
             <RefreshCw className="h-3.5 w-3.5" />
-            <span>刷新</span>
+            <span>{tr('刷新', 'Refresh')}</span>
           </Button>
         </div>
       </div>
@@ -524,7 +526,7 @@ export function JobRuntimePanel({
 
       {!jobSummary ? (
         <Card>
-          <LoadingState label={`正在加载 Job ${selectedJob.id} 运行态…`} />
+          <LoadingState label={tr(`正在加载 Job ${selectedJob.id} 运行态…`, `Loading runtime for Job ${selectedJob.id}...`)} />
         </Card>
       ) : (
         <div className="space-y-4">
@@ -549,7 +551,7 @@ export function JobRuntimePanel({
                           <div className="inline-flex items-center rounded-lg border border-[#dce3ee] bg-white dark:border-slate-700 dark:bg-slate-950">
                             <button
                               type="button"
-                              aria-label={`减少 ${groupName} 副本数`}
+                              aria-label={tr(`减少 ${groupName} 副本数`, `Decrease ${groupName} count`)}
                               disabled={desired <= 0 || scalingGroup === groupName}
                               onClick={() =>
                                 setGroupCounts((prev) => ({ ...prev, [groupName]: Math.max(0, desired - 1) }))
@@ -559,7 +561,7 @@ export function JobRuntimePanel({
                               <Minus className="h-3 w-3" />
                             </button>
                             <input
-                              aria-label={`${groupName} 目标副本数`}
+                              aria-label={tr(`${groupName} 目标副本数`, `${groupName} target count`)}
                               type="number"
                               min={0}
                               value={desired}
@@ -573,7 +575,7 @@ export function JobRuntimePanel({
                             />
                             <button
                               type="button"
-                              aria-label={`增加 ${groupName} 副本数`}
+                              aria-label={tr(`增加 ${groupName} 副本数`, `Increase ${groupName} count`)}
                               disabled={scalingGroup === groupName}
                               onClick={() =>
                                 setGroupCounts((prev) => ({ ...prev, [groupName]: desired + 1 }))
@@ -588,7 +590,7 @@ export function JobRuntimePanel({
                             loading={scalingGroup === groupName}
                             onClick={() => void handleScaleGroup(groupName, desired)}
                           >
-                            扩缩容
+                            {tr('扩缩容', 'Scale')}
                           </Button>
                         </div>
                       )
@@ -596,12 +598,12 @@ export function JobRuntimePanel({
                   >
                     <div className="grid grid-cols-3 gap-2 sm:grid-cols-6 text-center text-xs">
                       {[
-                        { label: '运行中', val: stats.Running || 0, cls: 'text-emerald-600 dark:text-emerald-400' },
-                        { label: '启动中', val: stats.Starting || 0, cls: 'text-indigo-600 dark:text-indigo-400' },
-                        { label: '排队中', val: stats.Queued || 0, cls: 'text-amber-600 dark:text-amber-400' },
-                        { label: '已完成', val: stats.Complete || 0, cls: 'text-slate-600 dark:text-slate-300' },
-                        { label: '失败', val: stats.Failed || 0, cls: stats.Failed ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400' },
-                        { label: '失联', val: stats.Lost || 0, cls: stats.Lost ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400' },
+                        { label: tr('运行中', 'Running'), val: stats.Running || 0, cls: 'text-emerald-600 dark:text-emerald-400' },
+                        { label: tr('启动中', 'Starting'), val: stats.Starting || 0, cls: 'text-indigo-600 dark:text-indigo-400' },
+                        { label: tr('排队中', 'Queued'), val: stats.Queued || 0, cls: 'text-amber-600 dark:text-amber-400' },
+                        { label: tr('已完成', 'Complete'), val: stats.Complete || 0, cls: 'text-slate-600 dark:text-slate-300' },
+                        { label: tr('失败', 'Failed'), val: stats.Failed || 0, cls: stats.Failed ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400' },
+                        { label: tr('失联', 'Lost'), val: stats.Lost || 0, cls: stats.Lost ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400' },
                       ].map((m) => (
                         <div key={m.label} className="rounded-lg bg-slate-50/80 py-2 dark:bg-slate-950/50">
                           <div className={`font-mono text-base font-bold tabular-nums ${m.cls}`}>{m.val}</div>
@@ -621,7 +623,7 @@ export function JobRuntimePanel({
               title={
                 <TermLabel
                   term={`Deployments (${jobDeps.length})`}
-                  tip="滚动发布与金丝雀升级控制器，支持 Promote（放行全量）、Pause、Resume 与 Fail 回滚。"
+                  tip={tr('滚动发布与金丝雀升级控制器，支持 Promote（放行全量）、Pause、Resume 与 Fail 回滚。', 'Rolling/canary deployment controller supporting Promote, Pause, Resume, and Fail rollback.')}
                 />
               }
               bodyClassName="p-4"
@@ -645,7 +647,7 @@ export function JobRuntimePanel({
                           onClick={() =>
                             void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/promote`, {})
                               .then(() => {
-                                toast.success('已放行 Deployment (Promote)');
+                                toast.success(tr('已放行 Deployment (Promote)', 'Deployment promoted'));
                                 return loadJobRuntime(true);
                               })
                               .catch((ex) => setErr(ex.message))
@@ -658,7 +660,7 @@ export function JobRuntimePanel({
                           onClick={() =>
                             void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/pause`, {})
                               .then(() => {
-                                toast.success('已暂停 Deployment');
+                                toast.success(tr('已暂停 Deployment', 'Deployment paused'));
                                 return loadJobRuntime(true);
                               })
                               .catch((ex) => setErr(ex.message))
@@ -671,7 +673,7 @@ export function JobRuntimePanel({
                           onClick={() =>
                             void apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/resume`, {})
                               .then(() => {
-                                toast.success('已恢复 Deployment');
+                                toast.success(tr('已恢复 Deployment', 'Deployment resumed'));
                                 return loadJobRuntime(true);
                               })
                               .catch((ex) => setErr(ex.message))
@@ -683,15 +685,15 @@ export function JobRuntimePanel({
                           size="sm"
                           variant="danger-outline"
                           onClick={() =>
-                            void askConfirm(`确定要将 Deployment ${d.ID.slice(0, 8)} 标记为失败并触发回滚吗？`, {
-                              title: '回滚 Deployment',
-                              confirmText: '确认 Fail',
+                            void askConfirm(tr(`确定要将 Deployment ${d.ID.slice(0, 8)} 标记为失败并触发回滚吗？`, `Mark Deployment ${d.ID.slice(0, 8)} as failed and trigger rollback?`), {
+                              title: tr('回滚 Deployment', 'Rollback Deployment'),
+                              confirmText: tr('确认 Fail', 'Fail Deployment'),
                               danger: true,
                             })
                               .then((ok) =>
                                 ok
                                   ? apiPost(`/api/v1/nomad/${clusterId}/deployments/${d.ID}/fail`, {}).then(() => {
-                                      toast.success('已触发 Deployment Fail');
+                                      toast.success(tr('已触发 Deployment Fail', 'Deployment marked as failed'));
                                       return loadJobRuntime(true);
                                     })
                                   : undefined,
@@ -713,8 +715,8 @@ export function JobRuntimePanel({
           <Card
             title={
               <TermLabel
-                term={`实例副本 · Allocations (${jobAllocs.length})`}
-                tip="Task Group 在具体 Client 节点上运行的容器/进程实例，可直接查看实时日志、CPU/内存监控、文件与进入交互终端。"
+                term={tr(`实例副本 · Allocations (${jobAllocs.length})`, `Allocations (${jobAllocs.length})`)}
+                tip={tr('Task Group 在具体 Client 节点上运行的容器/进程实例，可直接查看实时日志、CPU/内存监控、文件与进入交互终端。', 'Task Group instances running on Client nodes; inspect live logs, CPU/memory metrics, files, and interactive terminal.')}
               />
             }
           >
@@ -727,15 +729,15 @@ export function JobRuntimePanel({
                 const reasons: string[] = [];
                 if (latestEval.FailedTGAllocs && typeof latestEval.FailedTGAllocs === 'object') {
                   for (const [grp, m] of Object.entries<any>(latestEval.FailedTGAllocs)) {
-                    if (m?.NodesEvaluated === 0) reasons.push(`任务组 ${grp} 没有匹配且在线的 Client 节点`);
+                    if (m?.NodesEvaluated === 0) reasons.push(tr(`任务组 ${grp} 没有匹配且在线的 Client 节点`, `Task group ${grp} has no eligible online Client nodes`));
                     if (m?.ConstraintFiltered && typeof m.ConstraintFiltered === 'object') {
                       for (const [k, cnt] of Object.entries<any>(m.ConstraintFiltered)) {
-                        reasons.push(`任务组 ${grp}：${k}（${cnt} 个节点不满足）`);
+                        reasons.push(tr(`任务组 ${grp}：${k}（${cnt} 个节点不满足）`, `Task group ${grp}: ${k} (${cnt} nodes filtered)`));
                       }
                     }
                     if (m?.DimensionExhausted && typeof m.DimensionExhausted === 'object') {
                       for (const [k, cnt] of Object.entries<any>(m.DimensionExhausted)) {
-                        reasons.push(`任务组 ${grp} 资源不足：${k}（${cnt} 个节点）`);
+                        reasons.push(tr(`任务组 ${grp} 资源不足：${k}（${cnt} 个节点）`, `Task group ${grp} exhausted ${k} (${cnt} nodes)`));
                       }
                     }
                   }
@@ -750,7 +752,7 @@ export function JobRuntimePanel({
                     className="rounded-xl border border-amber-300 bg-amber-50/90 p-3 text-xs text-amber-950 space-y-1 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-100"
                   >
                     <div className="font-semibold">
-                      调度阻塞原因（Evaluation {String(latestEval.ID || '').slice(0, 8)}）：
+                      {tr(`调度阻塞原因（Evaluation ${String(latestEval.ID || '').slice(0, 8)}）：`, `Scheduling Blocked (Evaluation ${String(latestEval.ID || '').slice(0, 8)}):`)}
                     </div>
                     {reasons.map((r, i) => (
                       <p key={i} className="leading-5">
@@ -763,7 +765,7 @@ export function JobRuntimePanel({
 
               {jobAllocs.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-slate-200 py-8 text-center text-slate-400 dark:border-slate-800">
-                  暂无 Allocation 实例
+                  {tr('暂无 Allocation 实例', 'No Allocations yet')}
                 </div>
               ) : (
                 <div className="overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800">
@@ -772,9 +774,9 @@ export function JobRuntimePanel({
                       <tr className="border-b border-slate-200/80 dark:border-slate-800">
                         <th className="px-3 py-2.5 font-medium">Allocation ID</th>
                         <th className="px-3 py-2.5 font-medium">Task Group</th>
-                        <th className="px-3 py-2.5 font-medium">运行节点</th>
-                        <th className="px-3 py-2.5 font-medium">状态 / Tasks</th>
-                        <th className="px-3 py-2.5 text-right font-medium">操作</th>
+                        <th className="px-3 py-2.5 font-medium">{tr('运行节点', 'Node')}</th>
+                        <th className="px-3 py-2.5 font-medium">{tr('状态 / Tasks', 'Status / Tasks')}</th>
+                        <th className="px-3 py-2.5 text-right font-medium">{tr('操作', 'Actions')}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
@@ -807,7 +809,7 @@ export function JobRuntimePanel({
                             <td className="px-3 py-2.5 text-right">
                               <div className="flex flex-wrap items-center justify-end gap-1.5">
                                 <Button size="sm" onClick={() => void inspectAlloc(a, 'logs')}>
-                                  日志与详情
+                                  {tr('日志与详情', 'Logs & Inspect')}
                                 </Button>
                                 {isAdmin && runningTask && (
                                   <Button
@@ -815,7 +817,7 @@ export function JobRuntimePanel({
                                     onClick={() => setTerminal({ allocId: a.ID, task: runningTask })}
                                   >
                                     <Terminal className="h-3.5 w-3.5" />
-                                    <span>终端</span>
+                                    <span>{tr('终端', 'Exec')}</span>
                                   </Button>
                                 )}
                               </div>
@@ -832,9 +834,9 @@ export function JobRuntimePanel({
 
           {/* Bottom 2-Column Details: Evaluations + Revisions */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Card title={`最近调度评估 (${jobEvals.length})`} bodyClassName="p-4">
+            <Card title={tr(`最近调度评估 (${jobEvals.length})`, `Recent Evaluations (${jobEvals.length})`)} bodyClassName="p-4">
               {jobEvals.length === 0 ? (
-                <div className="py-4 text-center text-xs text-slate-400">暂无调度评估记录</div>
+                <div className="py-4 text-center text-xs text-slate-400">{tr('暂无调度评估记录', 'No evaluations yet')}</div>
               ) : (
                 <div className="space-y-2 text-xs">
                   {jobEvals.slice(0, 6).map((ev) => (
@@ -856,9 +858,9 @@ export function JobRuntimePanel({
               )}
             </Card>
 
-            <Card title={`修订历史与回滚 (${revisions.length})`} bodyClassName="p-4">
+            <Card title={tr(`修订历史与回滚 (${revisions.length})`, `Revision History & Revert (${revisions.length})`)} bodyClassName="p-4">
               {revisions.length === 0 ? (
-                <div className="py-4 text-center text-xs text-slate-400">暂无控制面修订记录</div>
+                <div className="py-4 text-center text-xs text-slate-400">{tr('暂无控制面修订记录', 'No revision history')}</div>
               ) : (
                 <div className="space-y-2 text-xs">
                   {revisions.slice(0, 6).map((rv) => (
@@ -869,7 +871,7 @@ export function JobRuntimePanel({
                       <div className="min-w-0">
                         <span className="font-mono font-semibold text-slate-800 dark:text-slate-100">v{rv.revision_no}</span>
                         <span className="ml-2 text-slate-500">
-                          {rv.source} · {rv.submit_status} · {fmtTime(rv.created_at)}
+                          {rv.source} · {rv.submit_status} · {fmtTime(rv.created_at, locale)}
                         </span>
                       </div>
                       {isAdmin && rv.remote_job_version != null && (
@@ -877,9 +879,9 @@ export function JobRuntimePanel({
                           size="sm"
                           onClick={async () => {
                             if (
-                              !(await askConfirm(`确认将 Job「${selectedJob.id}」回滚至修订 v${rv.revision_no}吗？`, {
-                                title: '回滚 Job 版本',
-                                confirmText: '确认回滚',
+                              !(await askConfirm(tr(`确认将 Job「${selectedJob.id}」回滚至修订 v${rv.revision_no}吗？`, `Revert Job "${selectedJob.id}" to revision v${rv.revision_no}?`), {
+                                title: tr('回滚 Job 版本', 'Revert Job Version'),
+                                confirmText: tr('确认回滚', 'Revert'),
                               }))
                             ) {
                               return;
@@ -889,14 +891,14 @@ export function JobRuntimePanel({
                               { version: rv.remote_job_version },
                             )
                               .then(() => {
-                                toast.success(`已回滚至 v${rv.revision_no}`);
+                                toast.success(tr(`已回滚至 v${rv.revision_no}`, `Reverted to v${rv.revision_no}`));
                                 return loadJobRuntime(true);
                               })
                               .catch((ex) => setErr(ex.message));
                           }}
                         >
                           <RotateCcw className="h-3 w-3" />
-                          <span>回滚</span>
+                          <span>{tr('回滚', 'Revert')}</span>
                         </Button>
                       )}
                     </div>
@@ -917,13 +919,13 @@ export function JobRuntimePanel({
               <StatusBadge value={selectedAlloc.ClientStatus} />
             </>
           }
-          subtitle={`Job ${selectedJob.id} · ${selectedAlloc.TaskGroup || ''} · 节点 ${selectedAlloc.NodeName || '-'} · ID: ${selectedAlloc.ID}`}
+          subtitle={`Job ${selectedJob.id} · ${selectedAlloc.TaskGroup || ''} · ${tr('节点', 'Node')} ${selectedAlloc.NodeName || '-'} · ID: ${selectedAlloc.ID}`}
           width="2xl"
           onClose={closeAllocDrawer}
           headerExtra={
             <Button size="sm" onClick={() => void inspectAlloc(selectedAlloc, allocTab)}>
               <RefreshCw className="h-3.5 w-3.5" />
-              <span>刷新</span>
+              <span>{tr('刷新', 'Refresh')}</span>
             </Button>
           }
           footer={
@@ -938,22 +940,22 @@ export function JobRuntimePanel({
                       onClick={() => setTerminal({ allocId: selectedAlloc.ID, task: logTask })}
                     >
                       <Terminal className="h-3.5 w-3.5" />
-                      <span>打开交互式终端</span>
+                      <span>{tr('打开交互式终端', 'Open Shell (Exec)')}</span>
                     </Button>
                     <Button
                       size="sm"
                       disabled={selectedAlloc.TaskStates?.[logTask]?.State !== 'running'}
                       onClick={() =>
-                        void askConfirm(`确定要重启 Allocation ${selectedAlloc.ID.slice(0, 8)} 中的任务 ${logTask} 吗？`, {
-                          title: '重启 Task',
-                          confirmText: '确认重启',
+                        void askConfirm(tr(`确定要重启 Allocation ${selectedAlloc.ID.slice(0, 8)} 中的任务 ${logTask} 吗？`, `Restart task ${logTask} in Allocation ${selectedAlloc.ID.slice(0, 8)}?`), {
+                          title: tr('重启 Task', 'Restart Task'),
+                          confirmText: tr('确认重启', 'Restart'),
                         })
                           .then((ok) =>
                             ok
                               ? apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/restart`, {
                                   task: logTask,
                                 }).then(() => {
-                                  toast.success('已请求重启 Task');
+                                  toast.success(tr('已请求重启 Task', 'Task restart requested'));
                                   return loadJobRuntime(true);
                                 })
                               : undefined,
@@ -961,22 +963,22 @@ export function JobRuntimePanel({
                           .catch((ex) => setErr(ex.message))
                       }
                     >
-                      重启 Task
+                      {tr('重启 Task', 'Restart Task')}
                     </Button>
                     <Button
                       size="sm"
                       variant="danger-outline"
                       disabled={['complete', 'failed', 'lost'].includes(selectedAlloc.ClientStatus)}
                       onClick={() =>
-                        void askConfirm(`确定要停止 Allocation ${selectedAlloc.ID.slice(0, 8)} 吗？调度器可能会重新拉起新副本。`, {
-                          title: '停止 Allocation',
-                          confirmText: '确认停止',
+                        void askConfirm(tr(`确定要停止 Allocation ${selectedAlloc.ID.slice(0, 8)} 吗？调度器可能会重新拉起新副本。`, `Stop Allocation ${selectedAlloc.ID.slice(0, 8)}? The scheduler may place a replacement.`), {
+                          title: tr('停止 Allocation', 'Stop Allocation'),
+                          confirmText: tr('确认停止', 'Stop'),
                           danger: true,
                         })
                           .then((ok) =>
                             ok
                               ? apiPost(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stop`, {}).then(() => {
-                                  toast.success('已请求停止 Alloc');
+                                  toast.success(tr('已请求停止 Alloc', 'Allocation stop requested'));
                                   return loadJobRuntime(true);
                                 })
                               : undefined,
@@ -984,13 +986,13 @@ export function JobRuntimePanel({
                           .catch((ex) => setErr(ex.message))
                       }
                     >
-                      停止 Alloc
+                      {tr('停止 Alloc', 'Stop Alloc')}
                     </Button>
                   </>
                 )}
               </div>
               <Button size="sm" variant="secondary" onClick={closeAllocDrawer}>
-                关闭
+                {tr('关闭', 'Close')}
               </Button>
             </div>
           }
@@ -1000,19 +1002,19 @@ export function JobRuntimePanel({
               <SectionTabs
                 variant="underline"
                 tabs={[
-                  { id: 'logs', label: '实时日志' },
-                  { id: 'events', label: '事件与资源' },
-                  { id: 'files', label: '文件浏览' },
+                  { id: 'logs', label: tr('实时日志', 'Live Logs') },
+                  { id: 'events', label: tr('事件与资源', 'Events & Resources') },
+                  { id: 'files', label: tr('文件浏览', 'Files') },
                 ]}
                 active={allocTab}
                 onChange={(t) => setAllocTab(t as 'logs' | 'events' | 'files')}
               />
               {Object.keys(selectedAlloc.TaskStates || {}).length > 0 && (
                 <div className="flex items-center gap-1.5 text-slate-500">
-                  <span className="shrink-0">Task：</span>
+                  <span className="shrink-0">Task:</span>
                   <div className="w-36">
                     <Select
-                      aria-label="选择 Task"
+                      aria-label={tr('选择 Task', 'Select Task')}
                       size="sm"
                       value={logTask}
                       onChange={(e) => setLogTask(e.target.value)}
@@ -1032,18 +1034,18 @@ export function JobRuntimePanel({
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-semibold text-slate-800 dark:text-slate-100">
-                    实时日志输出（{logTask || '-'}）
+                    {tr(`实时日志输出（${logTask || '-'}）`, `Live Log Stream (${logTask || '-'})`)}
                   </span>
                   <div className="flex items-center gap-2">
                     <div className="w-48">
                       <Select
-                        aria-label="日志输出流"
+                        aria-label={tr('日志输出流', 'Log Stream')}
                         size="sm"
                         value={logType}
                         onChange={(e) => setLogType(e.target.value as 'stdout' | 'stderr')}
                       >
-                        <option value="stdout">标准输出 · stdout</option>
-                        <option value="stderr">错误与服务日志 · stderr</option>
+                        <option value="stdout">{tr('标准输出 · stdout', 'Stdout')}</option>
+                        <option value="stderr">{tr('错误与服务日志 · stderr', 'Stderr')}</option>
                       </Select>
                     </div>
                     <Button
@@ -1051,17 +1053,17 @@ export function JobRuntimePanel({
                       disabled={!allocLogs}
                       onClick={() =>
                         void copyText(allocLogs)
-                          .then(() => toast.success('已复制当前日志'))
+                          .then(() => toast.success(tr('已复制当前日志', 'Logs copied')))
                           .catch((ex) => toast.error(ex.message))
                       }
                     >
                       <Copy className="h-3.5 w-3.5" />
-                      <span>复制</span>
+                      <span>{tr('复制', 'Copy')}</span>
                     </Button>
                   </div>
                 </div>
                 <pre className="h-[440px] overflow-auto rounded-xl bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-100 whitespace-pre-wrap">
-                  {allocLogs || '等待日志… 若没有输出，请尝试切换 stdout / stderr。'}
+                  {allocLogs || tr('等待日志… 若没有输出，请尝试切换 stdout / stderr。', 'Waiting for logs... Try switching stdout / stderr if empty.')}
                 </pre>
               </div>
             )}
@@ -1076,7 +1078,7 @@ export function JobRuntimePanel({
                   hasStats={Boolean(allocStats)}
                 />
                 <div className="space-y-2">
-                  <div className="font-semibold text-slate-800 dark:text-slate-100">Task 生命周期事件</div>
+                  <div className="font-semibold text-slate-800 dark:text-slate-100">{tr('Task 生命周期事件', 'Task Lifecycle Events')}</div>
                   {Object.entries<any>(selectedAlloc.TaskStates || {}).map(([task, state]) => (
                     <div key={task} className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
                       <div className="flex items-center gap-2 font-mono font-semibold text-slate-900 dark:text-slate-100">
@@ -1088,7 +1090,7 @@ export function JobRuntimePanel({
                         .reverse()
                         .map((event: any, i: number) => (
                           <div key={i} className="mt-1.5 whitespace-pre-wrap break-words text-slate-600 dark:text-slate-300">
-                            <b>{event.Type}</b>：{event.DisplayMessage || event.Message || '-'}
+                            <b>{event.Type}</b>: {event.DisplayMessage || event.Message || '-'}
                           </div>
                         ))}
                     </div>
@@ -1101,7 +1103,7 @@ export function JobRuntimePanel({
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-1 min-w-0">
-                    <span className="font-semibold text-slate-800 dark:text-slate-100">文件浏览器</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-100">{tr('文件浏览器', 'File Browser')}</span>
                     <div className="flex flex-wrap items-center gap-0.5 font-mono text-xs text-slate-500 dark:text-slate-400">
                       <span>(</span>
                       {fsPath ? (
@@ -1152,15 +1154,15 @@ export function JobRuntimePanel({
                         void browseAllocDir(parent);
                       }}
                     >
-                      上级目录
+                      {tr('上级目录', 'Up')}
                     </Button>
                   )}
                 </div>
                 <div className="h-[440px] overflow-auto rounded-xl border border-slate-200 p-2.5 dark:border-slate-800">
                   {fsLoading && (fsFiles || []).length === 0 ? (
-                    <div className="py-10 text-center text-slate-400">正在读取目录…</div>
+                    <div className="py-10 text-center text-slate-400">{tr('正在读取目录…', 'Reading directory...')}</div>
                   ) : (fsFiles || []).length === 0 ? (
-                    <div className="py-10 text-center text-slate-400">当前目录为空</div>
+                    <div className="py-10 text-center text-slate-400">{tr('当前目录为空', 'Directory is empty')}</div>
                   ) : (
                     <div className={fsLoading ? 'opacity-60 transition-opacity' : undefined}>
                       {(fsFiles || []).map((f: any) => {
@@ -1211,13 +1213,13 @@ export function JobRuntimePanel({
                                   disabled={fsLoading}
                                   onClick={() => void browseAllocDir(entryPath)}
                                 >
-                                  进入
+                                  {tr('进入', 'Open')}
                                 </Button>
                               ) : (
                                 canReadFile && (
                                   <>
                                     <Button size="sm" onClick={() => void previewAllocFile(entryPath)}>
-                                      预览
+                                      {tr('预览', 'Preview')}
                                     </Button>
                                     <Button
                                       size="sm"
@@ -1229,7 +1231,7 @@ export function JobRuntimePanel({
                                         ).catch((ex) => setErr(ex.message));
                                       }}
                                     >
-                                      下载
+                                      {tr('下载', 'Download')}
                                     </Button>
                                   </>
                                 )
@@ -1247,7 +1249,7 @@ export function JobRuntimePanel({
         </Drawer>
       )}
 
-      <Modal open={Boolean(filePreview)} title={`文件预览：${filePreview?.path}`} onClose={() => setFilePreview(null)} wide>
+      <Modal open={Boolean(filePreview)} title={tr(`文件预览：${filePreview?.path}`, `File Preview: ${filePreview?.path}`)} onClose={() => setFilePreview(null)} wide>
         <pre className="max-h-96 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-xs text-slate-100 whitespace-pre-wrap">
           {filePreview?.text}
         </pre>

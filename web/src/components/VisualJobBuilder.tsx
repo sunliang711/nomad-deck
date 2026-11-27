@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { apiGet, apiPost } from '../lib/api';
 import { copyText } from '../lib/clipboard';
+import { useI18n } from '../lib/i18n';
 import {
   applyVaultToTask,
   bodyAt,
@@ -140,6 +141,18 @@ const LABELS: Record<string, string> = {
   region: 'Region 名称',
 };
 
+const LABELS_EN: Record<string, string> = {
+  job: 'Job Name',
+  group: 'Group Name',
+  task: 'Task Name',
+  variable: 'Variable Name',
+  volume: 'Volume Name',
+  port: 'Port Label',
+  device: 'Device Name',
+  action: 'Action Name',
+  region: 'Region Name',
+};
+
 const ENUM_VALUES: Record<string, string[]> = {
   'Job.type': ['service', 'batch', 'system', 'sysbatch'],
   'Service.provider': ['nomad', 'consul'],
@@ -154,17 +167,17 @@ const ENUM_VALUES: Record<string, string[]> = {
 };
 
 const JOB_TYPES = [
-  { id: 'service', title: '长期服务', desc: '持续在线运行，异常自动拉起（如 Web / DB）' },
-  { id: 'batch', title: '批处理任务', desc: '执行完成后自动退出（如备份 / 迁移脚本）' },
-  { id: 'system', title: '全节点守护', desc: '在每个满足条件的 Client 上各跑 1 份' },
-  { id: 'sysbatch', title: '全节点批处理', desc: '在所有节点各执行一次短任务后结束' },
+  { id: 'service', title: '长期服务', titleEn: 'Service', desc: '持续在线运行，异常自动拉起（如 Web / DB）', descEn: 'Long-running service with auto-restart (e.g. Web / DB)' },
+  { id: 'batch', title: '批处理任务', titleEn: 'Batch', desc: '执行完成后自动退出（如备份 / 迁移脚本）', descEn: 'Runs to completion and exits (e.g. backup / migration)' },
+  { id: 'system', title: '全节点守护', titleEn: 'System', desc: '在每个满足条件的 Client 上各跑 1 份', descEn: 'Runs one allocation on every eligible client node' },
+  { id: 'sysbatch', title: '全节点批处理', titleEn: 'Sysbatch', desc: '在所有节点各执行一次短任务后结束', descEn: 'Runs a short batch task once on every client node' },
 ];
 
 const RESOURCE_PRESETS = [
-  { label: '微型', cpu: 100, memory: 128, hint: '100 MHz · 128 MiB' },
-  { label: '轻量', cpu: 200, memory: 256, hint: '200 MHz · 256 MiB' },
-  { label: '标准', cpu: 500, memory: 512, hint: '500 MHz · 512 MiB' },
-  { label: '高性能', cpu: 1000, memory: 1024, hint: '1000 MHz · 1 GiB' },
+  { label: '微型', labelEn: 'Micro', cpu: 100, memory: 128, hint: '100 MHz · 128 MiB' },
+  { label: '轻量', labelEn: 'Small', cpu: 200, memory: 256, hint: '200 MHz · 256 MiB' },
+  { label: '标准', labelEn: 'Standard', cpu: 500, memory: 512, hint: '500 MHz · 512 MiB' },
+  { label: '高性能', labelEn: 'High', cpu: 1000, memory: 1024, hint: '1000 MHz · 1 GiB' },
 ];
 
 const QUICK_DOCKER_IMAGES = [
@@ -175,9 +188,9 @@ const QUICK_DOCKER_IMAGES = [
 ];
 
 const CRON_PRESETS = [
-  { label: '每 5 分钟', value: '*/5 * * * *' },
-  { label: '每小时', value: '0 * * * *' },
-  { label: '每天 02:00', value: '0 2 * * *' },
+  { label: '每 5 分钟', labelEn: 'Every 5m', value: '*/5 * * * *' },
+  { label: '每小时', labelEn: 'Hourly', value: '0 * * * *' },
+  { label: '每天 02:00', labelEn: 'Daily 02:00', value: '0 2 * * *' },
 ];
 
 const JOB_HANDLED_BLOCKS = new Set(['group', 'update', 'periodic', 'constraint']);
@@ -218,6 +231,7 @@ function ValueEditor({
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
+  const { tr } = useI18n();
   const expression = node.expression || '';
   const literal = literalValue(expression, field.kind);
   const [native, setNative] = useState(field.kind === 'expression' || literal === undefined);
@@ -232,7 +246,7 @@ function ValueEditor({
         </label>
         {field.kind !== 'expression' && (
           <Button size="sm" type="button" disabled={disabled || (raw && literal === undefined)} onClick={() => setNative(!raw)}>
-            {raw ? '切换为值输入' : '使用 HCL 表达式'}
+            {raw ? tr('切换为值输入', 'Switch to value input') : tr('使用 HCL 表达式', 'Use HCL expression')}
           </Button>
         )}
       </div>
@@ -248,7 +262,7 @@ function ValueEditor({
             spellCheck={false}
             className="w-full rounded-lg border border-slate-300 bg-white p-2 font-mono text-xs dark:border-slate-700 dark:bg-slate-950"
           />
-          <div className="text-[11px] text-slate-500">原生 HCL 表达式，例如 var.cpu、["http"] 或模板 heredoc。</div>
+          <div className="text-[11px] text-slate-500">{tr('原生 HCL 表达式，例如 var.cpu、["http"] 或模板 heredoc。', 'Raw HCL expression, e.g. var.cpu, ["http"], or heredoc template.')}</div>
         </div>
       ) : field.kind === 'bool' ? (
         <Select id={`value-${node.name}`} aria-label={node.name} size="sm" disabled={disabled} value={expression} onChange={(e) => onChange(e.target.value)}>
@@ -260,7 +274,7 @@ function ValueEditor({
           {(literal as string[]).map((value, i) => (
             <div key={i} className="flex items-center gap-1">
               <input
-                aria-label={`${node.name} 第 ${i + 1} 项`}
+                aria-label={tr(`${node.name} 第 ${i + 1} 项`, `${node.name} item ${i + 1}`)}
                 list={choices.length ? listId : undefined}
                 disabled={disabled}
                 value={value}
@@ -271,7 +285,7 @@ function ValueEditor({
               />
               <Button
                 size="sm"
-                aria-label={`上移 ${node.name} 第 ${i + 1} 项`}
+                aria-label={tr(`上移 ${node.name} 第 ${i + 1} 项`, `Move up ${node.name} item ${i + 1}`)}
                 disabled={disabled || i === 0}
                 onClick={() => {
                   const next = [...(literal as string[])];
@@ -283,7 +297,7 @@ function ValueEditor({
               </Button>
               <Button
                 size="sm"
-                aria-label={`删除 ${node.name} 第 ${i + 1} 项`}
+                aria-label={tr(`删除 ${node.name} 第 ${i + 1} 项`, `Delete ${node.name} item ${i + 1}`)}
                 disabled={disabled}
                 onClick={() => onChange(JSON.stringify((literal as string[]).filter((_, index) => index !== i)))}
               >
@@ -293,7 +307,7 @@ function ValueEditor({
           ))}
           <Button size="sm" disabled={disabled} onClick={() => onChange(JSON.stringify([...(literal as string[]), '']))}>
             <Plus className="h-3 w-3" />
-            添加 {node.name} 项
+            {tr(`添加 ${node.name} 项`, `Add ${node.name} item`)}
           </Button>
         </div>
       ) : node.name === 'data' ? (
@@ -339,6 +353,7 @@ function StringListEditor({
   disabled: boolean;
   onChange: (next: string[]) => void;
 }) {
+  const { tr } = useI18n();
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-2">
@@ -350,13 +365,13 @@ function StringListEditor({
             className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
           >
             <Plus className="h-3 w-3" />
-            添加一项
+            {tr('添加一项', 'Add Item')}
           </button>
         )}
       </div>
       {items.length === 0 ? (
         <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-[11px] text-slate-400 dark:border-slate-700">
-          {hint || '暂未配置'}
+          {hint || tr('暂未配置', 'Not configured')}
         </div>
       ) : (
         <div className="space-y-1.5">
@@ -373,7 +388,7 @@ function StringListEditor({
               {!disabled && (
                 <button
                   type="button"
-                  aria-label={`删除第 ${idx + 1} 项`}
+                  aria-label={tr(`删除第 ${idx + 1} 项`, `Delete item ${idx + 1}`)}
                   onClick={() => onChange(items.filter((_, i) => i !== idx))}
                   className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
                 >
@@ -422,6 +437,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
   { clusterId, source, readOnly, onSourceChange, onValidityChange },
   ref,
 ) {
+  const { locale, isEn, tr } = useI18n();
   const toast = useToast();
   const [document, setDocument] = useState<HCLDocument | null>(null);
   const [schema, setSchema] = useState<BuilderSchema | null>(null);
@@ -497,7 +513,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
       }
       return result;
     } catch (ex: any) {
-      if (mountedRef.current && request === requestRef.current) setError(ex.message || '生成 HCL 失败');
+      if (mountedRef.current && request === requestRef.current) setError(ex.message || tr('生成 HCL 失败', 'Failed to render HCL'));
       throw ex;
     } finally {
       if (mountedRef.current && request === requestRef.current) setRendering(false);
@@ -592,7 +608,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         setSelected(pickInitialSelection(res.document));
       })
       .catch((ex) => {
-        if (active) setError(ex.message || 'HCL 无法载入，请返回原生编辑器修正语法');
+        if (active) setError(ex.message || tr('HCL 无法载入，请返回原生编辑器修正语法', 'Failed to parse HCL; fix syntax in Native HCL editor'));
       });
     return () => {
       active = false;
@@ -666,7 +682,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
       <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-950/40">
         <ErrorAlert message={error} />
         <p className="text-xs text-slate-500">
-          {error ? '原始内容保持不变，可切换回「原生 HCL」修正语法后再切回可视化编排。' : '正在解析 HCL 结构…'}
+          {error ? tr('原始内容保持不变，可切换回「原生 HCL」修正语法后再切回可视化编排。', 'Original source preserved; fix syntax in "Native HCL" and switch back.') : tr('正在解析 HCL 结构…', 'Parsing HCL AST...')}
         </p>
       </div>
     );
@@ -741,9 +757,9 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             </span>
             <div className="min-w-0">
               <div className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
-                Job：{jobName || '未命名任务'}
+                {tr('Job：', 'Job: ')}{jobName || tr('未命名任务', 'Unnamed Job')}
               </div>
-              <div className="text-[11px] text-slate-500">定义工作负载全局名称、调度类型、数据中心与发布策略</div>
+              <div className="text-[11px] text-slate-500">{tr('定义工作负载全局名称、调度类型、数据中心与发布策略', 'Define job name, workload type, datacenters, and rollout strategy')}</div>
             </div>
           </div>
           {!readOnly && (
@@ -756,22 +772,22 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               }}
             >
               <Plus className="h-3.5 w-3.5" />
-              <span>添加任务组</span>
+              <span>{tr('添加任务组', 'Add Group')}</span>
             </Button>
           )}
         </div>
 
-        <SectionBox icon={<Settings2 className="h-4 w-4" />} title="基础身份与调度范围">
+        <SectionBox icon={<Settings2 className="h-4 w-4" />} title={tr('基础身份与调度范围', 'Identity & Scheduling Scope')}>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Input
-              label="Job 名称"
+              label={tr('Job 名称', 'Job Name')}
               disabled={readOnly}
               value={jobName}
-              placeholder="例如 web-api"
+              placeholder={tr('例如 web-api', 'e.g. web-api')}
               onChange={(e) => commit(setBlockLabel(document, jPath, e.target.value))}
             />
             <Input
-              label="调度优先级 (1 - 100，默认 50)"
+              label={tr('调度优先级 (1 - 100，默认 50)', 'Priority (1-100, default 50)')}
               type="number"
               min={1}
               max={100}
@@ -787,7 +803,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           </div>
 
           <div className="space-y-1.5">
-            <div className="text-xs font-medium text-slate-700 dark:text-slate-300">工作负载类型</div>
+            <div className="text-xs font-medium text-slate-700 dark:text-slate-300">{tr('工作负载类型', 'Workload Type')}</div>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {JOB_TYPES.map((t) => {
                 const active = jobType === t.id;
@@ -804,10 +820,10 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     }`}
                   >
                     <div className="flex items-center justify-between gap-1">
-                      <span className="font-semibold text-slate-900 dark:text-slate-100">{t.title}</span>
+                      <span className="font-semibold text-slate-900 dark:text-slate-100">{isEn ? t.titleEn : t.title}</span>
                       <span className="font-mono text-[10px] text-slate-400">{t.id}</span>
                     </div>
-                    <p className="mt-1 text-[11px] leading-4 text-slate-500 dark:text-slate-400">{t.desc}</p>
+                    <p className="mt-1 text-[11px] leading-4 text-slate-500 dark:text-slate-400">{isEn ? t.descEn : t.desc}</p>
                   </button>
                 );
               })}
@@ -816,14 +832,14 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-slate-700 dark:text-slate-300">目标数据中心 (Datacenters)</span>
+              <span className="text-xs font-medium text-slate-700 dark:text-slate-300">{tr('目标数据中心 (Datacenters)', 'Target Datacenters')}</span>
               {dcIsDynamic && (
                 <button
                   type="button"
                   onClick={() => jumpToTreePath(jPath)}
                   className="text-[11px] text-indigo-600 hover:underline dark:text-indigo-400"
                 >
-                  当前使用动态表达式，点此在结构树编辑
+                  {tr('当前使用动态表达式，点此在结构树编辑', 'Using dynamic expression; click to edit in AST tree')}
                 </button>
               )}
             </div>
@@ -865,7 +881,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                           setCustomDcInput('');
                         }
                       }}
-                      placeholder="新增 DC 按回车"
+                      placeholder={tr('新增 DC 按回车', 'Add DC + Enter')}
                       className="w-28 rounded-lg border border-dashed border-slate-300 bg-white px-2 py-1 font-mono text-[11px] focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950"
                     />
                   </div>
@@ -876,13 +892,13 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Select
-              label="命名空间 (可选，留空跟随页面所选)"
+              label={tr('命名空间 (可选，留空跟随页面所选)', 'Namespace (optional, defaults to page selection)')}
               size="sm"
               disabled={readOnly}
               value={nsVal}
               onChange={(e) => commit(setAttrExpr(document, jPath, 'namespace', e.target.value ? JSON.stringify(e.target.value) : null))}
             >
-              <option value="">跟随提交时所选 Namespace</option>
+              <option value="">{tr('跟随提交时所选 Namespace', 'Follow selected Namespace')}</option>
               {Array.from(new Set(['default', ...options.namespaces, ...(nsVal ? [nsVal] : [])])).map((ns) => (
                 <option key={ns} value={ns}>
                   {ns}
@@ -890,13 +906,13 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               ))}
             </Select>
             <Select
-              label="节点资源池 Node Pool (可选)"
+              label={tr('节点资源池 Node Pool (可选)', 'Node Pool (optional)')}
               size="sm"
               disabled={readOnly}
               value={poolVal}
               onChange={(e) => commit(setAttrExpr(document, jPath, 'node_pool', e.target.value ? JSON.stringify(e.target.value) : null))}
             >
-              <option value="">默认资源池 (default)</option>
+              <option value="">{tr('默认资源池 (default)', 'Default pool (default)')}</option>
               {Array.from(new Set([...options.node_pools, ...(poolVal ? [poolVal] : [])])).map((p) => (
                 <option key={p} value={p}>
                   {p}
@@ -908,8 +924,8 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         <SectionBox
           icon={<Boxes className="h-4 w-4" />}
-          title={`包含的任务组 (${groups.length})`}
-          description="点击任意任务组即可配置副本数、端口映射与具体运行容器"
+          title={tr(`包含的任务组 (${groups.length})`, `Task Groups (${groups.length})`)}
+          description={tr('点击任意任务组即可配置副本数、端口映射与具体运行容器', 'Click a group to configure count, ports, and tasks')}
           actions={
             !readOnly && (
               <Button
@@ -920,14 +936,14 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 }}
               >
                 <Plus className="h-3.5 w-3.5" />
-                <span>新增任务组</span>
+                <span>{tr('新增任务组', 'Add Group')}</span>
               </Button>
             )
           }
         >
           {groups.length === 0 ? (
             <div className="rounded-lg border border-dashed border-slate-200 py-5 text-center text-slate-400 dark:border-slate-800">
-              当前 Job 尚无任务组，请点击上方「新增任务组」
+              {tr('当前 Job 尚无任务组，请点击上方「新增任务组」', 'No task groups yet; click "Add Group" above')}
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
@@ -950,9 +966,9 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-1.5 text-[11px] text-slate-500">
-                      <span>{grpTasks.length} 个任务</span>
+                      <span>{tr(`${grpTasks.length} 个任务`, `${grpTasks.length} task(s)`)}</span>
                       {grpPorts.length > 0 && (
-                        <span>· 端口：{grpPorts.map((p) => p.label + (p.staticPort ? `:${p.staticPort}` : '')).join(', ')}</span>
+                        <span>{tr('· 端口：', '· Ports: ')}{grpPorts.map((p) => p.label + (p.staticPort ? `:${p.staticPort}` : '')).join(', ')}</span>
                       )}
                     </div>
                   </button>
@@ -964,11 +980,11 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         <SectionBox
           icon={<RefreshCw className="h-4 w-4" />}
-          title="滚动更新策略 (update)"
-          description="控制发版时每次替换几个实例，异常时自动回滚到上一健康版本"
+          title={tr('滚动更新策略 (update)', 'Rolling Update Strategy (update)')}
+          description={tr('控制发版时每次替换几个实例，异常时自动回滚到上一健康版本', 'Controls parallel replacements during deploy and auto-revert on failure')}
           actions={
             <Switch
-              label="启用滚动更新策略"
+              label={tr('启用滚动更新策略', 'Enable update strategy')}
               disabled={readOnly}
               checked={Boolean(updateBlk)}
               onChange={(checked) => commit(setJobUpdateStrategy(document, jPath, checked))}
@@ -978,7 +994,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           {updateBlk && (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Input
-                label="最大并行替换 (max_parallel)"
+                label={tr('最大并行替换 (max_parallel)', 'Max Parallel (max_parallel)')}
                 type="number"
                 min={1}
                 disabled={readOnly}
@@ -988,7 +1004,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 }
               />
               <Input
-                label="健康观察期 (min_healthy_time)"
+                label={tr('健康观察期 (min_healthy_time)', 'Min Healthy Time (min_healthy_time)')}
                 disabled={readOnly}
                 value={parseLiteralString(getAttrExpr(document, updateBlk.path, 'min_healthy_time')) || '10s'}
                 onChange={(e) =>
@@ -996,7 +1012,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 }
               />
               <Input
-                label="健康超时 (healthy_deadline)"
+                label={tr('健康超时 (healthy_deadline)', 'Healthy Deadline (healthy_deadline)')}
                 disabled={readOnly}
                 value={parseLiteralString(getAttrExpr(document, updateBlk.path, 'healthy_deadline')) || '3m'}
                 onChange={(e) =>
@@ -1010,7 +1026,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   checked={parseLiteralBool(getAttrExpr(document, updateBlk.path, 'auto_revert')) ?? true}
                   onChange={(e) => commit(setJobUpdateStrategy(document, jPath, true, { autoRevert: e.target.checked }))}
                 />
-                <span>发布失败时自动回滚至上一稳定版本 (auto_revert)</span>
+                <span>{tr('发布失败时自动回滚至上一稳定版本 (auto_revert)', 'Auto-revert to previous stable version on failure (auto_revert)')}</span>
               </label>
             </div>
           )}
@@ -1018,11 +1034,11 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         <SectionBox
           icon={<SlidersHorizontal className="h-4 w-4" />}
-          title="定时周期调度 (periodic)"
-          description="适用于 batch 类型任务，按 Cron 定时自动拉起运行"
+          title={tr('定时周期调度 (periodic)', 'Periodic Schedule (periodic)')}
+          description={tr('适用于 batch 类型任务，按 Cron 定时自动拉起运行', 'For batch jobs; automatically triggers runs on a Cron schedule')}
           actions={
             <Switch
-              label="启用定时周期调度"
+              label={tr('启用定时周期调度', 'Enable periodic schedule')}
               disabled={readOnly}
               checked={Boolean(periodicBlk)}
               onChange={(checked) => commit(setJobPeriodic(document, jPath, checked))}
@@ -1032,7 +1048,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           {periodicBlk && (
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] text-slate-500">常用周期：</span>
+                <span className="text-[11px] text-slate-500">{tr('常用周期：', 'Presets:')}</span>
                 {CRON_PRESETS.map((p) => (
                   <button
                     key={p.value}
@@ -1041,20 +1057,20 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     onClick={() => commit(setJobPeriodic(document, jPath, true, { cron: p.value }))}
                     className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 hover:border-indigo-400 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
                   >
-                    {p.label} ({p.value})
+                    {isEn ? p.labelEn : p.label} ({p.value})
                   </button>
                 ))}
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Input
-                  label="Cron 表达式"
+                  label={tr('Cron 表达式', 'Cron Expression')}
                   disabled={readOnly}
                   value={parseLiteralString(getAttrExpr(document, periodicBlk.path, 'cron')) || ''}
                   placeholder="0 * * * *"
                   onChange={(e) => commit(setJobPeriodic(document, jPath, true, { cron: e.target.value }))}
                 />
                 <Input
-                  label="时区 (time_zone，可选)"
+                  label={tr('时区 (time_zone，可选)', 'Time Zone (time_zone, optional)')}
                   disabled={readOnly}
                   value={parseLiteralString(getAttrExpr(document, periodicBlk.path, 'time_zone')) || ''}
                   placeholder="Asia/Shanghai"
@@ -1068,7 +1084,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   checked={parseLiteralBool(getAttrExpr(document, periodicBlk.path, 'prohibit_overlap')) ?? true}
                   onChange={(e) => commit(setJobPeriodic(document, jPath, true, { prohibitOverlap: e.target.checked }))}
                 />
-                <span>上一次尚未结束时跳过本次触发 (prohibit_overlap)</span>
+                <span>{tr('上一次尚未结束时跳过本次触发 (prohibit_overlap)', 'Skip trigger if previous run is still active (prohibit_overlap)')}</span>
               </label>
             </div>
           )}
@@ -1076,19 +1092,19 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         <SectionBox
           icon={<Shield className="h-4 w-4" />}
-          title={`节点调度约束 (${constraints.length})`}
-          description="限定任务只调度到满足特定系统、架构或节点标签的主机"
+          title={tr(`节点调度约束 (${constraints.length})`, `Placement Constraints (${constraints.length})`)}
+          description={tr('限定任务只调度到满足特定系统、架构或节点标签的主机', 'Restrict placement to hosts matching OS, arch, or node attributes')}
           actions={
             !readOnly && (
               <Button size="sm" onClick={() => commit(addJobConstraint(document, jPath))}>
                 <Plus className="h-3.5 w-3.5" />
-                <span>添加约束</span>
+                <span>{tr('添加约束', 'Add Constraint')}</span>
               </Button>
             )
           }
         >
           {constraints.length === 0 ? (
-            <div className="text-[11px] text-slate-400">未设置额外约束，将调度到任意可用 Client 节点。</div>
+            <div className="text-[11px] text-slate-400">{tr('未设置额外约束，将调度到任意可用 Client 节点。', 'No extra constraints; schedules onto any eligible Client node.')}</div>
           ) : (
             <div className="space-y-2">
               {constraints.map((c) => {
@@ -1098,7 +1114,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 return (
                   <div key={c.path.join('.')} className="grid grid-cols-1 gap-2 sm:grid-cols-[1.4fr_110px_1fr_auto] items-center rounded-lg border border-slate-200/80 bg-slate-50/50 p-2 dark:border-slate-800 dark:bg-slate-950/30">
                     <input
-                      aria-label="约束属性"
+                      aria-label={tr('约束属性', 'Constraint attribute')}
                       disabled={readOnly}
                       value={attr}
                       placeholder="${attr.kernel.name}"
@@ -1106,7 +1122,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       className="rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
                     />
                     <Select
-                      aria-label="约束运算符"
+                      aria-label={tr('约束运算符', 'Constraint operator')}
                       size="sm"
                       disabled={readOnly}
                       value={op}
@@ -1119,7 +1135,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       ))}
                     </Select>
                     <input
-                      aria-label="约束目标值"
+                      aria-label={tr('约束目标值', 'Constraint value')}
                       disabled={readOnly}
                       value={val}
                       placeholder="linux"
@@ -1129,7 +1145,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     {!readOnly && (
                       <button
                         type="button"
-                        aria-label="删除约束"
+                        aria-label={tr('删除约束', 'Delete constraint')}
                         onClick={() => commit(removeNodeAtPath(document, c.path))}
                         className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
                       >
@@ -1145,7 +1161,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         {unhandled.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3.5 py-2.5 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">
-            <span>已无损保留其他 HCL 块：</span>
+            <span>{tr('已无损保留其他 HCL 块：', 'Preserved extra HCL blocks:')}</span>
             {unhandled.map((blk) => (
               <button
                 key={blk.path.join('.')}
@@ -1191,10 +1207,10 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   Job
                 </button>
                 <ChevronRight className="h-3 w-3" />
-                <span>任务组</span>
+                <span>{tr('任务组', 'Group')}</span>
               </div>
               <div className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
-                {grpName || '未命名任务组'}
+                {grpName || tr('未命名任务组', 'Unnamed Group')}
               </div>
             </div>
           </div>
@@ -1209,11 +1225,11 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 }}
               >
                 <Plus className="h-3.5 w-3.5" />
-                <span>添加任务</span>
+                <span>{tr('添加任务', 'Add Task')}</span>
               </Button>
               <Button
                 size="sm"
-                title="复制当前任务组"
+                title={tr('复制当前任务组', 'Duplicate group')}
                 onClick={() => {
                   try {
                     const next = duplicateBlock(document, gPath, schema);
@@ -1224,7 +1240,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 }}
               >
                 <Copy className="h-3.5 w-3.5" />
-                <span>复制</span>
+                <span>{tr('复制', 'Duplicate')}</span>
               </Button>
               {groups.length > 1 && (
                 <Button
@@ -1233,37 +1249,37 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   onClick={() => commit(removeNodeAtPath(document, gPath), jobPath || [])}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                  <span>删除</span>
+                  <span>{tr('删除', 'Delete')}</span>
                 </Button>
               )}
             </div>
           )}
         </div>
 
-        <SectionBox icon={<Server className="h-4 w-4" />} title="任务组名称与副本数">
+        <SectionBox icon={<Server className="h-4 w-4" />} title={tr('任务组名称与副本数', 'Group Name & Count')}>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 items-end">
             <Input
-              label="任务组名称 (group)"
+              label={tr('任务组名称 (group)', 'Group Name (group)')}
               disabled={readOnly}
               value={grpName}
-              placeholder="例如 app"
+              placeholder={tr('例如 app', 'e.g. app')}
               onChange={(e) => commit(setBlockLabel(document, gPath, e.target.value))}
             />
             <div className="space-y-1.5">
-              <div className="text-xs font-medium text-slate-700 dark:text-slate-300">实例副本数 (count)</div>
+              <div className="text-xs font-medium text-slate-700 dark:text-slate-300">{tr('实例副本数 (count)', 'Instance Count (count)')}</div>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="inline-flex items-center rounded-lg border border-[#dce3ee] bg-white dark:border-slate-700 dark:bg-slate-950">
                   <button
                     type="button"
                     disabled={readOnly || countVal <= 0}
-                    aria-label="减少副本数"
+                    aria-label={tr('减少副本数', 'Decrease count')}
                     onClick={() => commit(setAttrExpr(document, gPath, 'count', String(Math.max(0, countVal - 1))))}
                     className="px-2.5 py-1.5 text-slate-600 hover:bg-slate-100 disabled:opacity-40 dark:text-slate-300 dark:hover:bg-slate-800 rounded-l-lg"
                   >
                     <Minus className="h-3.5 w-3.5" />
                   </button>
                   <input
-                    aria-label="实例副本数"
+                    aria-label={tr('实例副本数', 'Instance count')}
                     type="number"
                     min={0}
                     disabled={readOnly}
@@ -1277,7 +1293,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   <button
                     type="button"
                     disabled={readOnly}
-                    aria-label="增加副本数"
+                    aria-label={tr('增加副本数', 'Increase count')}
                     onClick={() => commit(setAttrExpr(document, gPath, 'count', String(countVal + 1)))}
                     className="px-2.5 py-1.5 text-slate-600 hover:bg-slate-100 disabled:opacity-40 dark:text-slate-300 dark:hover:bg-slate-800 rounded-r-lg"
                   >
@@ -1306,24 +1322,24 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         <SectionBox
           icon={<Network className="h-4 w-4" />}
-          title={`网络与端口映射 (${ports.length})`}
-          description="在这里声明端口标签，随后在 Task 中一键勾选即可暴露给 Docker 容器"
+          title={tr(`网络与端口映射 (${ports.length})`, `Networking & Ports (${ports.length})`)}
+          description={tr('在这里声明端口标签，随后在 Task 中一键勾选即可暴露给 Docker 容器', 'Declare port labels here, then select them in each Task to expose container ports')}
           actions={
             !readOnly && (
               <Button size="sm" onClick={() => commit(addGroupPort(document, gPath, { label: 'http', toPort: 80 }))}>
                 <Plus className="h-3.5 w-3.5" />
-                <span>添加端口</span>
+                <span>{tr('添加端口', 'Add Port')}</span>
               </Button>
             )
           }
         >
           {netBlk && (
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="text-slate-500">网络模式：</span>
+              <span className="text-slate-500">{tr('网络模式：', 'Network Mode:')}</span>
               {[
-                { id: '', label: '默认 (host)' },
+                { id: '', label: tr('默认 (host)', 'Default (host)') },
                 { id: 'host', label: 'host' },
-                { id: 'bridge', label: 'bridge (需 CNI)' },
+                { id: 'bridge', label: tr('bridge (需 CNI)', 'bridge (requires CNI)') },
               ].map((m) => (
                 <button
                   key={m.id || 'default'}
@@ -1344,14 +1360,14 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
           {ports.length === 0 ? (
             <div className="rounded-lg border border-dashed border-slate-200 py-4 text-center text-[11px] text-slate-400 dark:border-slate-800">
-              尚未声明端口。若服务需要对外监听（如 HTTP 80、Postgres 5432），请点击右上角「添加端口」。
+              {tr('尚未声明端口。若服务需要对外监听（如 HTTP 80、Postgres 5432），请点击右上角「添加端口」。', 'No ports declared yet. Click "Add Port" to expose listeners (e.g. HTTP 80, Postgres 5432).')}
             </div>
           ) : (
             <div className="space-y-2">
               <div className="hidden sm:grid sm:grid-cols-[1.2fr_1fr_1fr_auto] gap-2 px-2 text-[11px] text-slate-500">
-                <span>端口标签 (label)</span>
-                <span>宿主机端口 (static，留空动态)</span>
-                <span>容器内端口 (to)</span>
+                <span>{tr('端口标签 (label)', 'Port Label (label)')}</span>
+                <span>{tr('宿主机端口 (static，留空动态)', 'Host Port (static, blank = dynamic)')}</span>
+                <span>{tr('容器内端口 (to)', 'Container Port (to)')}</span>
                 <span className="w-8" />
               </div>
               {ports.map((p) => (
@@ -1360,7 +1376,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   className="grid grid-cols-1 gap-2 sm:grid-cols-[1.2fr_1fr_1fr_auto] items-center rounded-lg border border-slate-200/80 bg-slate-50/50 p-2 dark:border-slate-800 dark:bg-slate-950/30"
                 >
                   <input
-                    aria-label="端口标签"
+                    aria-label={tr('端口标签', 'Port label')}
                     disabled={readOnly}
                     value={p.label}
                     placeholder="http / db"
@@ -1368,31 +1384,31 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     className="rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
                   />
                   <input
-                    aria-label="宿主机固定端口"
+                    aria-label={tr('宿主机固定端口', 'Static host port')}
                     type="number"
                     min={1}
                     max={65535}
                     disabled={readOnly}
                     value={p.staticPort}
-                    placeholder="动态分配"
+                    placeholder={tr('动态分配', 'Dynamic')}
                     onChange={(e) => commit(updateGroupPort(document, p.path, { staticPort: e.target.value }))}
                     className="rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
                   />
                   <input
-                    aria-label="容器目标端口"
+                    aria-label={tr('容器目标端口', 'Container port')}
                     type="number"
                     min={1}
                     max={65535}
                     disabled={readOnly}
                     value={p.toPort}
-                    placeholder="同宿主机"
+                    placeholder={tr('同宿主机', 'Same as host')}
                     onChange={(e) => commit(updateGroupPort(document, p.path, { toPort: e.target.value }))}
                     className="rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
                   />
                   {!readOnly && (
                     <button
                       type="button"
-                      aria-label={`删除端口 ${p.label}`}
+                      aria-label={tr(`删除端口 ${p.label}`, `Delete port ${p.label}`)}
                       onClick={() => commit(removeNodeAtPath(document, p.path))}
                       className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
                     >
@@ -1407,8 +1423,8 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         <SectionBox
           icon={<Container className="h-4 w-4" />}
-          title={`组内任务 (${tasks.length})`}
-          description="点击任务卡片进入容器镜像、资源配额、环境变量与 Vault 密钥配置"
+          title={tr(`组内任务 (${tasks.length})`, `Tasks (${tasks.length})`)}
+          description={tr('点击任务卡片进入容器镜像、资源配额、环境变量与 Vault 密钥配置', 'Click a task card to configure image, resources, env vars, and Vault secrets')}
           actions={
             !readOnly && (
               <Button
@@ -1419,7 +1435,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 }}
               >
                 <Plus className="h-3.5 w-3.5" />
-                <span>添加任务</span>
+                <span>{tr('添加任务', 'Add Task')}</span>
               </Button>
             )
           }
@@ -1449,7 +1465,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     </div>
                   </div>
                   <div className="truncate font-mono text-[11px] text-slate-500">
-                    {img || (drv === 'docker' ? '未指定镜像' : '命令执行')}
+                    {img || (drv === 'docker' ? tr('未指定镜像', 'No image specified') : tr('命令执行', 'Command exec'))}
                     {(cpu || mem) ? ` · ${cpu ?? '-'}MHz / ${mem ?? '-'}MiB` : ''}
                   </div>
                 </button>
@@ -1460,13 +1476,13 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         <SectionBox
           icon={<HardDrive className="h-4 w-4" />}
-          title="临时存储盘与持久化卷"
-          description="临时盘随 Allocation 保留本地数据；宿主机/CSI 卷可用于跨调度持久化"
+          title={tr('临时存储盘与持久化卷', 'Ephemeral Disk & Volumes')}
+          description={tr('临时盘随 Allocation 保留本地数据；宿主机/CSI 卷可用于跨调度持久化', 'Ephemeral disk stays per Allocation; host/CSI volumes persist across allocations')}
           actions={
             <div className="flex items-center gap-2">
-              <span className="text-[11px] text-slate-500">临时盘</span>
+              <span className="text-[11px] text-slate-500">{tr('临时盘', 'Ephemeral')}</span>
               <Switch
-                label="启用临时存储盘"
+                label={tr('启用临时存储盘', 'Enable ephemeral disk')}
                 disabled={readOnly}
                 checked={Boolean(diskBlk)}
                 onChange={(checked) => commit(setGroupEphemeralDisk(document, gPath, checked))}
@@ -1477,7 +1493,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           {diskBlk && (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 items-center rounded-lg border border-slate-200/80 bg-slate-50/50 p-3 dark:border-slate-800 dark:bg-slate-950/30">
               <Input
-                label="临时盘大小 (MiB)"
+                label={tr('临时盘大小 (MiB)', 'Disk Size (MiB)')}
                 type="number"
                 min={64}
                 disabled={readOnly}
@@ -1491,7 +1507,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   checked={parseLiteralBool(getAttrExpr(document, diskBlk.path, 'sticky')) ?? false}
                   onChange={(e) => commit(setGroupEphemeralDisk(document, gPath, true, { sticky: e.target.checked }))}
                 />
-                <span>尽量保留在原节点 (sticky)</span>
+                <span>{tr('尽量保留在原节点 (sticky)', 'Prefer same node (sticky)')}</span>
               </label>
               <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer pt-4">
                 <input
@@ -1500,32 +1516,32 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   checked={parseLiteralBool(getAttrExpr(document, diskBlk.path, 'migrate')) ?? false}
                   onChange={(e) => commit(setGroupEphemeralDisk(document, gPath, true, { migrate: e.target.checked }))}
                 />
-                <span>允许跨节点迁移数据 (migrate)</span>
+                <span>{tr('允许跨节点迁移数据 (migrate)', 'Allow cross-node migrate (migrate)')}</span>
               </label>
             </div>
           )}
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-slate-700 dark:text-slate-300">声明持久化卷 (volume · {volumes.length})</span>
+              <span className="text-xs font-medium text-slate-700 dark:text-slate-300">{tr(`声明持久化卷 (volume · ${volumes.length})`, `Persistent Volumes (volume · ${volumes.length})`)}</span>
               {!readOnly && (
                 <Button size="sm" onClick={() => commit(addGroupVolume(document, gPath, { source: knownHostVolumes[0] || 'data' }))}>
                   <Plus className="h-3.5 w-3.5" />
-                  <span>声明卷</span>
+                  <span>{tr('声明卷', 'Add Volume')}</span>
                 </Button>
               )}
             </div>
             {volumes.length === 0 ? (
               <div className="rounded-lg border border-dashed border-slate-200 px-3 py-3 text-[11px] text-slate-400 dark:border-slate-800">
-                暂未声明 volume 块。若需挂载宿主机目录（host）或外部存储（csi），点击右上角「声明卷」后即可在 Task 的 <code className="font-mono">volume_mount</code> 中引用。
+                {tr('暂未声明 volume 块。若需挂载宿主机目录（host）或外部存储（csi），点击右上角「声明卷」后即可在 Task 的 ', 'No volumes declared. Click "Add Volume" for host paths or CSI storage, then mount via ')}<code className="font-mono">volume_mount</code>{tr(' 中引用。', ' in a Task.')}
               </div>
             ) : (
               <div className="space-y-2">
                 <div className="hidden sm:grid sm:grid-cols-[1fr_95px_1.2fr_auto_auto] gap-2 px-2 text-[11px] text-slate-500">
-                  <span>卷本地名 (label)</span>
-                  <span>类型</span>
-                  <span>来源 (source)</span>
-                  <span>权限</span>
+                  <span>{tr('卷本地名 (label)', 'Local Name (label)')}</span>
+                  <span>{tr('类型', 'Type')}</span>
+                  <span>{tr('来源 (source)', 'Source')}</span>
+                  <span>{tr('权限', 'Access')}</span>
                   <span className="w-7" />
                 </div>
                 {volumes.map((v) => {
@@ -1541,7 +1557,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     <div key={v.path.join('.')} className="space-y-2 rounded-lg border border-slate-200/80 bg-slate-50/50 p-2 dark:border-slate-800 dark:bg-slate-950/30">
                       <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_95px_1.2fr_auto_auto] items-center">
                         <input
-                          aria-label="卷本地名称"
+                          aria-label={tr('卷本地名称', 'Volume local name')}
                           disabled={readOnly}
                           value={v.label}
                           placeholder="data"
@@ -1549,7 +1565,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                           className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
                         />
                         <Select
-                          aria-label="卷类型"
+                          aria-label={tr('卷类型', 'Volume type')}
                           size="sm"
                           disabled={readOnly}
                           value={vType}
@@ -1574,11 +1590,11 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                           <option value="csi">csi</option>
                         </Select>
                         <input
-                          aria-label="卷来源名称"
+                          aria-label={tr('卷来源名称', 'Volume source')}
                           list="vb-host-volumes"
                           disabled={readOnly}
                           value={vSource}
-                          placeholder={vType === 'csi' ? 'CSI 卷 ID' : '宿主机 host_volume 名'}
+                          placeholder={vType === 'csi' ? tr('CSI 卷 ID', 'CSI volume ID') : tr('宿主机 host_volume 名', 'Host host_volume name')}
                           onChange={(e) => commit(setAttrExpr(document, v.path, 'source', JSON.stringify(e.target.value)))}
                           className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
                         />
@@ -1589,12 +1605,12 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                             checked={vRo}
                             onChange={(e) => commit(setAttrExpr(document, v.path, 'read_only', e.target.checked ? 'true' : 'false'))}
                           />
-                          只读
+                          {tr('只读', 'Read-only')}
                         </label>
                         {!readOnly && (
                           <button
                             type="button"
-                            aria-label={`删除卷 ${v.label}`}
+                            aria-label={tr(`删除卷 ${v.label}`, `Delete volume ${v.label}`)}
                             onClick={() => commit(removeNodeAtPath(document, v.path))}
                             className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
                           >
@@ -1606,12 +1622,12 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                         hostVolNodes.length > 0 ? (
                           <div className="flex items-center gap-1.5 px-1 text-[11px] text-emerald-700 dark:text-emerald-300">
                             <Check className="h-3 w-3 shrink-0" />
-                            <span>已在节点 {hostVolNodes.join('、')} 就绪</span>
+                            <span>{tr(`已在节点 ${hostVolNodes.join('、')} 就绪`, `Ready on nodes: ${hostVolNodes.join(', ')}`)}</span>
                           </div>
                         ) : validHostVolName ? (
                           <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200/80 bg-amber-50/70 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
                             <span>
-                              当前集群暂无 Host Volume <code className="font-mono font-semibold">{trimmedSource}</code>
+                              {tr('当前集群暂无 Host Volume ', 'Host Volume not found in cluster: ')}<code className="font-mono font-semibold">{trimmedSource}</code>
                             </span>
                             {!readOnly && (
                               <Button
@@ -1620,30 +1636,30 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                                 onClick={() => setCreateHostVol({ name: trimmedSource, readOnly: vRo })}
                               >
                                 <Plus className="h-3 w-3" />
-                                <span>在节点创建</span>
+                                <span>{tr('在节点创建', 'Create on Node')}</span>
                               </Button>
                             )}
                           </div>
                         ) : (
                           <div className="px-1 text-[11px] text-amber-700 dark:text-amber-300">
-                            Host Volume 名称需以字母或数字开头，仅支持字母、数字、下划线和连字符
+                            {tr('Host Volume 名称需以字母或数字开头，仅支持字母、数字、下划线和连字符', 'Host Volume name must start with alphanumeric and contain only letters, digits, _ or -')}
                           </div>
                         )
                       )}
                       {vType === 'csi' && (
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 border-t border-slate-200/70 pt-2 dark:border-slate-800">
                           <Select
-                            label="CSI 挂载模式 (attachment_mode)"
+                            label={tr('CSI 挂载模式 (attachment_mode)', 'CSI Attachment Mode')}
                             size="sm"
                             disabled={readOnly}
                             value={vAttach}
                             onChange={(e) => commit(setAttrExpr(document, v.path, 'attachment_mode', JSON.stringify(e.target.value)))}
                           >
-                            <option value="file-system">file-system（文件系统）</option>
-                            <option value="block-device">block-device（裸块设备）</option>
+                            <option value="file-system">{tr('file-system（文件系统）', 'file-system')}</option>
+                            <option value="block-device">{tr('block-device（裸块设备）', 'block-device')}</option>
                           </Select>
                           <Select
-                            label="CSI 访问模式 (access_mode)"
+                            label={tr('CSI 访问模式 (access_mode)', 'CSI Access Mode')}
                             size="sm"
                             disabled={readOnly}
                             value={vAccess}
@@ -1674,8 +1690,8 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         <SectionBox
           icon={<Shield className="h-4 w-4" />}
-          title={`服务发现与健康检查 (service · ${services.length})`}
-          description="推荐在任务组级注册服务（Nomad 原生服务发现或 Consul），支持标签与 HTTP / TCP 探活"
+          title={tr(`服务发现与健康检查 (service · ${services.length})`, `Service Discovery & Health Checks (service · ${services.length})`)}
+          description={tr('推荐在任务组级注册服务（Nomad 原生服务发现或 Consul），支持标签与 HTTP / TCP 探活', 'Register group-level services (Nomad or Consul) with tags and HTTP/TCP checks')}
           actions={
             !readOnly && (
               <Button
@@ -1690,21 +1706,21 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 }
               >
                 <Plus className="h-3.5 w-3.5" />
-                <span>注册服务</span>
+                <span>{tr('注册服务', 'Register Service')}</span>
               </Button>
             )
           }
         >
-          {renderServiceCards(services, ports, '未注册服务。如需服务发现或自动健康探测，点击「注册服务」。')}
+          {renderServiceCards(services, ports, tr('未注册服务。如需服务发现或自动健康探测，点击「注册服务」。', 'No services registered. Click "Register Service" to enable discovery and health checks.'))}
         </SectionBox>
 
         <SectionBox
           icon={<RefreshCw className="h-4 w-4" />}
-          title="故障重启策略 (restart)"
-          description="任务意外退出时在同一节点上的自动重启策略"
+          title={tr('故障重启策略 (restart)', 'Restart Policy (restart)')}
+          description={tr('任务意外退出时在同一节点上的自动重启策略', 'Automatic task restart policy on the same node after unexpected exit')}
           actions={
             <Switch
-              label="自定义故障重启策略"
+              label={tr('自定义故障重启策略', 'Custom restart policy')}
               disabled={readOnly}
               checked={Boolean(restartBlk)}
               onChange={(checked) => commit(setGroupRestart(document, gPath, checked))}
@@ -1714,7 +1730,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           {restartBlk && (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Input
-                label="重试次数 (attempts)"
+                label={tr('重试次数 (attempts)', 'Attempts')}
                 type="number"
                 min={0}
                 disabled={readOnly}
@@ -1722,26 +1738,26 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 onChange={(e) => commit(setGroupRestart(document, gPath, true, { attempts: Number(e.target.value) || 0 }))}
               />
               <Input
-                label="统计窗口 (interval)"
+                label={tr('统计窗口 (interval)', 'Interval')}
                 disabled={readOnly}
                 value={parseLiteralString(getAttrExpr(document, restartBlk.path, 'interval')) || '10m'}
                 onChange={(e) => commit(setGroupRestart(document, gPath, true, { interval: e.target.value }))}
               />
               <Input
-                label="重试延迟 (delay)"
+                label={tr('重试延迟 (delay)', 'Delay')}
                 disabled={readOnly}
                 value={parseLiteralString(getAttrExpr(document, restartBlk.path, 'delay')) || '15s'}
                 onChange={(e) => commit(setGroupRestart(document, gPath, true, { delay: e.target.value }))}
               />
               <Select
-                label="超限行为 (mode)"
+                label={tr('超限行为 (mode)', 'Mode')}
                 size="sm"
                 disabled={readOnly}
                 value={parseLiteralString(getAttrExpr(document, restartBlk.path, 'mode')) || 'delay'}
                 onChange={(e) => commit(setGroupRestart(document, gPath, true, { mode: e.target.value }))}
               >
-                <option value="delay">delay（延迟重试）</option>
-                <option value="fail">fail（停止重试）</option>
+                <option value="delay">{tr('delay（延迟重试）', 'delay (retry after delay)')}</option>
+                <option value="fail">{tr('fail（停止重试）', 'fail (stop retrying)')}</option>
               </Select>
             </div>
           )}
@@ -1749,7 +1765,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         {unhandled.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3.5 py-2.5 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">
-            <span>已无损保留其他任务组块：</span>
+            <span>{tr('已无损保留其他任务组块：', 'Preserved extra group blocks:')}</span>
             {unhandled.map((blk) => (
               <button
                 key={blk.path.join('.')}
@@ -1790,13 +1806,13 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             >
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1.2fr_110px_1fr_auto] items-end">
                 <Input
-                  label="服务名 (name)"
+                  label={tr('服务名 (name)', 'Service Name (name)')}
                   disabled={readOnly}
                   value={svcName}
                   onChange={(e) => commit(setAttrExpr(document, svc.path, 'name', JSON.stringify(e.target.value)))}
                 />
                 <Select
-                  label="注册中心"
+                  label={tr('注册中心', 'Provider')}
                   size="sm"
                   disabled={readOnly}
                   value={provider}
@@ -1806,13 +1822,13 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   <option value="consul">consul</option>
                 </Select>
                 <Select
-                  label="绑定端口"
+                  label={tr('绑定端口', 'Port')}
                   size="sm"
                   disabled={readOnly}
                   value={portRef}
                   onChange={(e) => commit(setAttrExpr(document, svc.path, 'port', e.target.value ? JSON.stringify(e.target.value) : null))}
                 >
-                  <option value="">不指定端口</option>
+                  <option value="">{tr('不指定端口', 'No port')}</option>
                   {Array.from(new Set([...ports.map((p) => p.label), ...(portRef ? [portRef] : [])])).map((pl) => (
                     <option key={pl} value={pl}>
                       {pl}
@@ -1827,10 +1843,10 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               </div>
 
               <Input
-                label="服务标签 (tags，逗号分隔，可选)"
+                label={tr('服务标签 (tags，逗号分隔，可选)', 'Tags (comma-separated, optional)')}
                 disabled={readOnly}
                 value={tags.join(', ')}
-                placeholder="例如 prod, traefik.enable=true"
+                placeholder={tr('例如 prod, traefik.enable=true', 'e.g. prod, traefik.enable=true')}
                 onChange={(e) => {
                   const next = e.target.value
                     .split(',')
@@ -1842,7 +1858,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
               <div className="space-y-1.5 border-t border-slate-200/70 pt-2 dark:border-slate-800">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-slate-600 dark:text-slate-300">健康检查 (check · {checks.length})</span>
+                  <span className="text-[11px] font-medium text-slate-600 dark:text-slate-300">{tr(`健康检查 (check · ${checks.length})`, `Health Checks (check · ${checks.length})`)}</span>
                   {!readOnly && (
                     <button
                       type="button"
@@ -1850,7 +1866,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                     >
                       <Plus className="h-3 w-3" />
-                      添加探活
+                      {tr('添加探活', 'Add Check')}
                     </button>
                   )}
                 </div>
@@ -1862,7 +1878,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   return (
                     <div key={chk.path.join('.')} className="grid grid-cols-2 gap-1.5 sm:grid-cols-[95px_1fr_85px_85px_auto] items-center">
                       <Select
-                        aria-label="检查类型"
+                        aria-label={tr('检查类型', 'Check type')}
                         size="sm"
                         disabled={readOnly}
                         value={cType}
@@ -1874,15 +1890,15 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                         <option value="script">script</option>
                       </Select>
                       <input
-                        aria-label="HTTP 路径"
+                        aria-label={tr('HTTP 路径', 'HTTP path')}
                         disabled={readOnly || cType !== 'http'}
                         value={cType === 'http' ? cPath : ''}
-                        placeholder={cType === 'http' ? '/health' : '无需路径'}
+                        placeholder={cType === 'http' ? '/health' : tr('无需路径', 'N/A')}
                         onChange={(e) => commit(setAttrExpr(document, chk.path, 'path', JSON.stringify(e.target.value)))}
                         className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2 py-1.5 font-mono text-xs disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
                       />
                       <input
-                        aria-label="检查间隔"
+                        aria-label={tr('检查间隔', 'Interval')}
                         disabled={readOnly}
                         value={cInterval}
                         placeholder="10s"
@@ -1890,7 +1906,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                         className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
                       />
                       <input
-                        aria-label="超时时间"
+                        aria-label={tr('超时时间', 'Timeout')}
                         disabled={readOnly}
                         value={cTimeout}
                         placeholder="2s"
@@ -1900,7 +1916,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       {!readOnly && (
                         <button
                           type="button"
-                          aria-label="删除健康检查"
+                          aria-label={tr('删除健康检查', 'Delete check')}
                           onClick={() => commit(removeNodeAtPath(document, chk.path))}
                           className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
                         >
@@ -1978,10 +1994,10 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   {parentGroupName}
                 </button>
                 <ChevronRight className="h-3 w-3" />
-                <span>任务</span>
+                <span>{tr('任务', 'Task')}</span>
               </div>
               <div className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
-                {taskName || '未命名任务'}
+                {taskName || tr('未命名任务', 'Unnamed Task')}
               </div>
             </div>
           </div>
@@ -1989,7 +2005,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             <div className="flex items-center gap-1.5">
               <Button
                 size="sm"
-                title="复制当前任务"
+                title={tr('复制当前任务', 'Duplicate task')}
                 onClick={() => {
                   try {
                     const next = duplicateBlock(document, tPath, schema);
@@ -2000,7 +2016,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 }}
               >
                 <Copy className="h-3.5 w-3.5" />
-                <span>复制</span>
+                <span>{tr('复制', 'Duplicate')}</span>
               </Button>
               {siblingTasks.length > 1 && (
                 <Button
@@ -2009,7 +2025,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   onClick={() => commit(removeNodeAtPath(document, tPath), gPath)}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                  <span>删除</span>
+                  <span>{tr('删除', 'Delete')}</span>
                 </Button>
               )}
             </div>
@@ -2017,17 +2033,17 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         </div>
 
         {/* 1. Identity & Driver */}
-        <SectionBox icon={<Container className="h-4 w-4" />} title="任务标识与运行环境">
+        <SectionBox icon={<Container className="h-4 w-4" />} title={tr('任务标识与运行环境', 'Task Identity & Driver')}>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Input
-              label="任务名称 (task)"
+              label={tr('任务名称 (task)', 'Task Name (task)')}
               disabled={readOnly}
               value={taskName}
-              placeholder="例如 server"
+              placeholder={tr('例如 server', 'e.g. server')}
               onChange={(e) => commit(setBlockLabel(document, tPath, e.target.value))}
             />
             <div className="space-y-1.5">
-              <div className="text-xs font-medium text-slate-700 dark:text-slate-300">运行驱动 (driver)</div>
+              <div className="text-xs font-medium text-slate-700 dark:text-slate-300">{tr('运行驱动 (driver)', 'Task Driver (driver)')}</div>
               <div className="flex flex-wrap gap-1.5">
                 {availableDrivers.map((d) => {
                   const active = driver === d;
@@ -2037,7 +2053,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       key={d}
                       type="button"
                       disabled={readOnly}
-                      title={ready ? '当前集群已检测到此驱动就绪' : undefined}
+                      title={ready ? tr('当前集群已检测到此驱动就绪', 'Driver is healthy on this cluster') : undefined}
                       onClick={() => commit(setTaskDriver(document, tPath, d))}
                       className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 font-mono text-xs transition ${
                         active
@@ -2064,17 +2080,17 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             <div className="space-y-3 border-t border-slate-100 pt-3 dark:border-slate-800">
               <div className="space-y-1.5">
                 <Input
-                  label="Docker 镜像 (image)"
+                  label={tr('Docker 镜像 (image)', 'Docker Image (image)')}
                   disabled={readOnly}
                   value={dockerImage}
-                  placeholder="例如 nginx:alpine 或 postgres:17-bookworm"
+                  placeholder={tr('例如 nginx:alpine 或 postgres:17-bookworm', 'e.g. nginx:alpine or postgres:17-bookworm')}
                   onChange={(e) =>
                     commit(setTaskConfigAttr(document, tPath, 'image', JSON.stringify(e.target.value)))
                   }
                 />
                 {!readOnly && (
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] text-slate-400">常用镜像：</span>
+                    <span className="text-[11px] text-slate-400">{tr('常用镜像：', 'Popular images:')}</span>
                     {QUICK_DOCKER_IMAGES.map((img) => (
                       <button
                         key={img}
@@ -2092,18 +2108,18 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               {/* 1-click Group port binding */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-slate-700 dark:text-slate-300">暴露端口绑定 (config.ports)</span>
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-300">{tr('暴露端口绑定 (config.ports)', 'Port Mapping (config.ports)')}</span>
                   <button
                     type="button"
                     onClick={() => selectInForm(gPath)}
                     className="text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                   >
-                    管理任务组端口
+                    {tr('管理任务组端口', 'Manage Group Ports')}
                   </button>
                 </div>
                 {groupPorts.length === 0 ? (
                   <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-[11px] text-slate-400 dark:border-slate-800">
-                    所属任务组暂未声明端口。点击右侧「管理任务组端口」添加后即可在此一键勾选。
+                    {tr('所属任务组暂未声明端口。点击右侧「管理任务组端口」添加后即可在此一键勾选。', 'No ports declared in parent group yet. Click "Manage Group Ports" to declare ports first.')}
                   </div>
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
@@ -2125,7 +2141,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                           <span>{p.label}</span>
                           {(p.staticPort || p.toPort) && (
                             <span className="text-[10px] opacity-75">
-                              ({p.staticPort || '动态'}→{p.toPort || p.staticPort || '自动'})
+                              ({p.staticPort || tr('动态', 'dynamic')}→{p.toPort || p.staticPort || tr('自动', 'auto')})
                             </span>
                           )}
                         </button>
@@ -2136,8 +2152,8 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               </div>
 
               <StringListEditor
-                label="容器目录挂载 (volumes)"
-                hint="如 local/pgdata:/var/lib/postgresql/data"
+                label={tr('容器目录挂载 (volumes)', 'Container Bind Mounts (volumes)')}
+                hint={tr('如 local/pgdata:/var/lib/postgresql/data', 'e.g. local/pgdata:/var/lib/postgresql/data')}
                 placeholder="local/data:/var/lib/data"
                 items={dockerVolumes}
                 disabled={readOnly}
@@ -2161,17 +2177,17 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 >
                   {showDockerAdv ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                   <span>
-                    容器启动命令与高级选项（entrypoint / command / args / force_pull
+                    {tr('容器启动命令与高级选项（entrypoint / command / args / force_pull', 'Container Command & Advanced Options (entrypoint / command / args / force_pull')}
                     {dockerEntrypoint.length || dockerCommand || dockerArgs.length || dockerForcePull || dockerPrivileged
-                      ? ' · 已配置'
+                      ? tr(' · 已配置', ' · Configured')
                       : ''}
-                    ）
+                    {tr('）', ')')}
                   </span>
                 </button>
                 {showDockerAdv && (
                   <div className="mt-3 space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 dark:border-slate-800 dark:bg-slate-950/30">
                     <StringListEditor
-                      label="入口点 (entrypoint)"
+                      label={tr('入口点 (entrypoint)', 'Entrypoint (entrypoint)')}
                       placeholder="/bin/sh"
                       items={dockerEntrypoint}
                       disabled={readOnly}
@@ -2180,16 +2196,16 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       }
                     />
                     <Input
-                      label="覆盖命令 (command，可选)"
+                      label={tr('覆盖命令 (command，可选)', 'Command override (command, optional)')}
                       disabled={readOnly}
                       value={dockerCommand}
-                      placeholder="留空则使用镜像默认"
+                      placeholder={tr('留空则使用镜像默认', 'Leave blank for image default')}
                       onChange={(e) =>
                         commit(setTaskConfigAttr(document, tPath, 'command', e.target.value ? JSON.stringify(e.target.value) : null))
                       }
                     />
                     <StringListEditor
-                      label="启动参数 (args)"
+                      label={tr('启动参数 (args)', 'Arguments (args)')}
                       placeholder="--port 8080"
                       items={dockerArgs}
                       disabled={readOnly}
@@ -2207,7 +2223,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                             commit(setTaskConfigAttr(document, tPath, 'force_pull', e.target.checked ? 'true' : null))
                           }
                         />
-                        <span>每次强制拉取镜像 (force_pull)</span>
+                        <span>{tr('每次强制拉取镜像 (force_pull)', 'Always pull image (force_pull)')}</span>
                       </label>
                       <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
                         <input
@@ -2218,7 +2234,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                             commit(setTaskConfigAttr(document, tPath, 'privileged', e.target.checked ? 'true' : null))
                           }
                         />
-                        <span>特权容器模式 (privileged)</span>
+                        <span>{tr('特权容器模式 (privileged)', 'Privileged mode (privileged)')}</span>
                       </label>
                     </div>
                   </div>
@@ -2228,7 +2244,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           ) : driver === 'exec' || driver === 'raw_exec' ? (
             <div className="space-y-3 border-t border-slate-100 pt-3 dark:border-slate-800">
               <Input
-                label="可执行程序路径 (command)"
+                label={tr('可执行程序路径 (command)', 'Executable Path (command)')}
                 disabled={readOnly}
                 value={dockerCommand}
                 placeholder="/bin/sh"
@@ -2237,7 +2253,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 }
               />
               <StringListEditor
-                label="命令行参数 (args)"
+                label={tr('命令行参数 (args)', 'Command Arguments (args)')}
                 placeholder="-c"
                 items={dockerArgs}
                 disabled={readOnly}
@@ -2248,9 +2264,9 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             </div>
           ) : (
             <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">
-              <span>当前使用自定义驱动 <code className="font-mono font-semibold">{driver}</code>，可在高级结构树中编辑驱动专有字段。</span>
+              <span>{tr('当前使用自定义驱动 ', 'Using custom driver ')}<code className="font-mono font-semibold">{driver}</code>{tr('，可在高级结构树中编辑驱动专有字段。', '; edit driver-specific fields in the AST Tree view.')}</span>
               <Button size="sm" onClick={() => cfgBlk ? jumpToTreePath(cfgBlk.path) : jumpToTreePath(tPath)}>
-                编辑 config
+                {tr('编辑 config', 'Edit config')}
               </Button>
             </div>
           )}
@@ -2259,26 +2275,26 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         {/* 2. Environment Variables */}
         <SectionBox
           icon={<Code2 className="h-4 w-4" />}
-          title={`环境变量 (env · ${envState.rows.length})`}
-          description="注入普通明文配置；密码与密钥建议通过下方 Vault 模板动态注入"
+          title={tr(`环境变量 (env · ${envState.rows.length})`, `Environment Variables (env · ${envState.rows.length})`)}
+          description={tr('注入普通明文配置；密码与密钥建议通过下方 Vault 模板动态注入', 'Inject non-sensitive config; use Vault templates below for secrets')}
           actions={
             !readOnly && envState.mode !== 'attribute' && (
               <Button size="sm" onClick={() => commit(addTaskEnvRow(document, tPath))}>
                 <Plus className="h-3.5 w-3.5" />
-                <span>添加变量</span>
+                <span>{tr('添加变量', 'Add Variable')}</span>
               </Button>
             )
           }
         >
           {envState.mode === 'attribute' ? (
             <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-200">
-              <span>当前 <code className="font-mono">env</code> 使用原生 HCL 表达式，已无损保留。</span>
+              <span>{tr('当前 ', 'Current ')}<code className="font-mono">env</code>{tr(' 使用原生 HCL 表达式，已无损保留。', ' uses a raw HCL expression and is preserved.')}</span>
               <Button size="sm" onClick={() => jumpToTreePath(tPath)}>
-                在结构树编辑
+                {tr('在结构树编辑', 'Edit in AST Tree')}
               </Button>
             </div>
           ) : envState.rows.length === 0 ? (
-            <div className="text-[11px] text-slate-400">暂无环境变量。</div>
+            <div className="text-[11px] text-slate-400">{tr('暂无环境变量。', 'No environment variables configured.')}</div>
           ) : (
             <div className="space-y-2">
               {envState.rows.map((row) => (
@@ -2287,7 +2303,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1.4fr_auto] items-center rounded-lg border border-slate-200/80 bg-slate-50/50 p-2 dark:border-slate-800 dark:bg-slate-950/30"
                 >
                   <input
-                    aria-label="环境变量名"
+                    aria-label={tr('环境变量名', 'Env key')}
                     disabled={readOnly}
                     value={row.key}
                     placeholder="KEY"
@@ -2295,7 +2311,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     className="rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs font-medium dark:border-slate-700 dark:bg-slate-900"
                   />
                   <input
-                    aria-label="环境变量值"
+                    aria-label={tr('环境变量值', 'Env value')}
                     disabled={readOnly}
                     value={row.value}
                     placeholder="VALUE"
@@ -2307,7 +2323,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   {!readOnly && (
                     <button
                       type="button"
-                      aria-label={`删除环境变量 ${row.key}`}
+                      aria-label={tr(`删除环境变量 ${row.key}`, `Delete env ${row.key}`)}
                       onClick={() => commit(removeNodeAtPath(document, row.path))}
                       className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
                     >
@@ -2323,18 +2339,18 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         {/* 4. Vault Secret & Templates */}
         <SectionBox
           icon={<KeyRound className="h-4 w-4" />}
-          title={`Vault 密钥与渲染模板 (template · ${templates.length})`}
-          description="绑定 Nomad-Vault 联动 Role 并渲染 0600 密码文件或动态环境变量，避免明文密码"
+          title={tr(`Vault 密钥与渲染模板 (template · ${templates.length})`, `Vault Secrets & Templates (template · ${templates.length})`)}
+          description={tr('绑定 Nomad-Vault 联动 Role 并渲染 0600 密码文件或动态环境变量，避免明文密码', 'Bind a Nomad-Vault role to render 0600 secret files or dynamic env vars')}
           actions={
             !readOnly && (
               <div className="flex flex-wrap items-center gap-1.5">
                 <Button size="sm" onClick={() => setShowVaultWizardInline((v) => !v)}>
                   <KeyRound className="h-3.5 w-3.5" />
-                  <span>{showVaultWizardInline ? '收起快捷向导' : '一键接入 Vault 密钥'}</span>
+                  <span>{showVaultWizardInline ? tr('收起快捷向导', 'Hide Wizard') : tr('一键接入 Vault 密钥', 'Vault Secret Wizard')}</span>
                 </Button>
                 <Button size="sm" onClick={() => commit(addTaskTemplateBlock(document, tPath))}>
                   <Plus className="h-3.5 w-3.5" />
-                  <span>新增模板</span>
+                  <span>{tr('新增模板', 'Add Template')}</span>
                 </Button>
               </div>
             )
@@ -2344,12 +2360,12 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 space-y-2.5 dark:border-slate-800 dark:bg-slate-950/30">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-800 dark:text-slate-100">Vault 身份绑定 (vault.role)</span>
-                {vaultBlk ? <Badge tone="green">已绑定 {vaultRoleVal || '默认'}</Badge> : <Badge>未启用</Badge>}
+                <span className="font-semibold text-slate-800 dark:text-slate-100">{tr('Vault 身份绑定 (vault.role)', 'Vault Identity Binding (vault.role)')}</span>
+                {vaultBlk ? <Badge tone="green">{tr('已绑定', 'Bound')} {vaultRoleVal || 'default'}</Badge> : <Badge>{tr('未启用', 'Disabled')}</Badge>}
               </div>
               <div className="flex items-center gap-2">
                 <Link to="/integrations" className="text-[11px] text-indigo-600 hover:underline dark:text-indigo-400">
-                  管理联动 Role
+                  {tr('管理联动 Role', 'Manage Roles')}
                 </Link>
                 {!readOnly && vaultBlk && (
                   <button
@@ -2357,7 +2373,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     onClick={() => commit(setTaskVault(document, tPath, null))}
                     className="text-[11px] text-rose-600 hover:underline dark:text-rose-400"
                   >
-                    解除绑定
+                    {tr('解除绑定', 'Unbind')}
                   </button>
                 )}
               </div>
@@ -2381,7 +2397,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     >
                       <span className="font-mono">{vr.role}</span>
                       <Badge tone={vr.status === 'applied' ? 'green' : 'amber'}>
-                        {vr.status === 'applied' ? '已应用' : '草稿'}
+                        {vr.status === 'applied' ? tr('已应用', 'Applied') : tr('草稿', 'Draft')}
                       </Badge>
                     </button>
                   );
@@ -2391,10 +2407,10 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] items-center">
               <input
-                aria-label="自定义 Vault Role 名称"
+                aria-label={tr('自定义 Vault Role 名称', 'Custom Vault Role name')}
                 disabled={readOnly}
                 value={vaultRoleVal}
-                placeholder={vaultIntegrations.length === 0 ? '未建联动，或直接填写 Role 名' : '选择上方 Role 或手动输入'}
+                placeholder={vaultIntegrations.length === 0 ? tr('未建联动，或直接填写 Role 名', 'No integration yet, or enter role name') : tr('选择上方 Role 或手动输入', 'Pick a Role above or enter manually')}
                 onChange={(e) => {
                   const v = e.target.value;
                   commit(setTaskVault(document, tPath, v ? v : null, { env: vaultEnvVal }));
@@ -2409,7 +2425,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     checked={vaultEnvVal}
                     onChange={(e) => commit(setTaskVault(document, tPath, vaultRoleVal || 'default', { env: e.target.checked }))}
                   />
-                  <span>向容器暴露 VAULT_TOKEN (env)</span>
+                  <span>{tr('向容器暴露 VAULT_TOKEN (env)', 'Expose VAULT_TOKEN env var')}</span>
                 </label>
               )}
             </div>
@@ -2419,11 +2435,11 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           {showVaultWizardInline && !readOnly && (
             <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-3.5 space-y-3 dark:border-indigo-500/30 dark:bg-indigo-950/25">
               <div className="font-semibold text-indigo-950 dark:text-indigo-100">
-                为任务「{taskName}」一键生成 vault + template 密钥配置
+                {tr(`为任务「${taskName}」一键生成 vault + template 密钥配置`, `Generate vault + template secret config for task "${taskName}"`)}
               </div>
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 <Input
-                  label="Vault Role 名称"
+                  label={tr('Vault Role 名称', 'Vault Role Name')}
                   list="vb-inline-vault-roles"
                   value={vaultHelper.role}
                   onChange={(e) => {
@@ -2435,7 +2451,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       secretPath: matched?.secret_paths?.[0] || prev.secretPath,
                     }));
                   }}
-                  placeholder="例如 postgres"
+                  placeholder={tr('例如 postgres', 'e.g. postgres')}
                 />
                 <datalist id="vb-inline-vault-roles">
                   {vaultRoles.map((r) => (
@@ -2443,7 +2459,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   ))}
                 </datalist>
                 <Input
-                  label="Secret 路径（自动补全 /data/）"
+                  label={tr('Secret 路径（自动补全 /data/）', 'Secret Path (auto /data/)')}
                   value={vaultHelper.secretPath}
                   onChange={(e) => setVaultHelper((prev) => ({ ...prev, secretPath: e.target.value }))}
                   placeholder="secret/apps/postgres"
@@ -2451,16 +2467,16 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               </div>
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 <Select
-                  label="注入方式"
+                  label={tr('注入方式', 'Injection Mode')}
                   size="sm"
                   value={vaultHelper.mode}
                   onChange={(e) => setVaultHelper((prev) => ({ ...prev, mode: e.target.value as 'env' | 'file' }))}
                 >
-                  <option value="env">注入为环境变量 (env = true)</option>
-                  <option value="file">渲染为 0600 密码文件 (/secrets/xxx)</option>
+                  <option value="env">{tr('注入为环境变量 (env = true)', 'Environment variables (env = true)')}</option>
+                  <option value="file">{tr('渲染为 0600 密码文件 (/secrets/xxx)', '0600 secret file (/secrets/xxx)')}</option>
                 </Select>
                 <Input
-                  label={vaultHelper.mode === 'file' ? '提取字段名（留空输出 JSON）' : '提取字段名（逗号分隔，留空全量）'}
+                  label={vaultHelper.mode === 'file' ? tr('提取字段名（留空输出 JSON）', 'Secret key (blank = full JSON)') : tr('提取字段名（逗号分隔，留空全量）', 'Secret keys (comma-separated, blank = all)')}
                   value={vaultHelper.keys}
                   onChange={(e) => setVaultHelper((prev) => ({ ...prev, keys: e.target.value }))}
                   placeholder={vaultHelper.mode === 'file' ? 'password' : 'username, password'}
@@ -2469,12 +2485,12 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               {vaultHelper.mode === 'file' && (
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                   <Input
-                    label="容器内密码文件名（/secrets/ 下）"
+                    label={tr('容器内密码文件名（/secrets/ 下）', 'Secret filename in container (/secrets/)')}
                     value={vaultHelper.fileName}
                     onChange={(e) => setVaultHelper((prev) => ({ ...prev, fileName: e.target.value }))}
                   />
                   <Input
-                    label="指向该文件的环境变量名"
+                    label={tr('指向该文件的环境变量名', 'Env var pointing to file')}
                     value={vaultHelper.envVarName}
                     onChange={(e) => setVaultHelper((prev) => ({ ...prev, envVarName: e.target.value }))}
                   />
@@ -2482,13 +2498,13 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               )}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 <span className="text-[11px] text-slate-600 dark:text-slate-300">
-                  模板路径：<code className="font-mono">{parseKVPath(vaultHelper.secretPath).templatePath || 'secret/data/apps/demo'}</code>
+                  {tr('模板路径：', 'Template path: ')}<code className="font-mono">{parseKVPath(vaultHelper.secretPath, 'secret', locale).templatePath || 'secret/data/apps/demo'}</code>
                 </span>
                 <Button
                   size="sm"
                   variant="primary"
                   onClick={() => {
-                    const parsed = parseKVPath(vaultHelper.secretPath);
+                    const parsed = parseKVPath(vaultHelper.secretPath, 'secret', locale);
                     const keys = vaultHelper.keys
                       .split(',')
                       .map((s) => s.trim())
@@ -2504,11 +2520,11 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       }),
                     );
                     setShowVaultWizardInline(false);
-                    toast.success(`已为任务 ${taskName} 生成 Vault 模板`);
+                    toast.success(tr(`已为任务 ${taskName} 生成 Vault 模板`, `Generated Vault template for task ${taskName}`));
                   }}
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  <span>插入到当前任务</span>
+                  <span>{tr('插入到当前任务', 'Insert into Task')}</span>
                 </Button>
               </div>
             </div>
@@ -2532,14 +2548,14 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       <div className="flex items-center gap-2 min-w-0">
                         <FileCode2 className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
                         <span className="font-mono font-semibold text-slate-800 dark:text-slate-100 truncate">
-                          模板 #{idx + 1} · {dest || '未设置路径'}
+                          {tr(`模板 #${idx + 1}`, `Template #${idx + 1}`)} · {dest || tr('未设置路径', 'No destination')}
                         </span>
-                        <Badge tone={isEnv ? 'blue' : 'neutral'}>{isEnv ? '环境变量' : `文件 ${perms || '0644'}`}</Badge>
+                        <Badge tone={isEnv ? 'blue' : 'neutral'}>{isEnv ? tr('环境变量', 'Env') : tr(`文件 ${perms || '0644'}`, `File ${perms || '0644'}`)}</Badge>
                       </div>
                       {!readOnly && (
                         <button
                           type="button"
-                          aria-label={`删除模板 ${idx + 1}`}
+                          aria-label={tr(`删除模板 ${idx + 1}`, `Delete template ${idx + 1}`)}
                           onClick={() => commit(removeNodeAtPath(document, tpl.path))}
                           className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
                         >
@@ -2549,7 +2565,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     </div>
 
                     <Input
-                      label="渲染目标路径 (destination)"
+                      label={tr('渲染目标路径 (destination)', 'Destination (destination)')}
                       disabled={readOnly}
                       value={dest}
                       placeholder="secrets/app.env"
@@ -2558,7 +2574,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 items-end">
                       <Select
-                        label="用途模式"
+                        label={tr('用途模式', 'Mode')}
                         size="sm"
                         disabled={readOnly}
                         value={isEnv ? 'env' : 'file'}
@@ -2566,18 +2582,18 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                           commit(updateTaskTemplateBlock(document, tpl.path, { mode: e.target.value as 'env' | 'file' }))
                         }
                       >
-                        <option value="env">注入环境变量</option>
-                        <option value="file">渲染为文件</option>
+                        <option value="env">{tr('注入环境变量', 'Environment variables')}</option>
+                        <option value="file">{tr('渲染为文件', 'Render as file')}</option>
                       </Select>
                       <Input
-                        label="文件权限"
+                        label={tr('文件权限', 'Permissions')}
                         disabled={readOnly || isEnv}
                         value={isEnv ? '' : perms}
-                        placeholder={isEnv ? '自动' : '0600'}
+                        placeholder={isEnv ? tr('自动', 'Auto') : '0600'}
                         onChange={(e) => commit(updateTaskTemplateBlock(document, tpl.path, { perms: e.target.value }))}
                       />
                       <Select
-                        label="变更动作"
+                        label={tr('变更动作', 'Change Mode')}
                         size="sm"
                         disabled={readOnly}
                         value={changeMode}
@@ -2592,19 +2608,19 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
                     <div className="space-y-1">
                       <div className="flex items-center justify-between text-[11px] text-slate-500">
-                        <span>模板正文（自动处理 HCL Heredoc 换行）</span>
+                        <span>{tr('模板正文（自动处理 HCL Heredoc 换行）', 'Template body (auto-handles HCL Heredoc newlines)')}</span>
                         {!dataUnwrapped.editable && (
                           <button
                             type="button"
                             onClick={() => jumpToTreePath(tpl.path)}
                             className="text-indigo-600 hover:underline dark:text-indigo-400"
                           >
-                            在结构树编辑原生表达式
+                            {tr('在结构树编辑原生表达式', 'Edit raw expression in AST Tree')}
                           </button>
                         )}
                       </div>
                       <textarea
-                        aria-label={`模板 ${idx + 1} 正文`}
+                        aria-label={tr(`模板 ${idx + 1} 正文`, `Template ${idx + 1} content`)}
                         rows={Math.min(10, Math.max(3, dataUnwrapped.text.split('\n').length + 1))}
                         disabled={readOnly || !dataUnwrapped.editable}
                         spellCheck={false}
@@ -2623,12 +2639,12 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         {/* 4. Volume Mounts (always visible so users can easily discover and attach group volumes) */}
         <SectionBox
           icon={<Database className="h-4 w-4" />}
-          title={`持久化卷挂载 (volume_mount · ${volumeMounts.length})`}
-          description="将任务组中声明的 volume（host / csi）挂载到容器指定目录"
+          title={tr(`持久化卷挂载 (volume_mount · ${volumeMounts.length})`, `Volume Mounts (volume_mount · ${volumeMounts.length})`)}
+          description={tr('将任务组中声明的 volume（host / csi）挂载到容器指定目录', 'Mount group-declared volumes (host / csi) into the task container')}
           actions={
             <div className="flex flex-wrap items-center gap-1.5">
               <Button size="sm" variant="ghost" onClick={() => selectInForm(gPath)}>
-                管理任务组 volume
+                {tr('管理任务组 volume', 'Manage Group Volumes')}
               </Button>
               {!readOnly && (
                 <Button
@@ -2638,7 +2654,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   }
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  <span>挂载卷</span>
+                  <span>{tr('挂载卷', 'Mount Volume')}</span>
                 </Button>
               )}
             </div>
@@ -2647,15 +2663,15 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           {volumeMounts.length === 0 ? (
             <div className="text-[11px] text-slate-400">
               {groupVolumes.length > 0
-                ? `所属任务组已声明 ${groupVolumes.length} 个卷（${groupVolumes.map((v) => v.label).join(', ')}），点击右上角「挂载卷」即可挂载进容器。`
-                : '暂未挂载持久化卷。可先在任务组声明 volume（host / csi），或直接点击「挂载卷」填写卷名与容器路径。'}
+                ? tr(`所属任务组已声明 ${groupVolumes.length} 个卷（${groupVolumes.map((v) => v.label).join(', ')}），点击右上角「挂载卷」即可挂载进容器。`, `Parent group declares ${groupVolumes.length} volume(s) (${groupVolumes.map((v) => v.label).join(', ')}). Click "Mount Volume" to attach.`)
+                : tr('暂未挂载持久化卷。可先在任务组声明 volume（host / csi），或直接点击「挂载卷」填写卷名与容器路径。', 'No volume mounts yet. Declare a volume in the Group or click "Mount Volume" above.')}
             </div>
           ) : (
             <div className="space-y-2">
               <div className="hidden sm:grid sm:grid-cols-[1fr_1.4fr_auto_auto] gap-2 px-2 text-[11px] text-slate-500">
-                <span>引用卷名 (volume)</span>
-                <span>容器内挂载目录 (destination)</span>
-                <span>权限</span>
+                <span>{tr('引用卷名 (volume)', 'Volume (volume)')}</span>
+                <span>{tr('容器内挂载目录 (destination)', 'Mount Path (destination)')}</span>
+                <span>{tr('权限', 'Access')}</span>
                 <span className="w-7" />
               </div>
               {volumeMounts.map((vm) => {
@@ -2669,7 +2685,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   >
                     {groupVolumes.length > 0 ? (
                       <Select
-                        aria-label="选择任务组存储卷"
+                        aria-label={tr('选择任务组存储卷', 'Select group volume')}
                         size="sm"
                         disabled={readOnly}
                         value={vRef}
@@ -2683,7 +2699,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       </Select>
                     ) : (
                       <input
-                        aria-label="引用卷名称"
+                        aria-label={tr('引用卷名称', 'Volume name')}
                         disabled={readOnly}
                         value={vRef}
                         placeholder="data"
@@ -2692,7 +2708,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       />
                     )}
                     <input
-                      aria-label="容器挂载路径"
+                      aria-label={tr('容器挂载路径', 'Container mount destination')}
                       disabled={readOnly}
                       value={vDest}
                       placeholder="/var/lib/data"
@@ -2706,12 +2722,12 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                         checked={vRo}
                         onChange={(e) => commit(setAttrExpr(document, vm.path, 'read_only', e.target.checked ? 'true' : 'false'))}
                       />
-                      只读
+                      {tr('只读', 'Read-only')}
                     </label>
                     {!readOnly && (
                       <button
                         type="button"
-                        aria-label="删除卷挂载"
+                        aria-label={tr('删除卷挂载', 'Delete volume mount')}
                         onClick={() => commit(removeNodeAtPath(document, vm.path))}
                         className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
                       >
@@ -2728,8 +2744,8 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         {/* 5. Task-level Service registration */}
         <SectionBox
           icon={<Shield className="h-4 w-4" />}
-          title={`任务级服务注册 (service · ${taskServices.length})`}
-          description="通常推荐在任务组中注册服务；如需绑定单个 Task 生命周期，也可直接在此配置"
+          title={tr(`任务级服务注册 (service · ${taskServices.length})`, `Task Services (service · ${taskServices.length})`)}
+          description={tr('通常推荐在任务组中注册服务；如需绑定单个 Task 生命周期，也可直接在此配置', 'Prefer registering services at Group level; configure here to tie to a single Task')}
           actions={
             !readOnly && (
               <Button
@@ -2744,19 +2760,19 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 }
               >
                 <Plus className="h-3.5 w-3.5" />
-                <span>注册服务</span>
+                <span>{tr('注册服务', 'Register Service')}</span>
               </Button>
             )
           }
         >
-          {renderServiceCards(taskServices, groupPorts, '未配置任务级 service 块。')}
+          {renderServiceCards(taskServices, groupPorts, tr('未配置任务级 service 块。', 'No task-level service blocks configured.'))}
         </SectionBox>
 
         {/* 6. Resources (placed at bottom of Task form) */}
         <SectionBox
           icon={<Cpu className="h-4 w-4" />}
-          title="计算资源配额 (resources)"
-          description="Nomad 会依据配额自动寻找剩余算力足够的 Client 节点"
+          title={tr('计算资源配额 (resources)', 'Compute Resources (resources)')}
+          description={tr('Nomad 会依据配额自动寻找剩余算力足够的 Client 节点', 'Nomad schedules tasks onto Client nodes matching these resource limits')}
         >
           {!readOnly && (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -2773,7 +2789,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                         : 'border-slate-200 bg-slate-50/50 hover:border-indigo-300 dark:border-slate-800 dark:bg-slate-950/30'
                     }`}
                   >
-                    <div className="font-semibold text-slate-900 dark:text-slate-100">{p.label}</div>
+                    <div className="font-semibold text-slate-900 dark:text-slate-100">{isEn ? p.labelEn : p.label}</div>
                     <div className="mt-0.5 font-mono text-[10px] text-slate-500 dark:text-slate-400">{p.hint}</div>
                   </button>
                 );
@@ -2782,7 +2798,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           )}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 items-end">
             <Input
-              label="CPU 配额 (MHz)"
+              label={tr('CPU 配额 (MHz)', 'CPU (MHz)')}
               type="number"
               min={20}
               step={50}
@@ -2792,7 +2808,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               onChange={(e) => commit(setTaskResources(document, tPath, { cpu: e.target.value ? Number(e.target.value) : null }))}
             />
             <Input
-              label="内存配额 (MiB)"
+              label={tr('内存配额 (MiB)', 'Memory (MiB)')}
               type="number"
               min={16}
               step={32}
@@ -2802,13 +2818,13 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               onChange={(e) => commit(setTaskResources(document, tPath, { memory: e.target.value ? Number(e.target.value) : null }))}
             />
             <Input
-              label="突发内存上限 (MiB)"
+              label={tr('突发内存上限 (MiB)', 'Max Memory (MiB)')}
               type="number"
               min={16}
               step={64}
               disabled={readOnly}
               value={memMax !== undefined ? String(memMax) : ''}
-              placeholder="可选"
+              placeholder={tr('可选', 'Optional')}
               onChange={(e) =>
                 commit(setTaskResources(document, tPath, { memoryMax: e.target.value ? Number(e.target.value) : null }))
               }
@@ -2818,7 +2834,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         {unhandled.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3.5 py-2.5 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">
-            <span>已无损保留其他任务块：</span>
+            <span>{tr('已无损保留其他任务块：', 'Preserved extra task blocks:')}</span>
             {unhandled.map((blk) => (
               <button
                 key={blk.path.join('.')}
@@ -2936,7 +2952,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
       if (!name) return;
       const kind = rule.map_kind ? 'attribute' : customKind;
       if (kind === 'attribute' && body.nodes.some((item) => item.kind === 'attribute' && item.name === name)) {
-        setError('当前属性已经存在');
+        setError(tr('当前属性已经存在', 'Attribute already exists'));
         return;
       }
       const next: HCLNode =
@@ -2947,7 +2963,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         (rule.attributes.some((field) => field.name === name) || rule.blocks.some((block) => block.name === name)) &&
         !canInsert(document, bodyPath, next, schema)
       ) {
-        setError('当前层级不能再添加该元素，请使用可添加元素列表');
+        setError(tr('当前层级不能再添加该元素，请使用可添加元素列表', 'Cannot add this element at this level; use the available elements selector'));
         return;
       }
       commit(
@@ -2981,12 +2997,12 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 try {
                   const src: unknown = JSON.parse(e.dataTransfer.getData('application/x-nomad-hcl-node'));
                   if (!Array.isArray(src) || src.length > 32 || !src.every((part) => Number.isInteger(part) && part >= 0)) {
-                    throw new Error('无效的拖动元素');
+                    throw new Error(tr('无效的拖动元素', 'Invalid dragged node'));
                   }
                   const next = moveNode(document, src, here, schema);
                   commit(next.document, next.path);
                 } catch (ex: any) {
-                  setError(ex.message || '无法移动到此层级');
+                  setError(ex.message || tr('无法移动到此层级', 'Cannot move node into this level'));
                 }
               }}
               className={`flex items-center gap-1 rounded py-1 pr-1 ${
@@ -2997,7 +3013,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             >
               {item.body ? (
                 <button
-                  aria-label={`${folded ? '展开' : '折叠'} ${nodeTitle(item)}`}
+                  aria-label={`${folded ? tr('展开', 'Expand') : tr('折叠', 'Collapse')} ${nodeTitle(item)}`}
                   onClick={() =>
                     setCollapsed((prev) => {
                       const next = new Set(prev);
@@ -3014,7 +3030,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 <span className="w-4 text-center text-[10px] text-slate-400">＝</span>
               )}
               <button
-                aria-label={`编辑 ${nodeTitle(item)}`}
+                aria-label={tr(`编辑 ${nodeTitle(item)}`, `Edit ${nodeTitle(item)}`)}
                 onClick={() => setSelected(here)}
                 className="min-w-0 flex-1 truncate text-left font-mono text-xs"
               >
@@ -3044,9 +3060,9 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               selected.length ? 'hover:bg-slate-100 dark:hover:bg-slate-800' : 'bg-indigo-100 text-indigo-900 dark:bg-indigo-950/60 dark:text-indigo-100'
             }`}
           >
-            HCL 文档根节点
+            {tr('HCL 文档根节点', 'HCL Document Root')}
           </button>
-          <div role="tree" aria-label="Job 结构树">
+          <div role="tree" aria-label={tr('Job 结构树', 'Job AST Tree')}>
             {outline(document, [])}
           </div>
         </div>
@@ -3054,23 +3070,23 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2 dark:border-slate-800">
             <div className="min-w-0">
               <div className="flex flex-wrap gap-1 text-[11px] text-slate-500">
-                <button onClick={() => setSelected([])}>文档</button>
+                <button onClick={() => setSelected([])}>{tr('文档', 'Document')}</button>
                 {selected.map((_, i) => (
                   <button key={i} onClick={() => setSelected(selected.slice(0, i + 1))}>
                     › {nodeTitle(nodeAt(document, selected.slice(0, i + 1))!)}
                   </button>
                 ))}
               </div>
-              <h3 className="mt-1 break-words font-mono font-semibold">{node ? nodeTitle(node) : 'HCL 文档'}</h3>
+              <h3 className="mt-1 break-words font-mono font-semibold">{node ? nodeTitle(node) : tr('HCL 文档', 'HCL Document')}</h3>
             </div>
             {node && (
               <div className="flex gap-1">
-                <Button size="sm" aria-label="上移当前元素" disabled={readOnly || selected[selected.length - 1] === 0} onClick={() => reorder(-1)}>
+                <Button size="sm" aria-label={tr('上移当前元素', 'Move up')} disabled={readOnly || selected[selected.length - 1] === 0} onClick={() => reorder(-1)}>
                   <ArrowUp className="h-3 w-3" />
                 </Button>
                 <Button
                   size="sm"
-                  aria-label="下移当前元素"
+                  aria-label={tr('下移当前元素', 'Move down')}
                   disabled={readOnly || selected[selected.length - 1] === bodyAt(document, parent).nodes.length - 1}
                   onClick={() => reorder(1)}
                 >
@@ -3078,7 +3094,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 </Button>
                 <Button
                   size="sm"
-                  aria-label="复制当前块"
+                  aria-label={tr('复制当前块', 'Duplicate block')}
                   disabled={readOnly || node.kind !== 'block' || !siblingRule || siblingRule.max === 1}
                   onClick={() => {
                     try {
@@ -3091,7 +3107,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 >
                   <Copy className="h-3 w-3" />
                 </Button>
-                <Button size="sm" aria-label="删除当前元素" variant="danger-outline" disabled={readOnly} onClick={() => removeNode(selected)}>
+                <Button size="sm" aria-label={tr('删除当前元素', 'Delete element')} variant="danger-outline" disabled={readOnly} onClick={() => removeNode(selected)}>
                   <Trash2 className="h-3 w-3" />
                 </Button>
               </div>
@@ -3102,7 +3118,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             (node.labels || []).map((label, i) => (
               <Input
                 key={i}
-                label={LABELS[node.name] || `名称标签 ${i + 1}`}
+                label={(isEn ? LABELS_EN[node.name] : LABELS[node.name]) || tr(`名称标签 ${i + 1}`, `Label ${i + 1}`)}
                 disabled={readOnly}
                 value={label}
                 onChange={(e) =>
@@ -3123,7 +3139,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               <div key={path.join('.')} className="relative space-y-2 rounded-lg border border-slate-200 p-3 pr-12 dark:border-slate-700">
                 {rule.map_kind && (
                   <Input
-                    label="键名"
+                    label={tr('键名', 'Key')}
                     disabled={readOnly}
                     value={item.name}
                     onChange={(e) =>
@@ -3143,7 +3159,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   onChange={(value) => changeExpression(path, value)}
                 />
                 <button
-                  aria-label={`删除属性 ${item.name}`}
+                  aria-label={tr(`删除属性 ${item.name}`, `Delete attribute ${item.name}`)}
                   disabled={readOnly}
                   onClick={() => removeNode(path)}
                   className="absolute right-2 top-3 rounded p-1 text-slate-400 hover:text-rose-500 disabled:opacity-30"
@@ -3158,7 +3174,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             <>
               {children.length > 0 && (
                 <div className="space-y-1.5">
-                  <div className="font-semibold">子块</div>
+                  <div className="font-semibold">{tr('子块', 'Child Blocks')}</div>
                   {children.map(({ item, path }) => (
                     <button
                       key={path.join('.')}
@@ -3173,15 +3189,15 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               )}
               {!readOnly && (
                 <div className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-700">
-                  <div className="font-semibold">添加 Nomad Schema 元素</div>
+                  <div className="font-semibold">{tr('添加 Nomad Schema 元素', 'Add Nomad Schema Element')}</div>
                   {(rule.attributes.length > 0 || rule.blocks.length > 0) && (
                     <>
-                      <Input aria-label="搜索可添加元素" placeholder="搜索属性或块，例如 resources / lifecycle" value={filter} onChange={(e) => setFilter(e.target.value)} />
+                      <Input aria-label={tr('搜索可添加元素', 'Search elements')} placeholder={tr('搜索属性或块，例如 resources / lifecycle', 'Search attribute or block, e.g. resources / lifecycle')} value={filter} onChange={(e) => setFilter(e.target.value)} />
                       <div className="flex items-end gap-2">
                         <div className="min-w-0 flex-1">
-                          <Select label="可添加元素" size="sm" value={adding} onChange={(e) => setAdding(e.target.value)}>
-                            <option value="">选择元素</option>
-                            <optgroup label="属性（每个名称仅一份）">
+                          <Select label={tr('可添加元素', 'Available Elements')} size="sm" value={adding} onChange={(e) => setAdding(e.target.value)}>
+                            <option value="">{tr('选择元素', 'Select element')}</option>
+                            <optgroup label={tr('属性（每个名称仅一份）', 'Attributes (unique)')}>
                               {rule.attributes
                                 .filter((item) => item.name.includes(filter))
                                 .map((field) => {
@@ -3190,12 +3206,12 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                                     <option key={field.name} value={`attribute:${field.name}`} disabled={exists}>
                                       {field.name}
                                       {field.required ? ' *' : ''}
-                                      {exists ? ' · 已添加' : ` · ${field.kind}`}
+                                      {exists ? tr(' · 已添加', ' · Added') : ` · ${field.kind}`}
                                     </option>
                                   );
                                 })}
                             </optgroup>
-                            <optgroup label="子块">
+                            <optgroup label={tr('子块', 'Child Blocks')}>
                               {rule.blocks
                                 .filter((item) => item.name.includes(filter))
                                 .map((block) => {
@@ -3205,8 +3221,8 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                                     (block.max > 0 && count >= block.max);
                                   return (
                                     <option key={block.name} value={`block:${block.name}`} disabled={full}>
-                                      {block.name} · {block.max === 1 ? '单个' : '可重复'}
-                                      {full ? ' · 已添加' : ''}
+                                      {block.name} · {block.max === 1 ? tr('单个', 'single') : tr('可重复', 'repeatable')}
+                                      {full ? tr(' · 已添加', ' · Added') : ''}
                                     </option>
                                   );
                                 })}
@@ -3226,30 +3242,30 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                           onClick={addElement}
                         >
                           <Plus className="h-3.5 w-3.5" />
-                          添加元素
+                          {tr('添加元素', 'Add Element')}
                         </Button>
                       </div>
                     </>
                   )}
                   {rule.map_kind ? (
                     <div className="space-y-2 rounded-lg bg-slate-50 p-2.5 dark:bg-slate-950">
-                      <Input label={rule.map_kind === 'string' ? '新键名' : '新字段名称'} value={customName} onChange={(e) => setCustomName(e.target.value)} />
+                      <Input label={rule.map_kind === 'string' ? tr('新键名', 'New Key') : tr('新字段名称', 'New Field Name')} value={customName} onChange={(e) => setCustomName(e.target.value)} />
                       <Button size="sm" disabled={!customName.trim()} onClick={addCustom}>
                         <Plus className="h-3 w-3" />
-                        {rule.map_kind === 'string' ? '添加键值' : '添加字段'}
+                        {rule.map_kind === 'string' ? tr('添加键值', 'Add Entry') : tr('添加字段', 'Add Field')}
                       </Button>
                     </div>
                   ) : (
                     <details className="rounded-lg bg-slate-50 p-2.5 dark:bg-slate-950">
-                      <summary className="cursor-pointer text-slate-500">原生扩展（自定义插件或新版本字段）</summary>
+                      <summary className="cursor-pointer text-slate-500">{tr('原生扩展（自定义插件或新版本字段）', 'Custom Extension (plugin or newer schema field)')}</summary>
                       <div className="mt-2 space-y-2">
-                        <Input label="元素名称" value={customName} onChange={(e) => setCustomName(e.target.value)} />
-                        <Select label="原生元素类型" size="sm" value={customKind} onChange={(e) => setCustomKind(e.target.value as 'attribute' | 'block')}>
-                          <option value="attribute">属性</option>
-                          <option value="block">子块</option>
+                        <Input label={tr('元素名称', 'Element Name')} value={customName} onChange={(e) => setCustomName(e.target.value)} />
+                        <Select label={tr('原生元素类型', 'Element Type')} size="sm" value={customKind} onChange={(e) => setCustomKind(e.target.value as 'attribute' | 'block')}>
+                          <option value="attribute">{tr('属性', 'Attribute')}</option>
+                          <option value="block">{tr('子块', 'Block')}</option>
                         </Select>
                         <Button size="sm" disabled={!customName.trim()} onClick={addCustom}>
-                          添加原生元素
+                          {tr('添加原生元素', 'Add Raw Element')}
                         </Button>
                       </div>
                     </details>
@@ -3281,7 +3297,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               }`}
             >
               <LayoutGrid className="h-3.5 w-3.5" />
-              <span>积木表单</span>
+              <span>{tr('积木表单', 'Visual Forms')}</span>
             </button>
             <button
               type="button"
@@ -3293,7 +3309,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               }`}
             >
               <TreePine className="h-3.5 w-3.5" />
-              <span>高级结构树</span>
+              <span>{tr('高级结构树', 'AST Tree')}</span>
             </button>
           </div>
           <span
@@ -3307,18 +3323,18 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             }`}
           >
             <span className={`h-1.5 w-1.5 rounded-full bg-current ${rendering ? 'animate-pulse' : ''}`} />
-            {rendering ? '同步 HCL 中…' : hasErrors ? `待完善 (${diagnostics.length})` : '结构校验通过'}
+            {rendering ? tr('同步 HCL 中…', 'Syncing HCL...') : hasErrors ? tr(`待完善 (${diagnostics.length})`, `Incomplete (${diagnostics.length})`) : tr('结构校验通过', 'Valid HCL')}
           </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <Button size="sm" disabled={readOnly || !undo.length} onClick={() => navigateHistory(true)} title="撤销上一步修改">
+          <Button size="sm" disabled={readOnly || !undo.length} onClick={() => navigateHistory(true)} title={tr('撤销上一步修改', 'Undo last edit')}>
             <Undo2 className="h-3.5 w-3.5" />
-            <span>撤销</span>
+            <span>{tr('撤销', 'Undo')}</span>
           </Button>
-          <Button size="sm" disabled={readOnly || !redo.length} onClick={() => navigateHistory(false)} title="重做修改">
+          <Button size="sm" disabled={readOnly || !redo.length} onClick={() => navigateHistory(false)} title={tr('重做修改', 'Redo edit')}>
             <Redo2 className="h-3.5 w-3.5" />
-            <span>重做</span>
+            <span>{tr('重做', 'Redo')}</span>
           </Button>
           <Button
             size="sm"
@@ -3326,7 +3342,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             onClick={() => setShowPreview((v) => !v)}
           >
             {showPreview ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            <span>{showPreview ? '隐藏 HCL 预览' : '实时 HCL 预览'}</span>
+            <span>{showPreview ? tr('隐藏 HCL 预览', 'Hide HCL Preview') : tr('实时 HCL 预览', 'Live HCL Preview')}</span>
           </Button>
         </div>
       </div>
@@ -3362,10 +3378,10 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             renderTreeWorkspace()
           ) : !jobPath ? (
             <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center space-y-2 dark:border-slate-700 dark:bg-slate-900">
-              <p className="text-sm font-medium text-slate-800 dark:text-slate-100">当前文档中未检测到 job 块</p>
-              <p className="text-xs text-slate-500">可切换至「高级结构树」或「原生 HCL」查看完整文档内容。</p>
+              <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{tr('当前文档中未检测到 job 块', 'No job block found in current document')}</p>
+              <p className="text-xs text-slate-500">{tr('可切换至「高级结构树」或「原生 HCL」查看完整文档内容。', 'Switch to "AST Tree" or "Native HCL" to view the full document.')}</p>
               <Button size="sm" onClick={() => setViewMode('tree')}>
-                打开高级结构树
+                {tr('打开高级结构树', 'Open AST Tree')}
               </Button>
             </div>
           ) : (
@@ -3374,7 +3390,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               <div className="rounded-xl border border-slate-200/90 bg-slate-50/60 p-3 space-y-2.5 dark:border-slate-800 dark:bg-slate-950/50 lg:sticky lg:top-4">
                 <div className="flex items-center justify-between px-1">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    任务结构蓝图
+                    {tr('任务结构蓝图', 'Job Structure')}
                   </span>
                   {!readOnly && (
                     <button
@@ -3386,7 +3402,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                       className="inline-flex items-center gap-0.5 text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                     >
                       <Plus className="h-3 w-3" />
-                      <span>任务组</span>
+                      <span>{tr('任务组', 'Group')}</span>
                     </button>
                   )}
                 </div>
@@ -3462,8 +3478,8 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                               {!readOnly && (
                                 <button
                                   type="button"
-                                  title="向此任务组添加新任务"
-                                  aria-label={`向 ${grp.label} 添加任务`}
+                                  title={tr('向此任务组添加新任务', 'Add task to this group')}
+                                  aria-label={tr(`向 ${grp.label} 添加任务`, `Add task to ${grp.label}`)}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     const res = addReadyTask(document, grp.path);
@@ -3550,7 +3566,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     onClick={() => jumpToTreePath(topLevelExtras[0].path)}
                     className="w-full rounded-lg border border-dashed border-slate-300 px-2.5 py-1.5 text-left text-[11px] text-slate-500 hover:border-indigo-400 hover:text-indigo-600 dark:border-slate-700 dark:text-slate-400"
                   >
-                    另含 {topLevelExtras.length} 个文档级元素（如 variable）→ 结构树查看
+                    {tr(`另含 ${topLevelExtras.length} 个文档级元素（如 variable）→ 结构树查看`, `${topLevelExtras.length} top-level item(s) (e.g. variable) -> AST Tree`)}
                   </button>
                 )}
               </div>
@@ -3574,9 +3590,9 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3.5 py-2.5 dark:border-slate-800">
               <div className="flex items-center gap-1.5 min-w-0">
                 <Code2 className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
-                <span className="font-semibold text-xs text-slate-800 dark:text-slate-100 truncate">实时 HCL 源码</span>
+                <span className="font-semibold text-xs text-slate-800 dark:text-slate-100 truncate">{tr('实时 HCL 源码', 'Live HCL Source')}</span>
                 <span className="font-mono text-[10px] text-slate-400">
-                  {liveHcl.split('\n').length} 行
+                  {tr(`${liveHcl.split('\n').length} 行`, `${liveHcl.split('\n').length} lines`)}
                 </span>
               </div>
               <Button
@@ -3584,19 +3600,19 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 variant="ghost"
                 onClick={() =>
                   void copyText(liveHcl)
-                    .then(() => toast.success('已复制实时 HCL'))
+                    .then(() => toast.success(tr('已复制实时 HCL', 'Live HCL copied')))
                     .catch((ex) => toast.error(ex.message))
                 }
               >
                 <Copy className="h-3.5 w-3.5" />
-                <span>复制</span>
+                <span>{tr('复制', 'Copy')}</span>
               </Button>
             </div>
             <div className="p-2.5">
               <CodeEditor value={liveHcl} onChange={() => {}} readOnly height="580px" />
             </div>
             <div className="border-t border-slate-100 px-3.5 py-2 text-[11px] text-slate-400 dark:border-slate-800">
-              修改左侧表单将自动无损同步至此源码，原注释与未展开 HCL 块均保持原样。
+              {tr('修改左侧表单将自动无损同步至此源码，原注释与未展开 HCL 块均保持原样。', 'Form edits sync losslessly here; existing comments and unedited HCL blocks stay intact.')}
             </div>
           </div>
         )}

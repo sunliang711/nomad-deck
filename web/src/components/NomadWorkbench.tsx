@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ArrowUpRight, RefreshCw, Search } from 'lucide-react';
 import { apiDelete, apiGet, apiPost, apiPut, openSSE } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { useI18n } from '../lib/i18n';
 import { Badge, Button, Card, EmptyState, ErrorAlert, Input, Modal, SectionTabs, Select, StatusBadge, TermLabel } from './UI';
 import { useToast } from './Toast';
 import { useConfirm } from './ConfirmDialog';
@@ -21,6 +22,7 @@ export function NomadWorkbench({
   initialSubTab?: string;
 }) {
   const { isAdmin } = useAuth();
+  const { tr } = useI18n();
   const navigate = useNavigate();
   const toast = useToast();
   const askConfirm = useConfirm();
@@ -80,10 +82,10 @@ export function NomadWorkbench({
           setEvaluations(res.evaluations || []);
         }
       } catch (ex: any) {
-        setErr(ex?.message || '加载视图失败');
+        setErr(ex?.message || tr('加载视图失败', 'Failed to load view'));
       }
     },
-    [clusterId],
+    [clusterId, tr],
   );
 
   useEffect(() => {
@@ -134,12 +136,12 @@ export function NomadWorkbench({
         <SectionTabs
           variant="underline"
           tabs={[
-            { id: 'clients', label: 'Clients', title: '运行任务容器/Allocations 的计算工作节点，可执行调度启用/禁用与 Drain 排空' },
-            { id: 'servers', label: 'Servers', title: '通过 Raft 共识维护集群状态和执行调度决策的控制面节点' },
-            { id: 'topology', label: '拓扑容量', title: '按数据中心与节点汇总的 CPU/内存分配率与剩余调度容量视图' },
-            { id: 'storage', label: '存储 / CSI', title: 'Container Storage Interface 持久化卷及对应存储插件（如 Ceph/NFS/EBS）' },
-            { id: 'variables', label: 'Variables', title: 'Nomad 内置键值密钥/配置存储，支持带 CAS（乐观锁版本号）的原子更新' },
-            { id: 'evaluations', label: 'Evaluations', title: '每次 Job 变更、节点故障或周期触发产生的调度计算请求，用于决定 Allocation 迁移' },
+            { id: 'clients', label: 'Clients', title: tr('运行任务容器/Allocations 的计算工作节点，可执行调度启用/禁用与 Drain 排空', 'Worker nodes running allocations; supports scheduling eligibility toggle and Drain') },
+            { id: 'servers', label: 'Servers', title: tr('通过 Raft 共识维护集群状态和执行调度决策的控制面节点', 'Control-plane nodes maintaining cluster state via Raft consensus and scheduling') },
+            { id: 'topology', label: tr('拓扑容量', 'Topology'), title: tr('按数据中心与节点汇总的 CPU/内存分配率与剩余调度容量视图', 'CPU and memory allocation summary grouped by datacenter and client node') },
+            { id: 'storage', label: tr('存储 / CSI', 'Storage / CSI'), title: tr('Container Storage Interface 持久化卷及对应存储插件（如 Ceph/NFS/EBS）', 'Container Storage Interface persistent volumes and storage plugins') },
+            { id: 'variables', label: 'Variables', title: tr('Nomad 内置键值密钥/配置存储，支持带 CAS（乐观锁版本号）的原子更新', 'Nomad built-in key-value secret/config store supporting CAS optimistic concurrency') },
+            { id: 'evaluations', label: 'Evaluations', title: tr('每次 Job 变更、节点故障或周期触发产生的调度计算请求，用于决定 Allocation 迁移', 'Scheduler evaluation requests triggered by job updates, node failures, or periodic schedules') },
           ]}
           active={subTab}
           onChange={setSubTab}
@@ -149,12 +151,12 @@ export function NomadWorkbench({
           {NAMESPACE_SCOPED_TABS.has(subTab) && (
             <div className="w-40">
               <Select
-                aria-label="工作台 Namespace"
+                aria-label={tr('工作台 Namespace', 'Workbench Namespace')}
                 size="sm"
                 value={namespace}
                 onChange={(e) => setNamespace(e.target.value)}
               >
-                <option value="*">全部 Namespace (*)</option>
+                <option value="*">{tr('全部 Namespace (*)', 'All Namespaces (*)')}</option>
                 {(namespaces.length ? namespaces : [{ name: 'default' }]).map((ns: any) => {
                   const nsName = ns.name || ns.Name;
                   return (
@@ -177,12 +179,12 @@ export function NomadWorkbench({
             className="flex items-center gap-1.5"
           >
             <input
-              placeholder="集群全局搜索…"
+              placeholder={tr('集群全局搜索…', 'Cluster global search...')}
               value={searchQ}
               onChange={(e) => setSearchQ(e.target.value)}
               className="h-8 w-40 rounded-lg border border-[#dce3ee] bg-white px-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
-            <Button size="sm" type="submit" aria-label="执行全局搜索">
+            <Button size="sm" type="submit" aria-label={tr('执行全局搜索', 'Run global search')}>
               <Search className="h-3.5 w-3.5" />
             </Button>
           </form>
@@ -190,7 +192,7 @@ export function NomadWorkbench({
             to={`/jobs?cluster_id=${encodeURIComponent(clusterId)}`}
             className="inline-flex h-8 items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50/70 px-2.5 text-xs font-medium text-indigo-700 transition hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
           >
-            <span>管理 Jobs</span>
+            <span>{tr('管理 Jobs', 'Manage Jobs')}</span>
             <ArrowUpRight className="h-3.5 w-3.5" />
           </Link>
         </div>
@@ -200,7 +202,7 @@ export function NomadWorkbench({
 
       {subTab === 'clients' && (
         <Card
-          title={<TermLabel term="Nomad Client 节点" tip="工作负载执行节点；Drain 操作会平滑驱逐节点上的运行实例并阻止新调度。" />}
+          title={<TermLabel term={tr('Nomad Client 节点', 'Nomad Client Nodes')} tip={tr('工作负载执行节点；Drain 操作会平滑驱逐节点上的运行实例并阻止新调度。', 'Workload execution nodes; Drain gracefully migrates running allocations off the node and prevents new placements.')} />}
           actions={
             <Button size="sm" onClick={() => void loadInfraViews('clients')}>
               <RefreshCw className="h-3.5 w-3.5" />
@@ -208,7 +210,7 @@ export function NomadWorkbench({
           }
         >
           {clients.length === 0 ? (
-            <EmptyState title="暂无 Client 节点" description="当节点以 Client 或 Server + Client 模式加入集群后将在此显示。" />
+            <EmptyState title={tr('暂无 Client 节点', 'No Client Nodes')} description={tr('当节点以 Client 或 Server + Client 模式加入集群后将在此显示。', 'Nodes joined in client or server_client mode will appear here.')} />
           ) : (
             <div className="space-y-2.5 text-xs">
               {clients.map((c) => (
@@ -222,9 +224,9 @@ export function NomadWorkbench({
                       <span className="font-mono text-slate-500">({(c.id || '').slice(0, 8)})</span>
                     </div>
                     <div className="text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap gap-2">
-                      <span>调度：{c.scheduling_eligibility === 'eligible' ? '允许调度' : '不可调度'}</span>
+                      <span>{tr('调度：', 'Eligibility: ')}{c.scheduling_eligibility === 'eligible' ? tr('允许调度', 'Eligible') : tr('不可调度', 'Ineligible')}</span>
                       <span>·</span>
-                      <span>Drain：{c.drain ? '排空中' : '否'}</span>
+                      <span>Drain: {c.drain ? tr('排空中', 'Draining') : tr('否', 'No')}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -238,13 +240,13 @@ export function NomadWorkbench({
                               eligible: c.scheduling_eligibility !== 'eligible',
                             })
                               .then(() => {
-                                toast.success(c.scheduling_eligibility === 'eligible' ? '已设为不可调度' : '已恢复可调度');
+                                toast.success(c.scheduling_eligibility === 'eligible' ? tr('已设为不可调度', 'Set to Ineligible') : tr('已恢复可调度', 'Set to Eligible'));
                                 return loadInfraViews('clients');
                               })
                               .catch((ex) => setErr(ex.message))
                           }
                         >
-                          {c.scheduling_eligibility === 'eligible' ? '设为不可调度' : '恢复可调度'}
+                          {c.scheduling_eligibility === 'eligible' ? tr('设为不可调度', 'Mark Ineligible') : tr('恢复可调度', 'Mark Eligible')}
                         </Button>
                         <Button
                           size="sm"
@@ -252,11 +254,11 @@ export function NomadWorkbench({
                           onClick={() =>
                             void askConfirm(
                               c.drain
-                                ? `确定要取消节点 ${c.name} 的 Drain 状态吗？`
-                                : `确定要对节点 ${c.name} 执行 Drain 吗？将驱逐其上运行实例。`,
+                                ? tr(`确定要取消节点 ${c.name} 的 Drain 状态吗？`, `Cancel Drain on node ${c.name}?`)
+                                : tr(`确定要对节点 ${c.name} 执行 Drain 吗？将驱逐其上运行实例。`, `Drain node ${c.name}? Running allocations will be evicted.`),
                               {
-                                title: c.drain ? '取消节点 Drain' : '启用节点 Drain',
-                                confirmText: c.drain ? '确认取消' : '确认 Drain',
+                                title: c.drain ? tr('取消节点 Drain', 'Cancel Node Drain') : tr('启用节点 Drain', 'Enable Node Drain'),
+                                confirmText: c.drain ? tr('确认取消', 'Cancel Drain') : tr('确认 Drain', 'Drain'),
                                 danger: !c.drain,
                               },
                             )
@@ -265,7 +267,7 @@ export function NomadWorkbench({
                                   ? apiPost(`/api/v1/nomad/${clusterId}/clients/${c.id}/drain`, {
                                       cancel: Boolean(c.drain),
                                     }).then(() => {
-                                      toast.success(c.drain ? '已取消 Drain' : '已开启 Drain');
+                                      toast.success(c.drain ? tr('已取消 Drain', 'Drain cancelled') : tr('已开启 Drain', 'Drain enabled'));
                                       return loadInfraViews('clients');
                                     })
                                   : undefined,
@@ -273,7 +275,7 @@ export function NomadWorkbench({
                               .catch((ex) => setErr(ex.message))
                           }
                         >
-                          {c.drain ? '取消 Drain' : 'Drain'}
+                          {c.drain ? tr('取消 Drain', 'Cancel Drain') : 'Drain'}
                         </Button>
                       </>
                     )}
@@ -291,7 +293,7 @@ export function NomadWorkbench({
         const serfMembers: any[] = Array.isArray((servers as any)?.members?.Members) ? (servers as any).members.Members : [];
         return (
           <Card
-            title="Nomad Server 成员"
+            title={tr('Nomad Server 成员', 'Nomad Server Members')}
             actions={
               <Button size="sm" onClick={() => void loadInfraViews('servers')}>
                 <RefreshCw className="h-3.5 w-3.5" />
@@ -302,16 +304,16 @@ export function NomadWorkbench({
               {ap.Healthy !== undefined && (
                 <div className="flex flex-wrap items-center gap-4 rounded-xl border border-slate-200/80 bg-slate-50/70 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/40">
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="text-slate-500">Autopilot 状态：</span>
+                    <span className="text-slate-500">{tr('Autopilot 状态：', 'Autopilot Status: ')}</span>
                     <StatusBadge value={ap.Healthy ? 'healthy' : 'degraded'} />
                   </span>
                   <span>
-                    <span className="text-slate-500">可容忍节点故障：</span>
-                    <strong className="font-mono">{ap.FailureTolerance ?? 0}</strong> 台
+                    <span className="text-slate-500">{tr('可容忍节点故障：', 'Failure Tolerance: ')}</span>
+                    <strong className="font-mono">{ap.FailureTolerance ?? 0}</strong> {tr('台', 'nodes')}
                   </span>
                   <span>
-                    <span className="text-slate-500">Server 总数：</span>
-                    <strong className="font-mono">{apServers.length || serfMembers.length}</strong> 台
+                    <span className="text-slate-500">{tr('Server 总数：', 'Total Servers: ')}</span>
+                    <strong className="font-mono">{apServers.length || serfMembers.length}</strong> {tr('台', 'nodes')}
                   </span>
                 </div>
               )}
@@ -321,11 +323,11 @@ export function NomadWorkbench({
                   <table className="w-full text-left">
                     <thead>
                       <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
-                        <th className="py-2 pr-3">节点名称</th>
-                        <th className="py-2 pr-3">RPC 地址</th>
-                        <th className="py-2 pr-3">角色</th>
-                        <th className="py-2 pr-3">Serf / 健康</th>
-                        <th className="py-2 pr-3">版本</th>
+                        <th className="py-2 pr-3">{tr('节点名称', 'Node Name')}</th>
+                        <th className="py-2 pr-3">{tr('RPC 地址', 'RPC Address')}</th>
+                        <th className="py-2 pr-3">{tr('角色', 'Role')}</th>
+                        <th className="py-2 pr-3">{tr('Serf / 健康', 'Serf / Health')}</th>
+                        <th className="py-2 pr-3">{tr('版本', 'Version')}</th>
                         <th className="py-2 text-right">Raft Index</th>
                       </tr>
                     </thead>
@@ -355,11 +357,11 @@ export function NomadWorkbench({
                   </table>
                 </div>
               ) : (
-                <EmptyState title="暂无 Server 信息" description="集群部署完成后将展示 Autopilot 与 Raft 成员状态。" />
+                <EmptyState title={tr('暂无 Server 信息', 'No Server Data')} description={tr('集群部署完成后将展示 Autopilot 与 Raft 成员状态。', 'Autopilot and Raft member details will appear after cluster deployment.')} />
               )}
 
               <details className="rounded-lg border border-slate-200/80 dark:border-slate-800 p-2.5">
-                <summary className="cursor-pointer text-slate-500 hover:text-indigo-600">查看原始 JSON 数据</summary>
+                <summary className="cursor-pointer text-slate-500 hover:text-indigo-600">{tr('查看原始 JSON 数据', 'View Raw JSON')}</summary>
                 <pre className="mt-2 max-h-64 overflow-auto rounded bg-slate-950 p-3 font-mono text-xs text-slate-100">
                   {JSON.stringify(servers, null, 2)}
                 </pre>
@@ -380,7 +382,7 @@ export function NomadWorkbench({
         const memPct = memTotal > 0 ? Math.min(100, Math.round((memUsed / memTotal) * 100)) : 0;
         return (
           <Card
-            title="拓扑容量视图"
+            title={tr('拓扑容量视图', 'Topology & Capacity')}
             actions={
               <Button size="sm" onClick={() => void loadInfraViews('topology')}>
                 <RefreshCw className="h-3.5 w-3.5" />
@@ -391,7 +393,7 @@ export function NomadWorkbench({
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 space-y-2">
                   <div className="flex justify-between">
-                    <span className="font-semibold text-slate-800 dark:text-slate-100">集群总 CPU 分配</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-100">{tr('集群总 CPU 分配', 'Cluster CPU Allocated')}</span>
                     <span className="font-mono">
                       {cpuUsed} / {cpuTotal} MHz ({cpuPct}%)
                     </span>
@@ -402,7 +404,7 @@ export function NomadWorkbench({
                 </div>
                 <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 space-y-2">
                   <div className="flex justify-between">
-                    <span className="font-semibold text-slate-800 dark:text-slate-100">集群总内存分配</span>
+                    <span className="font-semibold text-slate-800 dark:text-slate-100">{tr('集群总内存分配', 'Cluster Memory Allocated')}</span>
                     <span className="font-mono">
                       {memUsed} / {memTotal} MB ({memPct}%)
                     </span>
@@ -416,7 +418,7 @@ export function NomadWorkbench({
               {Object.entries(dcs).map(([dc, dcNodes]) => (
                 <div key={dc} className="space-y-2.5">
                   <div className="font-semibold text-sm text-slate-800 dark:text-slate-100">
-                    数据中心：{dc} <span className="text-xs font-normal text-slate-500">({dcNodes.length} 个 Client)</span>
+                    {tr('数据中心：', 'Datacenter: ')}{dc} <span className="text-xs font-normal text-slate-500">({dcNodes.length} {tr('个 Client', 'clients')})</span>
                   </div>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     {dcNodes.map((n: any) => (
@@ -430,13 +432,13 @@ export function NomadWorkbench({
                         </div>
                         <div className="flex flex-wrap gap-4 text-slate-500 dark:text-slate-400">
                           <span>
-                            总 CPU：<strong className="font-mono text-slate-700 dark:text-slate-200">{n.cpu_total_mhz ?? 0} MHz</strong>
+                            {tr('总 CPU：', 'Total CPU: ')}<strong className="font-mono text-slate-700 dark:text-slate-200">{n.cpu_total_mhz ?? 0} MHz</strong>
                           </span>
                           <span>
-                            总内存：<strong className="font-mono text-slate-700 dark:text-slate-200">{n.memory_total_mb ?? 0} MB</strong>
+                            {tr('总内存：', 'Total Mem: ')}<strong className="font-mono text-slate-700 dark:text-slate-200">{n.memory_total_mb ?? 0} MB</strong>
                           </span>
                           <span>
-                            运行 Allocation：<strong className="font-mono text-slate-700 dark:text-slate-200">{(n.allocations || []).length}</strong>
+                            {tr('运行 Allocation：', 'Allocations: ')}<strong className="font-mono text-slate-700 dark:text-slate-200">{(n.allocations || []).length}</strong>
                           </span>
                         </div>
                       </div>
@@ -446,7 +448,7 @@ export function NomadWorkbench({
               ))}
 
               <details className="rounded-lg border border-slate-200/80 dark:border-slate-800 p-2.5">
-                <summary className="cursor-pointer text-slate-500 hover:text-indigo-600">查看原始 JSON 数据</summary>
+                <summary className="cursor-pointer text-slate-500 hover:text-indigo-600">{tr('查看原始 JSON 数据', 'View Raw JSON')}</summary>
                 <pre className="mt-2 max-h-64 overflow-auto rounded bg-slate-950 p-3 font-mono text-xs text-slate-100">
                   {JSON.stringify(topology, null, 2)}
                 </pre>
@@ -458,7 +460,7 @@ export function NomadWorkbench({
 
       {subTab === 'storage' && (
         <Card
-          title={<TermLabel term="CSI 卷与存储插件" tip="通过 Container Storage Interface (CSI) 对接外部持久化块/文件存储。" />}
+          title={<TermLabel term={tr('CSI 卷与存储插件', 'CSI Volumes & Plugins')} tip={tr('通过 Container Storage Interface (CSI) 对接外部持久化块/文件存储。', 'Integrate external persistent block or file storage via Container Storage Interface (CSI).')} />}
           actions={
             <Button size="sm" onClick={() => void loadInfraViews('storage')}>
               <RefreshCw className="h-3.5 w-3.5" />
@@ -467,11 +469,11 @@ export function NomadWorkbench({
         >
           <div className="space-y-3 text-xs">
             <div className="text-slate-500">
-              CSI 卷数量：<strong className="font-mono text-slate-800 dark:text-slate-200">{filteredVolumes.length}</strong> · 插件数量：
+              {tr('CSI 卷数量：', 'CSI Volumes: ')}<strong className="font-mono text-slate-800 dark:text-slate-200">{filteredVolumes.length}</strong> · {tr('插件数量：', 'Plugins: ')}
               <strong className="font-mono text-slate-800 dark:text-slate-200">{plugins.length}</strong>
             </div>
             {filteredVolumes.length === 0 ? (
-              <EmptyState title="暂无已注册 CSI 卷" description="如需持久化块存储或分布式文件系统，部署 CSI 插件并注册卷后会在此展示。" />
+              <EmptyState title={tr('暂无已注册 CSI 卷', 'No Registered CSI Volumes')} description={tr('如需持久化块存储或分布式文件系统，部署 CSI 插件并注册卷后会在此展示。', 'Deploy a CSI plugin and register volumes to see them here.')} />
             ) : (
               filteredVolumes.map((v) => {
                 const vid = v.ID || v.id;
@@ -489,15 +491,15 @@ export function NomadWorkbench({
                         size="sm"
                         variant="danger-outline"
                         onClick={() =>
-                          void askConfirm(`确定要注销 CSI 卷「${vid}」吗？`, {
-                            title: '注销 CSI 卷',
-                            confirmText: '确认注销',
+                          void askConfirm(tr(`确定要注销 CSI 卷「${vid}」吗？`, `Deregister CSI volume "${vid}"?`), {
+                            title: tr('注销 CSI 卷', 'Deregister CSI Volume'),
+                            confirmText: tr('确认注销', 'Deregister'),
                             danger: true,
                           })
                             .then((ok) =>
                               ok
                                 ? apiDelete(`/api/v1/nomad/${clusterId}/volumes/${encodeURIComponent(vid)}?namespace=${encodeURIComponent(vns)}`).then(() => {
-                                    toast.success('CSI 卷已注销');
+                                    toast.success(tr('CSI 卷已注销', 'CSI volume deregistered'));
                                     return loadInfraViews('storage');
                                   })
                                 : undefined,
@@ -505,7 +507,7 @@ export function NomadWorkbench({
                             .catch((ex) => setErr(ex.message))
                         }
                       >
-                        注销
+                        {tr('注销', 'Deregister')}
                       </Button>
                     )}
                   </div>
@@ -518,7 +520,7 @@ export function NomadWorkbench({
 
       {subTab === 'variables' && (
         <Card
-          title={<TermLabel term="Nomad Variables" tip="路径隔离的机密变量（按 CAS ModifyIndex 控制并发写冲突），可在 Job template 中注入。" />}
+          title={<TermLabel term="Nomad Variables" tip={tr('路径隔离的机密变量（按 CAS ModifyIndex 控制并发写冲突），可在 Job template 中注入。', 'Path-scoped secret variables with CAS optimistic locking, injectable into Job templates.')} />}
           actions={
             isAdmin && (
               <Button
@@ -526,13 +528,13 @@ export function NomadWorkbench({
                 variant="primary"
                 onClick={() => setVarEdit({ namespace: namespace === '*' ? 'default' : namespace, path: '', items: '{}' })}
               >
-                新建 Variable
+                {tr('新建 Variable', 'New Variable')}
               </Button>
             )
           }
         >
           {filteredVariables.length === 0 ? (
-            <EmptyState title="暂无 Nomad Variables" description="适用于轻量化配置存储；跨集群或高敏密钥推荐使用 Vault 联动。" />
+            <EmptyState title={tr('暂无 Nomad Variables', 'No Nomad Variables')} description={tr('适用于轻量化配置存储；跨集群或高敏密钥推荐使用 Vault 联动。', 'Lightweight config storage; use Vault integration for cross-cluster or high-sensitivity secrets.')} />
           ) : (
             <div className="space-y-2 text-xs">
               {filteredVariables.map((v) => (
@@ -563,15 +565,15 @@ export function NomadWorkbench({
                             .catch((ex) => setErr(ex.message))
                         }
                       >
-                        查看原文 / 编辑
+                        {tr('查看原文 / 编辑', 'Reveal / Edit')}
                       </Button>
                       <Button
                         size="sm"
                         variant="danger-outline"
                         onClick={() =>
-                          void askConfirm(`确定要删除变量「${v.namespace} / ${v.path}」吗？`, {
-                            title: '删除 Variable',
-                            confirmText: '确认删除',
+                          void askConfirm(tr(`确定要删除变量「${v.namespace} / ${v.path}」吗？`, `Delete variable "${v.namespace} / ${v.path}"?`), {
+                            title: tr('删除 Variable', 'Delete Variable'),
+                            confirmText: tr('确认删除', 'Delete'),
                             danger: true,
                           })
                             .then((ok) =>
@@ -579,7 +581,7 @@ export function NomadWorkbench({
                                 ? apiDelete(
                                     `/api/v1/nomad/${clusterId}/variables/item?path=${encodeURIComponent(v.path)}&namespace=${encodeURIComponent(v.namespace)}&cas=${v.modify_index}`,
                                   ).then(() => {
-                                    toast.success('Variable 已删除');
+                                    toast.success(tr('Variable 已删除', 'Variable deleted'));
                                     return loadInfraViews('variables');
                                   })
                                 : undefined,
@@ -587,7 +589,7 @@ export function NomadWorkbench({
                             .catch((ex) => setErr(ex.message))
                         }
                       >
-                        删除
+                        {tr('删除', 'Delete')}
                       </Button>
                     </div>
                   )}
@@ -600,8 +602,8 @@ export function NomadWorkbench({
 
       {subTab === 'evaluations' && (
         <Card
-          title="全局 Evaluations"
-          description="点击 Job 名称将跳转至「Nomad Job 中心」查看对应任务的完整运行态与日志"
+          title={tr('全局 Evaluations', 'Global Evaluations')}
+          description={tr('点击 Job 名称将跳转至「Nomad Job 中心」查看对应任务的完整运行态与日志', 'Click a Job name to open its full runtime status and logs in Job Center')}
           actions={
             <Button size="sm" onClick={() => void loadInfraViews('evaluations')}>
               <RefreshCw className="h-3.5 w-3.5" />
@@ -609,7 +611,7 @@ export function NomadWorkbench({
           }
         >
           {filteredEvaluations.length === 0 ? (
-            <EmptyState title="暂无调度评估记录" description="提交或变更 Job 时，Nomad 产生的调度计算记录会展示在这里。" />
+            <EmptyState title={tr('暂无调度评估记录', 'No Evaluations')} description={tr('提交或变更 Job 时，Nomad 产生的调度计算记录会展示在这里。', 'Scheduler evaluation records appear here when jobs are submitted or updated.')} />
           ) : (
             <div className="space-y-3 text-xs">
               <div className="overflow-x-auto">
@@ -618,9 +620,9 @@ export function NomadWorkbench({
                     <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
                       <th className="py-2 pr-3">Eval ID</th>
                       <th className="py-2 pr-3">Job</th>
-                      <th className="py-2 pr-3">触发原因</th>
-                      <th className="py-2 pr-3">状态</th>
-                      <th className="py-2">说明</th>
+                      <th className="py-2 pr-3">{tr('触发原因', 'Triggered By')}</th>
+                      <th className="py-2 pr-3">{tr('状态', 'Status')}</th>
+                      <th className="py-2">{tr('说明', 'Description')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -645,14 +647,14 @@ export function NomadWorkbench({
                         <td className="py-2 pr-3">
                           <StatusBadge value={ev.Status} />
                         </td>
-                        <td className="py-2 text-slate-500">{ev.StatusDescription || (ev.BlockedEval ? '等待资源或约束' : '-')}</td>
+                        <td className="py-2 text-slate-500">{ev.StatusDescription || (ev.BlockedEval ? tr('等待资源或约束', 'Waiting on resources or constraints') : '-')}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
               <details className="rounded-lg border border-slate-200/80 dark:border-slate-800 p-2.5">
-                <summary className="cursor-pointer text-slate-500 hover:text-indigo-600">查看原始 JSON 数据</summary>
+                <summary className="cursor-pointer text-slate-500 hover:text-indigo-600">{tr('查看原始 JSON 数据', 'View Raw JSON')}</summary>
                 <pre className="mt-2 max-h-64 overflow-auto rounded bg-slate-950 p-3 font-mono text-xs text-slate-100">
                   {JSON.stringify(filteredEvaluations, null, 2)}
                 </pre>
@@ -665,7 +667,7 @@ export function NomadWorkbench({
       {/* Global Search Result Modal */}
       <Modal
         open={Boolean(searchRes)}
-        title={`全局搜索结果${searchQ.trim() ? `：${searchQ.trim()}` : ''}`}
+        title={tr(`全局搜索结果${searchQ.trim() ? `：${searchQ.trim()}` : ''}`, `Global Search Results${searchQ.trim() ? `: ${searchQ.trim()}` : ''}`)}
         onClose={() => setSearchRes(null)}
         wide
       >
@@ -675,9 +677,9 @@ export function NomadWorkbench({
           if (entries.length === 0) {
             return (
               <div className="space-y-2 text-xs text-slate-500">
-                <div>未找到匹配项。</div>
+                <div>{tr('未找到匹配项。', 'No matching items found.')}</div>
                 <details>
-                  <summary className="cursor-pointer hover:text-indigo-600">查看原始响应</summary>
+                  <summary className="cursor-pointer hover:text-indigo-600">{tr('查看原始响应', 'View Raw Response')}</summary>
                   <pre className="mt-2 max-h-48 overflow-auto rounded bg-slate-950 p-2 font-mono text-xs text-slate-100">
                     {JSON.stringify(searchRes, null, 2)}
                   </pre>
@@ -726,7 +728,7 @@ export function NomadWorkbench({
         })()}
       </Modal>
 
-      <Modal open={Boolean(varEdit)} title="编辑 Nomad Variable" onClose={() => setVarEdit(null)} wide>
+      <Modal open={Boolean(varEdit)} title={tr('编辑 Nomad Variable', 'Edit Nomad Variable')} onClose={() => setVarEdit(null)} wide>
         {varEdit && (
           <div className="space-y-3 text-xs">
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -752,16 +754,16 @@ export function NomadWorkbench({
                   )
                     .then(() => {
                       setVarEdit(null);
-                      toast.success('Variable 已保存');
+                      toast.success(tr('Variable 已保存', 'Variable saved'));
                       return loadInfraViews('variables');
                     })
                     .catch((ex) => setErr(ex.message));
                 } catch {
-                  setErr('Items 必须是合法 JSON');
+                  setErr(tr('Items 必须是合法 JSON', 'Items must be valid JSON'));
                 }
               }}
             >
-              保存 (CAS)
+              {tr('保存 (CAS)', 'Save (CAS)')}
             </Button>
           </div>
         )}

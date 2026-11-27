@@ -8,6 +8,7 @@ import {
   formatMiB,
   ResourceSample,
 } from '../lib/allocResourceChart';
+import { useI18n } from '../lib/i18n';
 
 interface UtilizationChartCardProps {
   title: string;
@@ -41,6 +42,7 @@ function UtilizationChartCard({
   totalText,
   formatRaw,
 }: UtilizationChartCardProps) {
+  const { isEn } = useI18n();
   const gradId = useId();
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
@@ -98,7 +100,7 @@ function UtilizationChartCard({
         <span className="text-sm font-medium text-slate-800 dark:text-slate-100">{title}</span>
         {activeCoord && (
           <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
-            {new Date(activeCoord.sample.ts).toLocaleTimeString('zh-CN', { hour12: false })} ·{' '}
+            {new Date(activeCoord.sample.ts).toLocaleTimeString(isEn ? 'en-US' : 'zh-CN', { hour12: false })} ·{' '}
             {formatRaw(activeCoord.sample.raw)} ({formatChartPercent(activeCoord.sample.value)})
           </span>
         )}
@@ -273,15 +275,16 @@ export function ResourceUtilizationPanel({
   nowTs,
   hasStats,
 }: ResourceUtilizationPanelProps) {
+  const { tr } = useI18n();
   const latestCpuMHz = cpuSamples[cpuSamples.length - 1]?.raw ?? 0;
   const latestMemMiB = memSamples[memSamples.length - 1]?.raw ?? 0;
 
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-semibold text-slate-800 dark:text-slate-100">资源占用</span>
+        <span className="font-semibold text-slate-800 dark:text-slate-100">{tr('资源占用', 'Resource Utilization')}</span>
         {hasStats && (
-          <span className="text-[11px] text-slate-500 dark:text-slate-400">每 3 秒采集 · 最近 5 分钟</span>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400">{tr('每 3 秒采集 · 最近 5 分钟', 'Sampled every 3s · Last 5m')}</span>
         )}
       </div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -293,18 +296,18 @@ export function ResourceUtilizationPanel({
           fillColor="#3b82f6"
           barClassName="bg-blue-500"
           usedText={`${Math.round(latestCpuMHz)} MHz`}
-          totalText={capacity.cpuMHz > 0 ? `${capacity.cpuMHz} MHz Total` : '未限制'}
+          totalText={capacity.cpuMHz > 0 ? `${capacity.cpuMHz} MHz Total` : tr('未限制', 'Unlimited')}
           formatRaw={(mhz) => `${Math.round(mhz)} MHz`}
         />
         <UtilizationChartCard
-          title="内存"
+          title={tr('内存', 'Memory')}
           samples={memSamples}
           nowTs={nowTs}
           strokeColor="#ef4444"
           fillColor="#ef4444"
           barClassName="bg-rose-500"
           usedText={formatMiB(latestMemMiB)}
-          totalText={capacity.memMB > 0 ? `${capacity.memMB} MiB Total` : '未限制'}
+          totalText={capacity.memMB > 0 ? `${capacity.memMB} MiB Total` : tr('未限制', 'Unlimited')}
           formatRaw={(mib) => formatMiB(mib)}
         />
       </div>

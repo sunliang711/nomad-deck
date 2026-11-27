@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { apiPost, wsURL } from '../lib/api';
+import { useI18n } from '../lib/i18n';
 import { Button, ErrorAlert, Modal } from './UI';
 
 const utf8Encoder = new TextEncoder();
@@ -44,10 +45,25 @@ export function TerminalModal({
   action?: string;
   title?: string;
 }) {
+  const { tr } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const [err, setErr] = useState('');
-  const [status, setStatus] = useState('连接中...');
+  const [statusKey, setStatusKey] = useState<'connecting' | 'ticket' | 'ws' | 'connected' | 'closed' | 'failed'>('connecting');
+  const [closeReason, setCloseReason] = useState('');
   const [revision, setRevision] = useState(0);
+
+  const statusText =
+    statusKey === 'ticket'
+      ? tr('正在申请一次性终端票据...', 'Requesting one-time terminal ticket...')
+      : statusKey === 'ws'
+      ? tr('正在建立 WebSocket 终端...', 'Connecting WebSocket terminal...')
+      : statusKey === 'connected'
+      ? tr('已连接', 'Connected')
+      : statusKey === 'closed'
+      ? tr(`已断开 (${closeReason})`, `Disconnected (${closeReason})`)
+      : statusKey === 'failed'
+      ? tr('失败', 'Failed')
+      : tr('连接中...', 'Connecting...');
 
   useEffect(() => {
     if (!open || !clusterId || !allocId || !task) return;
@@ -58,7 +74,8 @@ export function TerminalModal({
     let ro: ResizeObserver | null = null;
 
     setErr('');
-    setStatus('正在申请一次性终端票据...');
+    setCloseReason('');
+    setStatusKey('ticket');
 
     (async () => {
       try {
@@ -78,10 +95,10 @@ export function TerminalModal({
         term.open(containerRef.current);
         fit.fit();
 
-        setStatus('正在建立 WebSocket 终端...');
+        setStatusKey('ws');
         ws = new WebSocket(wsURL(`/api/v1/nomad/${clusterId}/allocs/${allocId}/exec?ticket=${encodeURIComponent(res.ticket)}`));
         ws.onopen = () => {
-          setStatus('已连接');
+          setStatusKey('connected');
           if (term && ws?.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ version: 1, tty_size: { width: term.cols, height: term.rows } }));
           }
@@ -109,10 +126,11 @@ export function TerminalModal({
           }
         };
         ws.onclose = (ev) => {
-          setStatus(`已断开 (${ev.reason || ev.code})`);
+          setCloseReason(String(ev.reason || ev.code));
+          setStatusKey('closed');
         };
         ws.onerror = () => {
-          setErr('终端连接出错');
+          setErr(tr('终端连接出错', 'Terminal connection error'));
         };
         term.onData((d) => {
           if (ws?.readyState === WebSocket.OPEN) {
@@ -127,8 +145,8 @@ export function TerminalModal({
         ro = new ResizeObserver(() => fit?.fit());
         ro.observe(containerRef.current);
       } catch (ex: any) {
-        setErr(ex?.message || '无法打开终端');
-        setStatus('失败');
+        setErr(ex?.message || tr('无法打开终端', 'Unable to open terminal'));
+        setStatusKey('failed');
       }
     })();
 
@@ -141,12 +159,12 @@ export function TerminalModal({
   }, [open, clusterId, allocId, task, action, JSON.stringify(command), revision]);
 
   return (
-    <Modal open={open} title={title || `交互式终端 (${task})`} onClose={onClose} wide>
+    <Modal open={open} title={title || tr(`交互式终端 (${task})`, `Interactive Terminal (${task})`)} onClose={onClose} wide>
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
           <span className="break-all">Allocation: {allocId}</span>
-          <span role="status">状态：{status}</span>
-          {(err || status.startsWith('已断开')) && <Button size="sm" onClick={() => setRevision((value) => value + 1)}>重新连接</Button>}
+          <span role="status">{tr('状态：', 'Status: ')}{statusText}</span>
+          {(err || statusKey === 'closed') && <Button size="sm" onClick={() => setRevision((value) => value + 1)}>{tr('重新连接', 'Reconnect')}</Button>}
         </div>
         <ErrorAlert message={err} />
         <div ref={containerRef} className="h-[420px] w-full overflow-hidden rounded bg-slate-950 p-1" />

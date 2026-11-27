@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { EditorState } from '@codemirror/state';
 import { EditorView, lineNumbers, keymap } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import { useI18n } from '../lib/i18n';
 import { useTheme } from '../lib/theme';
 
 export function CodeEditor({
@@ -9,7 +10,7 @@ export function CodeEditor({
   onChange,
   readOnly = false,
   height = '340px',
-  label = '代码编辑器',
+  label,
 }: {
   value: string;
   onChange?: (val: string) => void;
@@ -17,6 +18,8 @@ export function CodeEditor({
   height?: string;
   label?: string;
 }) {
+  const { tr } = useI18n();
+  const resolvedLabel = label ?? tr('代码编辑器', 'Code editor');
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -62,7 +65,7 @@ export function CodeEditor({
         keymap.of([...defaultKeymap, ...historyKeymap]),
         editorTheme,
         EditorState.readOnly.of(readOnly),
-        EditorView.contentAttributes.of({ 'aria-label': label }),
+        EditorView.contentAttributes.of({ 'aria-label': resolvedLabel }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && onChangeRef.current) {
             onChangeRef.current(update.state.doc.toString());
@@ -76,7 +79,7 @@ export function CodeEditor({
       view.destroy();
       viewRef.current = null;
     };
-  }, [readOnly, height, theme, label]);
+  }, [readOnly, height, theme, resolvedLabel]);
 
   useEffect(() => {
     const view = viewRef.current;

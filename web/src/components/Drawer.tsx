@@ -1,14 +1,15 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { useI18n } from '../lib/i18n';
-import { isTopDialog, registerDialog } from './dialogLayers';
+import { createBackdropClickGuard, isTopDialog, registerDialog } from './dialogLayers';
 
 interface DrawerProps {
   title: React.ReactNode;
   subtitle?: string;
   onClose: () => void;
   busy?: boolean;
+  closeOnBackdrop?: boolean;
   width?: 'md' | 'lg' | 'xl' | '2xl';
   headerExtra?: React.ReactNode;
   footer?: React.ReactNode;
@@ -28,6 +29,7 @@ export function Drawer({
   subtitle,
   onClose,
   busy = false,
+  closeOnBackdrop = false,
   width = 'md',
   headerExtra,
   footer,
@@ -36,6 +38,7 @@ export function Drawer({
 }: DrawerProps) {
   const { tr } = useI18n();
   const root = useRef<HTMLDivElement>(null);
+  const backdropGuard = useMemo(() => createBackdropClickGuard(), []);
   const close = useRef(onClose);
   const blocked = useRef(false);
   close.current = onClose;
@@ -87,8 +90,11 @@ export function Drawer({
   return createPortal(
     <div
       className="drawer-backdrop"
+      onPointerDown={(event) => backdropGuard.onPointerDown(event)}
+      onPointerUp={(event) => backdropGuard.onPointerUp(event)}
+      onPointerCancel={() => backdropGuard.reset()}
       onClick={(event) => {
-        if (event.target === event.currentTarget && !busy) onClose();
+        if (backdropGuard.shouldCloseOnClick(event, closeOnBackdrop && !busy)) onClose();
       }}
     >
       <div

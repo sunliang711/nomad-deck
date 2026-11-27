@@ -1,6 +1,62 @@
 const layers: HTMLElement[] = [];
 let originalOverflow = '';
 
+export interface BackdropPointerEventLike {
+  button?: number;
+  pointerType?: string;
+  target: EventTarget | null;
+  currentTarget: EventTarget | null;
+}
+
+export interface BackdropClickGuard {
+  onPointerDown: (event: BackdropPointerEventLike) => void;
+  onPointerUp: (event: BackdropPointerEventLike) => void;
+  shouldCloseOnClick: (event: BackdropPointerEventLike, enabled: boolean) => boolean;
+  reset: () => void;
+}
+
+/**
+ * 仅当按压起止都落在遮罩层自身且显式允许点击遮罩关闭时，才允许触发关闭，
+ * 避免在弹窗内划选文本拖出边界时误关闭弹窗。
+ */
+export function createBackdropClickGuard(): BackdropClickGuard {
+  let startedOnBackdrop = false;
+  let endedOnBackdrop = false;
+
+  const isPrimaryBackdropEvent = (event: BackdropPointerEventLike) => {
+    const isPrimaryButton =
+      event.button === undefined ||
+      event.button === 0 ||
+      (event.pointerType !== undefined && event.pointerType !== 'mouse');
+    return isPrimaryButton && event.target !== null && event.target === event.currentTarget;
+  };
+
+  return {
+    onPointerDown(event) {
+      startedOnBackdrop = isPrimaryBackdropEvent(event);
+      endedOnBackdrop = false;
+    },
+    onPointerUp(event) {
+      endedOnBackdrop = isPrimaryBackdropEvent(event);
+    },
+    shouldCloseOnClick(event, enabled) {
+      const shouldClose =
+        enabled &&
+        startedOnBackdrop &&
+        endedOnBackdrop &&
+        event.target !== null &&
+        event.target === event.currentTarget;
+      startedOnBackdrop = false;
+      endedOnBackdrop = false;
+      return shouldClose;
+    },
+    reset() {
+      startedOnBackdrop = false;
+      endedOnBackdrop = false;
+    },
+  };
+}
+
 export function isTopDialog(root: HTMLElement | null): boolean {
   return layers[layers.length - 1] === root;
 }

@@ -5,7 +5,7 @@ import { copyText } from '../lib/clipboard';
 import { useI18n } from '../lib/i18n';
 import { useTheme } from '../lib/theme';
 import { useToast } from './Toast';
-import { isTopDialog, registerDialog } from './dialogLayers';
+import { createBackdropClickGuard, isTopDialog, registerDialog } from './dialogLayers';
 
 export function LocaleToggleButton() {
   const { locale, toggleLocale, tr } = useI18n();
@@ -1014,6 +1014,7 @@ export function Modal({
   size,
   busy = false,
   dismissible = true,
+  closeOnBackdrop = false,
   backdropClassName = '',
   placement = 'center',
   footer,
@@ -1026,6 +1027,7 @@ export function Modal({
   size?: 'md' | 'lg' | 'xl';
   busy?: boolean;
   dismissible?: boolean;
+  closeOnBackdrop?: boolean;
   backdropClassName?: string;
   placement?: 'center' | 'right';
   footer?: React.ReactNode;
@@ -1039,6 +1041,7 @@ export function Modal({
       size={resolvedSize}
       busy={busy}
       dismissible={dismissible}
+      closeOnBackdrop={closeOnBackdrop}
       backdropClassName={backdropClassName}
       placement={placement}
       footer={footer}
@@ -1055,6 +1058,7 @@ function ModalDialog({
   size,
   busy,
   dismissible,
+  closeOnBackdrop,
   backdropClassName,
   placement,
   footer,
@@ -1065,12 +1069,14 @@ function ModalDialog({
   size: 'md' | 'lg' | 'xl';
   busy: boolean;
   dismissible: boolean;
+  closeOnBackdrop: boolean;
   backdropClassName: string;
   placement: 'center' | 'right';
   footer?: React.ReactNode;
 }) {
   const { tr } = useI18n();
   const root = useRef<HTMLDivElement>(null);
+  const backdropGuard = useMemo(() => createBackdropClickGuard(), []);
   const closeRef = useRef(onClose);
   const blockedRef = useRef(false);
   closeRef.current = onClose;
@@ -1127,8 +1133,13 @@ function ModalDialog({
   return createPortal(
     <div
       className={`modal-backdrop ${placement === 'right' ? 'justify-end p-0' : ''} ${backdropClassName}`.trim()}
+      onPointerDown={(e) => backdropGuard.onPointerDown(e)}
+      onPointerUp={(e) => backdropGuard.onPointerUp(e)}
+      onPointerCancel={() => backdropGuard.reset()}
       onClick={(e) => {
-        if (e.target === e.currentTarget && !busy && dismissible) onClose();
+        if (backdropGuard.shouldCloseOnClick(e, closeOnBackdrop && !busy && dismissible)) {
+          onClose();
+        }
       }}
     >
       <div

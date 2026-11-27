@@ -307,6 +307,11 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
                             </div>
                           </div>
                         )}
+                        {picked && isNomad && picked.role !== 'server' && n.docker_mode === 'absent' && (
+                          <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+                            提示：该节点尚未安装 Docker Engine，建群后可在 Nomad 集群「节点 → 插件/配置」中直接安装。
+                          </p>
+                        )}
                       </div>
                     );
                   })}

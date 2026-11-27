@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { Container, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '../lib/api';
 import { useConfirm } from './ConfirmDialog';
 import { useToast } from './Toast';
-import { Badge, Button, ErrorAlert, Input, Modal, Select, TermLabel } from './UI';
+import { DockerManageModal, dockerModeLabelOf, dockerStatusLabelOf } from './DockerManageModal';
+import { Badge, Button, ErrorAlert, Input, Modal, Select, StatusBadge, TermLabel } from './UI';
 
 export interface HostVolumeDraft {
   name: string;
@@ -689,6 +690,9 @@ export function NomadNodeConfigModal({
   const [extraSANs, setExtraSANs] = useState('');
   const [nomadProxyEnabled, setNomadProxyEnabled] = useState(false);
   const [confirmSingle, setConfirmSingle] = useState(false);
+  const [dockerInfo, setDockerInfo] = useState<any>(null);
+  const [dockerLoading, setDockerLoading] = useState(false);
+  const [dockerModalOpen, setDockerModalOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -699,6 +703,19 @@ export function NomadNodeConfigModal({
   const clusterCNI = cluster?.settings?.cni_version || '';
   const showCNIProxyOption = isInstalled && isClient && draft.cni && (!member?.config?.cni || reinstallCNI || cniVersion !== clusterCNI);
 
+  const refreshDockerInfo = useCallback(async () => {
+    if (!member?.node_id || !isClient) return;
+    setDockerLoading(true);
+    try {
+      const r = await apiGet(`/api/v1/nodes/${member.node_id}/docker`);
+      setDockerInfo(r.docker || null);
+    } catch {
+      setDockerInfo(null);
+    } finally {
+      setDockerLoading(false);
+    }
+  }, [member?.node_id, isClient]);
+
   useEffect(() => {
     if (!open || !cluster || !member) return;
     setDraft(clientPluginDraftFromConfig(member.config));
@@ -706,6 +723,8 @@ export function NomadNodeConfigModal({
     setReinstallCNI(false);
     setExtraSANs(Array.isArray(member.config?.extra_sans) ? member.config.extra_sans.join(', ') : '');
     setConfirmSingle(false);
+    setDockerModalOpen(false);
+    setDockerInfo(null);
     setErr('');
 
     if (isClient) {
@@ -715,8 +734,9 @@ export function NomadNodeConfigModal({
       void apiGet('/api/v1/settings')
         .then((r) => setNomadProxyEnabled(Boolean(r.settings?.['proxy.use_for_nomad'] ?? r.settings?.['proxy.use_for_releases'])))
         .catch(() => setNomadProxyEnabled(false));
+      void refreshDockerInfo();
     }
-  }, [open, cluster, member, isClient]);
+  }, [open, cluster, member, isClient, refreshDockerInfo]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -788,6 +808,7 @@ export function NomadNodeConfigModal({
   };
 
   return (
+    <>
     <Modal
       open={open}
       title={
@@ -802,6 +823,49 @@ export function NomadNodeConfigModal({
     >
       <form onSubmit={submit} className="space-y-4 text-xs">
         <ErrorAlert message={err} onClose={() => setErr('')} />
+        {isClient && (
+          <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Container className="h-4 w-4 text-indigo-500 shrink-0" />
+                <span className="font-semibold text-slate-800 dark:text-slate-100">
+                  <TermLabel
+                    term="Docker Engine（容器运行时）"
+                    tip="Nomad Client 运行 Docker 类型容器任务所需的宿主机引擎；可直接在此安装、转为托管或配置镜像加速与代理。"
+                  />
+                </span>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant={dockerInfo?.mode === 'absent' ? 'primary' : 'secondary'}
+                disabled={busy || dockerLoading}
+                onClick={() => setDockerModalOpen(true)}
+              >
+                {dockerInfo?.mode === 'absent' ? '安装 Docker' : '管理 Docker（版本 / 镜像 / 代理）'}
+              </Button>
+            </div>
+            {dockerLoading && !dockerInfo ? (
+              <div className="text-slate-500">正在检查节点 Docker 状态…</div>
+            ) : dockerInfo ? (
+              <div className="flex flex-wrap items-center gap-2 text-slate-600 dark:text-slate-300">
+                <Badge tone={dockerInfo.mode === 'absent' ? 'amber' : 'blue'}>{dockerModeLabelOf(dockerInfo.mode)}</Badge>
+                {dockerInfo.version && <span className="font-mono text-slate-800 dark:text-slate-100">{dockerInfo.version}</span>}
+                {dockerInfo.mode !== 'absent' && <StatusBadge value={dockerInfo.status} />}
+                {dockerInfo.mode === 'absent' && (
+                  <span className="text-amber-700 dark:text-amber-300">
+                    尚未安装 Docker Engine，无法在该节点调度 Docker 容器任务。
+                  </span>
+                )}
+                {dockerInfo.mode !== 'absent' && dockerStatusLabelOf(dockerInfo.status) && (
+                  <span className="text-slate-500">（{dockerStatusLabelOf(dockerInfo.status)}）</span>
+                )}
+              </div>
+            ) : (
+              <div className="text-slate-500">暂未获取到节点 Docker 状态，可点击右侧按钮进入管理或重试。</div>
+            )}
+          </div>
+        )}
         {isClient ? (
           <ClientPluginFields
             value={draft}
@@ -872,5 +936,16 @@ export function NomadNodeConfigModal({
         </div>
       </form>
     </Modal>
+    <DockerManageModal
+      node={dockerModalOpen && member ? { id: member.node_id, name: member.name } : null}
+      onClose={() => {
+        setDockerModalOpen(false);
+        void refreshDockerInfo();
+      }}
+      onTaskSubmitted={async () => {
+        await refreshDockerInfo();
+      }}
+    />
+    </>
   );
 }

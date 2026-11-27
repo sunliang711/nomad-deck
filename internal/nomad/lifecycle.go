@@ -889,6 +889,183 @@ func (s *Service) UpdateNodeConfig(ctx context.Context, actor audit.Actor, clust
 	return task, nil
 }
 
+// AddHostVolumeInput adds one host volume to selected client members.
+type AddHostVolumeInput struct {
+	Volume        HostVolume `json:"volume"`
+	NodeIDs       []string   `json:"node_ids"`
+	ConfirmSingle bool       `json:"confirm_single_node"`
+}
+
+func hasHostVolume(vols []HostVolume, name string) bool {
+	for _, v := range vols {
+		if v.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// AddHostVolume appends a host volume to the selected client members' managed
+// configuration, creating the host directory and rolling out a new config
+// generation to already-installed members so it becomes immediately available to jobs.
+func (s *Service) AddHostVolume(ctx context.Context, actor audit.Actor, clusterID string, in AddHostVolumeInput) (*db.OperationTask, error) {
+	in.Volume.Name = strings.TrimSpace(in.Volume.Name)
+	in.Volume.Path = strings.TrimSpace(in.Volume.Path)
+	if err := validateHostVolumes([]HostVolume{in.Volume}); err != nil {
+		return nil, err
+	}
+	if len(in.NodeIDs) == 0 {
+		return nil, badRequest("请至少选择一个目标 Client 节点")
+	}
+	cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	var pending, installed []*db.ClusterNode
+	seen := map[string]bool{}
+	for _, rawID := range in.NodeIDs {
+		nid := strings.TrimSpace(rawID)
+		if nid == "" || seen[nid] {
+			continue
+		}
+		seen[nid] = true
+		m, err := memberByNode(members, nid)
+		if err != nil {
+			return nil, err
+		}
+		if !IsClient(m.Role) {
+			return nil, badRequest("节点 %s 为纯 Server 节点，不支持配置 Host Volume", m.NodeName)
+		}
+		if hasHostVolume(memberConfig(m).HostVolumes, in.Volume.Name) {
+			return nil, conflict("host_volume_exists", "节点 %s 已配置同名 Host Volume %q", m.NodeName, in.Volume.Name)
+		}
+		if m.InstallState == "installed" {
+			installed = append(installed, m)
+		} else {
+			pending = append(pending, m)
+		}
+	}
+	if len(pending)+len(installed) == 0 {
+		return nil, badRequest("请至少选择一个目标 Client 节点")
+	}
+	if len(installed) > 0 {
+		if err := s.requireOperable(cl); err != nil {
+			return nil, err
+		}
+		if cl.Mode == "single" && !in.ConfirmSingle {
+			for _, m := range installed {
+				if IsServer(m.Role) {
+					return nil, conflict("quorum_gate", "单 Server 集群更新节点配置会重启唯一节点并短时中断调度与 API，请勾选单机维护确认")
+				}
+			}
+		}
+	}
+	for _, m := range pending {
+		next := memberConfig(m)
+		next.HostVolumes = append(append([]HostVolume(nil), next.HostVolumes...), in.Volume)
+		setMemberConfig(m, next)
+		if err := db.UpdateClusterNodeInstall(ctx, s.DB.Writer, m, s.DB.Now()); err != nil {
+			return nil, err
+		}
+	}
+	if len(installed) == 0 {
+		names := make([]string, 0, len(pending))
+		for _, m := range pending {
+			names = append(names, m.NodeName)
+		}
+		_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.host_volume_add", ResourceType: "cluster",
+			ResourceID: clusterID, ResourceName: cl.Name, Summary: map[string]any{"volume": in.Volume.Name, "nodes": names, "deployed": false}})
+		return nil, nil
+	}
+	locks := []ops.LockReq{{Key: ops.ClusterLock(clusterID), Mode: ops.Exclusive}}
+	installedIDs := make([]string, 0, len(installed))
+	installedSet := map[string]bool{}
+	for _, m := range installed {
+		locks = append(locks, ops.LockReq{Key: ops.HostLock(m.NodeID, "nomad"), Mode: ops.Exclusive})
+		installedIDs = append(installedIDs, m.NodeID)
+		installedSet[m.NodeID] = true
+	}
+	task, err := s.Ops.Submit(ctx, ops.Spec{
+		Action:      "cluster.host_volume_add",
+		TargetType:  "cluster",
+		TargetID:    clusterID,
+		Locks:       locks,
+		TriggeredBy: actor.Name,
+		Params:      map[string]any{"volume": in.Volume.Name, "node_ids": installedIDs},
+		Run: func(ctx context.Context, t *ops.Task) error {
+			cl, err := s.loadCluster(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			if err := s.requireOperable(cl); err != nil {
+				return err
+			}
+			members, err := db.ListClusterNodes(ctx, s.DB.Reader, clusterID)
+			if err != nil {
+				return err
+			}
+			var targets []*db.ClusterNode
+			for _, m := range members {
+				if installedSet[m.NodeID] && m.InstallState == "installed" {
+					targets = append(targets, m)
+				}
+			}
+			for _, m := range s.rollingOrder(ctx, cl, targets) {
+				if err := s.addHostVolumeToMember(ctx, t, cl, members, m, in.Volume, in.ConfirmSingle); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.Audit.Record(ctx, nil, audit.Event{Actor: actor, Action: "cluster.host_volume_add", ResourceType: "cluster", ResourceID: clusterID,
+		ResourceName: cl.Name, OperationTaskID: task.ID, Summary: map[string]any{"volume": in.Volume.Name, "node_ids": installedIDs}})
+	return task, nil
+}
+
+func (s *Service) addHostVolumeToMember(ctx context.Context, t *ops.Task, cl *nomadCluster, members []*db.ClusterNode, m *db.ClusterNode, vol HostVolume, confirmSingle bool) (err error) {
+	old := memberConfig(m)
+	if hasHostVolume(old.HostVolumes, vol.Name) {
+		return conflict("host_volume_exists", "节点 %s 已配置同名 Host Volume %q", m.NodeName, vol.Name)
+	}
+	next := old
+	next.HostVolumes = append(append([]HostVolume(nil), old.HostVolumes...), vol)
+	setMemberConfig(m, next)
+	defer func() {
+		if err != nil {
+			restored := old
+			restored.ConfigGeneration = memberConfig(m).ConfigGeneration
+			setMemberConfig(m, restored)
+			_ = db.UpdateClusterNodeInstall(ctx, s.DB.Writer, m, s.DB.Now())
+		}
+	}()
+	nc, err := s.remote().Open(ctx, t, m.NodeID, fmt.Sprintf("创建 Host Volume %s", vol.Name))
+	if err != nil {
+		return err
+	}
+	defer func() { nc.Done(ctx, err) }()
+	if vol.Create {
+		if _, err := nc.Run(ctx, HostVolumeScript([]HostVolume{vol})); err != nil {
+			return err
+		}
+	}
+	if err := s.gateFor(ctx, cl, m, confirmSingle, nc.Step.Logf); err != nil {
+		return err
+	}
+	gi, err := s.genInput(ctx, cl, members)
+	if err != nil {
+		return err
+	}
+	return s.applyAndVerify(ctx, cl, nc, gi, m)
+}
+
 // SettingsInput updates cluster-level settings.
 type SettingsInput struct {
 	PublicAPIURL     *string     `json:"public_api_url"`

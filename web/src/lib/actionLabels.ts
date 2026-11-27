@@ -6,6 +6,7 @@ export const ACTION_LABELS: Record<string, string> = {
   'cluster.node_remove': '集群缩容节点',
   'cluster.node_service': '节点服务启停',
   'cluster.node_config': '更新节点配置',
+  'cluster.host_volume_add': '创建 Host Volume',
   'cluster.certs_renew': '续期集群证书',
   'cluster.cert_renew': '续期集群证书',
   'cluster.ca_rotate': '轮换集群 CA',

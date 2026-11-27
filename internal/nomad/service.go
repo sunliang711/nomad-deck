@@ -234,18 +234,10 @@ func validAddr(a string) bool {
 	return regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`).MatchString(a)
 }
 
-// validateClient checks client settings.
-func validateClient(c *ClientSettings) error {
-	if c.NodePool != "" && !reRegion.MatchString(c.NodePool) {
-		return badRequest("Node Pool 名称不合法")
-	}
-	for k, v := range c.Meta {
-		if !reMetaKey.MatchString(k) || len(v) > 1024 || strings.ContainsAny(v, "\n\r") {
-			return badRequest("Client Meta %q 不合法", k)
-		}
-	}
+// validateHostVolumes checks HostVolume names and host paths against NomadDeck rules.
+func validateHostVolumes(vols []HostVolume) error {
 	seen := map[string]bool{}
-	for _, v := range c.HostVolumes {
+	for _, v := range vols {
 		if !reVolumeName.MatchString(v.Name) || seen[v.Name] {
 			return badRequest("Host Volume 名称 %q 不合法或重复", v.Name)
 		}
@@ -261,6 +253,22 @@ func validateClient(c *ClientSettings) error {
 		if strings.HasPrefix(v.Path+"/", "/opt/nomad-deck/") && !strings.HasPrefix(v.Path, VolumesDir+"/") {
 			return badRequest("Host Volume %s 在 NomadDeck 目录下只能使用 %s/ 子目录", v.Name, VolumesDir)
 		}
+	}
+	return nil
+}
+
+// validateClient checks client settings.
+func validateClient(c *ClientSettings) error {
+	if c.NodePool != "" && !reRegion.MatchString(c.NodePool) {
+		return badRequest("Node Pool 名称不合法")
+	}
+	for k, v := range c.Meta {
+		if !reMetaKey.MatchString(k) || len(v) > 1024 || strings.ContainsAny(v, "\n\r") {
+			return badRequest("Client Meta %q 不合法", k)
+		}
+	}
+	if err := validateHostVolumes(c.HostVolumes); err != nil {
+		return err
 	}
 	for _, d := range c.Denylist {
 		if !reDriver.MatchString(d) {

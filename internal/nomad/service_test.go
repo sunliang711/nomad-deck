@@ -485,3 +485,80 @@ func TestNomadForceRemoveAndUninstall(t *testing.T) {
 		t.Fatal("cluster must be deleted after force uninstall")
 	}
 }
+
+func TestAddHostVolume(t *testing.T) {
+	e := newSvcEnv(t)
+	ctx := context.Background()
+	cl := e.load()
+
+	// Make h1 a pending server_client member so DB persistence and validation can be tested without SSH.
+	if _, err := e.s.DB.Writer.Exec(`UPDATE cluster_nodes SET role = ?, install_state = 'pending' WHERE cluster_id = ?`, RoleServerClient, cl.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Invalid path under /etc must fail.
+	if _, err := e.s.AddHostVolume(ctx, testActor, cl.ID, AddHostVolumeInput{
+		Volume:  HostVolume{Name: "pgdata", Path: "/etc/pgdata", Create: true},
+		NodeIDs: []string{"h1"},
+	}); err == nil {
+		t.Fatal("expected /etc path to be rejected")
+	}
+
+	// Empty node_ids must fail.
+	if _, err := e.s.AddHostVolume(ctx, testActor, cl.ID, AddHostVolumeInput{
+		Volume: HostVolume{Name: "pgdata", Path: "/opt/nomad-deck/nomad/volumes/pgdata", Create: true},
+	}); err == nil {
+		t.Fatal("expected empty node_ids to be rejected")
+	}
+
+	// Pending member saves directly to NodeConfigJSON without an async task.
+	task, err := e.s.AddHostVolume(ctx, testActor, cl.ID, AddHostVolumeInput{
+		Volume:  HostVolume{Name: "pgdata", Path: "/opt/nomad-deck/nomad/volumes/pgdata", ReadOnly: false, Create: true},
+		NodeIDs: []string{"h1"},
+	})
+	if err != nil {
+		t.Fatalf("AddHostVolume pending: %v", err)
+	}
+	if task != nil {
+		t.Fatalf("expected nil task for pending node, got %+v", task)
+	}
+	m1, err := db.GetClusterNode(ctx, e.s.DB.Reader, cl.ID, "h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc := memberConfig(m1)
+	if len(mc.HostVolumes) != 1 || mc.HostVolumes[0].Name != "pgdata" || mc.HostVolumes[0].Path != "/opt/nomad-deck/nomad/volumes/pgdata" {
+		t.Fatalf("unexpected host_volumes persisted: %+v", mc.HostVolumes)
+	}
+
+	// Duplicate volume name on the same node must be rejected.
+	if _, err := e.s.AddHostVolume(ctx, testActor, cl.ID, AddHostVolumeInput{
+		Volume:  HostVolume{Name: "pgdata", Path: "/opt/nomad-deck/nomad/volumes/pgdata", Create: true},
+		NodeIDs: []string{"h1"},
+	}); err == nil {
+		t.Fatal("expected duplicate host volume name to be rejected")
+	}
+
+	// Pure server node must be rejected.
+	if _, err := e.s.DB.Writer.Exec(`UPDATE cluster_nodes SET role = ? WHERE cluster_id = ?`, RoleServer, cl.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.AddHostVolume(ctx, testActor, cl.ID, AddHostVolumeInput{
+		Volume:  HostVolume{Name: "redis", Path: "/opt/nomad-deck/nomad/volumes/redis", Create: true},
+		NodeIDs: []string{"h1"},
+	}); err == nil {
+		t.Fatal("expected pure server node to be rejected")
+	}
+
+	// Installed single-node server_client requires confirm_single_node=true.
+	if _, err := e.s.DB.Writer.Exec(`UPDATE cluster_nodes SET role = ?, install_state = 'installed' WHERE cluster_id = ?`, RoleServerClient, cl.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.AddHostVolume(ctx, testActor, cl.ID, AddHostVolumeInput{
+		Volume:        HostVolume{Name: "redis", Path: "/opt/nomad-deck/nomad/volumes/redis", Create: true},
+		NodeIDs:       []string{"h1"},
+		ConfirmSingle: false,
+	}); err == nil {
+		t.Fatal("expected installed single-node server_client without confirm_single_node to be rejected")
+	}
+}

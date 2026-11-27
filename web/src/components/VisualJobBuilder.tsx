@@ -106,6 +106,7 @@ import {
 import { useToast } from './Toast';
 import { Badge, Button, ErrorAlert, Input, Select, Switch } from './UI';
 import { CodeEditor } from './CodeEditor';
+import { HostVolumeCreateModal } from './HostVolumeCreateModal';
 
 interface BuilderOptions {
   namespaces: string[];
@@ -452,6 +453,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
   });
   const [vaultRoles, setVaultRoles] = useState<VaultRoleOption[]>([]);
   const [vaultIntegrations, setVaultIntegrations] = useState<VaultIntegrationOption[]>([]);
+  const [createHostVol, setCreateHostVol] = useState<{ name: string; readOnly: boolean } | null>(null);
   const [vaultHelper, setVaultHelper] = useState({
     role: '',
     secretPath: 'secret/apps/demo',
@@ -512,6 +514,27 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
       return { hcl: sourceRef.current, valid: false, diagnostics };
     },
   }));
+
+  const refreshBuilderOptions = async () => {
+    try {
+      const res = await apiGet<{
+        options: BuilderOptions;
+        vault_roles?: VaultRoleOption[];
+        vault_integrations?: VaultIntegrationOption[];
+      }>(`/api/v1/nomad/${clusterId}/builder-options`);
+      setOptions(res.options || { namespaces: [], node_pools: [], datacenters: [], drivers: [], host_volumes: {} });
+      const roles = res.vault_roles || [];
+      setVaultRoles(roles);
+      setVaultIntegrations(res.vault_integrations || []);
+      if (roles.length > 0) {
+        const first = roles[0];
+        const firstPath = (first.secret_paths || [])[0] || 'secret/apps/demo';
+        setVaultHelper((prev) => (prev.role ? prev : { ...prev, role: first.role, secretPath: firstPath }));
+      }
+    } catch {
+      // Non-blocking
+    }
+  };
 
   // Load cluster builder options once per clusterId
   useEffect(() => {
@@ -1511,6 +1534,9 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   const vRo = parseLiteralBool(getAttrExpr(document, v.path, 'read_only')) ?? false;
                   const vAttach = parseLiteralString(getAttrExpr(document, v.path, 'attachment_mode')) || 'file-system';
                   const vAccess = parseLiteralString(getAttrExpr(document, v.path, 'access_mode')) || 'single-node-writer';
+                  const trimmedSource = vSource.trim();
+                  const hostVolNodes = vType === 'host' && trimmedSource ? options.host_volumes?.[trimmedSource] || [] : [];
+                  const validHostVolName = /^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/.test(trimmedSource);
                   return (
                     <div key={v.path.join('.')} className="space-y-2 rounded-lg border border-slate-200/80 bg-slate-50/50 p-2 dark:border-slate-800 dark:bg-slate-950/30">
                       <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_95px_1.2fr_auto_auto] items-center">
@@ -1576,6 +1602,34 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                           </button>
                         )}
                       </div>
+                      {vType === 'host' && trimmedSource && (
+                        hostVolNodes.length > 0 ? (
+                          <div className="flex items-center gap-1.5 px-1 text-[11px] text-emerald-700 dark:text-emerald-300">
+                            <Check className="h-3 w-3 shrink-0" />
+                            <span>已在节点 {hostVolNodes.join('、')} 就绪</span>
+                          </div>
+                        ) : validHostVolName ? (
+                          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200/80 bg-amber-50/70 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                            <span>
+                              当前集群暂无 Host Volume <code className="font-mono font-semibold">{trimmedSource}</code>
+                            </span>
+                            {!readOnly && (
+                              <Button
+                                size="sm"
+                                type="button"
+                                onClick={() => setCreateHostVol({ name: trimmedSource, readOnly: vRo })}
+                              >
+                                <Plus className="h-3 w-3" />
+                                <span>在节点创建</span>
+                              </Button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="px-1 text-[11px] text-amber-700 dark:text-amber-300">
+                            Host Volume 名称需以字母或数字开头，仅支持字母、数字、下划线和连字符
+                          </div>
+                        )
+                      )}
                       {vType === 'csi' && (
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 border-t border-slate-200/70 pt-2 dark:border-slate-800">
                           <Select
@@ -3547,6 +3601,15 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           </div>
         )}
       </div>
+
+      <HostVolumeCreateModal
+        open={Boolean(createHostVol)}
+        clusterId={clusterId}
+        volumeName={createHostVol?.name || ''}
+        defaultReadOnly={Boolean(createHostVol?.readOnly)}
+        onClose={() => setCreateHostVol(null)}
+        onCreated={refreshBuilderOptions}
+      />
     </div>
   );
 });

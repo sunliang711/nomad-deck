@@ -337,6 +337,7 @@ func (a *API) Handler() http.Handler {
 				r.Post("/nomad/{id}/revisions/{revision_id}/review", a.reviewRevision)
 				r.Post("/nomad/{id}/job-ops/{op}", a.jobOp)
 				r.Get("/nomad/{id}/builder-options", a.builderOptions)
+				r.Post("/nomad/{id}/host-volumes", a.addNomadHostVolume)
 				r.Get("/job-templates", a.listTemplates)
 				r.Post("/job-templates", a.putTemplate)
 				r.Get("/job-templates/{tid}", a.getTemplate)

@@ -71,6 +71,23 @@ func (a *API) updateNodeConfig(w http.ResponseWriter, r *http.Request) {
 	taskOrNoContent(w, t)
 }
 
+func (a *API) addNomadHostVolume(w http.ResponseWriter, r *http.Request) {
+	var in nomad.AddHostVolumeInput
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	c, ok := a.nomadCluster(w, r)
+	if !ok {
+		return
+	}
+	t, err := a.Nomad.AddHostVolume(r.Context(), a.actor(r), c.ID, in)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	taskOrNoContent(w, t)
+}
+
 func (a *API) rotateGossip(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		CurrentPassword string `json:"current_password"`

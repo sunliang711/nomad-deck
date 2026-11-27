@@ -181,7 +181,7 @@ const CRON_PRESETS = [
 
 const JOB_HANDLED_BLOCKS = new Set(['group', 'update', 'periodic', 'constraint']);
 const GROUP_HANDLED_BLOCKS = new Set(['task', 'network', 'service', 'ephemeral_disk', 'restart', 'volume']);
-const TASK_HANDLED_BLOCKS = new Set(['config', 'resources', 'env', 'vault', 'template', 'volume_mount']);
+const TASK_HANDLED_BLOCKS = new Set(['config', 'resources', 'env', 'vault', 'template', 'volume_mount', 'service']);
 
 function samePath(a: NodePath, b: NodePath): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
@@ -1492,61 +1492,122 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 </Button>
               )}
             </div>
-            {volumes.map((v) => {
-              const vType = parseLiteralString(getAttrExpr(document, v.path, 'type')) || 'host';
-              const vSource = parseLiteralString(getAttrExpr(document, v.path, 'source')) || '';
-              const vRo = parseLiteralBool(getAttrExpr(document, v.path, 'read_only')) ?? false;
-              return (
-                <div key={v.path.join('.')} className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_95px_1.2fr_auto_auto] items-center rounded-lg border border-slate-200/80 bg-slate-50/50 p-2 dark:border-slate-800 dark:bg-slate-950/30">
-                  <input
-                    aria-label="卷本地名称"
-                    disabled={readOnly}
-                    value={v.label}
-                    placeholder="data"
-                    onChange={(e) => commit(setBlockLabel(document, v.path, e.target.value))}
-                    className="rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
-                  />
-                  <Select
-                    aria-label="卷类型"
-                    size="sm"
-                    disabled={readOnly}
-                    value={vType}
-                    onChange={(e) => commit(setAttrExpr(document, v.path, 'type', JSON.stringify(e.target.value)))}
-                  >
-                    <option value="host">host</option>
-                    <option value="csi">csi</option>
-                  </Select>
-                  <input
-                    aria-label="卷来源名称"
-                    list="vb-host-volumes"
-                    disabled={readOnly}
-                    value={vSource}
-                    placeholder="宿主机卷或 CSI ID"
-                    onChange={(e) => commit(setAttrExpr(document, v.path, 'source', JSON.stringify(e.target.value)))}
-                    className="rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
-                  />
-                  <label className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 px-1">
-                    <input
-                      type="checkbox"
-                      disabled={readOnly}
-                      checked={vRo}
-                      onChange={(e) => commit(setAttrExpr(document, v.path, 'read_only', e.target.checked ? 'true' : 'false'))}
-                    />
-                    只读
-                  </label>
-                  {!readOnly && (
-                    <button
-                      type="button"
-                      aria-label={`删除卷 ${v.label}`}
-                      onClick={() => commit(removeNodeAtPath(document, v.path))}
-                      className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  )}
+            {volumes.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-200 px-3 py-3 text-[11px] text-slate-400 dark:border-slate-800">
+                暂未声明 volume 块。若需挂载宿主机目录（host）或外部存储（csi），点击右上角「声明卷」后即可在 Task 的 <code className="font-mono">volume_mount</code> 中引用。
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="hidden sm:grid sm:grid-cols-[1fr_95px_1.2fr_auto_auto] gap-2 px-2 text-[11px] text-slate-500">
+                  <span>卷本地名 (label)</span>
+                  <span>类型</span>
+                  <span>来源 (source)</span>
+                  <span>权限</span>
+                  <span className="w-7" />
                 </div>
-              );
-            })}
+                {volumes.map((v) => {
+                  const vType = parseLiteralString(getAttrExpr(document, v.path, 'type')) || 'host';
+                  const vSource = parseLiteralString(getAttrExpr(document, v.path, 'source')) || '';
+                  const vRo = parseLiteralBool(getAttrExpr(document, v.path, 'read_only')) ?? false;
+                  const vAttach = parseLiteralString(getAttrExpr(document, v.path, 'attachment_mode')) || 'file-system';
+                  const vAccess = parseLiteralString(getAttrExpr(document, v.path, 'access_mode')) || 'single-node-writer';
+                  return (
+                    <div key={v.path.join('.')} className="space-y-2 rounded-lg border border-slate-200/80 bg-slate-50/50 p-2 dark:border-slate-800 dark:bg-slate-950/30">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_95px_1.2fr_auto_auto] items-center">
+                        <input
+                          aria-label="卷本地名称"
+                          disabled={readOnly}
+                          value={v.label}
+                          placeholder="data"
+                          onChange={(e) => commit(setBlockLabel(document, v.path, e.target.value))}
+                          className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                        />
+                        <Select
+                          aria-label="卷类型"
+                          size="sm"
+                          disabled={readOnly}
+                          value={vType}
+                          onChange={(e) => {
+                            const nextType = e.target.value;
+                            let nextDoc = setAttrExpr(document, v.path, 'type', JSON.stringify(nextType));
+                            if (nextType === 'csi') {
+                              if (!getAttrExpr(nextDoc, v.path, 'attachment_mode')) {
+                                nextDoc = setAttrExpr(nextDoc, v.path, 'attachment_mode', '"file-system"');
+                              }
+                              if (!getAttrExpr(nextDoc, v.path, 'access_mode')) {
+                                nextDoc = setAttrExpr(nextDoc, v.path, 'access_mode', '"single-node-writer"');
+                              }
+                            } else {
+                              nextDoc = setAttrExpr(nextDoc, v.path, 'attachment_mode', null);
+                              nextDoc = setAttrExpr(nextDoc, v.path, 'access_mode', null);
+                            }
+                            commit(nextDoc);
+                          }}
+                        >
+                          <option value="host">host</option>
+                          <option value="csi">csi</option>
+                        </Select>
+                        <input
+                          aria-label="卷来源名称"
+                          list="vb-host-volumes"
+                          disabled={readOnly}
+                          value={vSource}
+                          placeholder={vType === 'csi' ? 'CSI 卷 ID' : '宿主机 host_volume 名'}
+                          onChange={(e) => commit(setAttrExpr(document, v.path, 'source', JSON.stringify(e.target.value)))}
+                          className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                        />
+                        <label className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 px-1 whitespace-nowrap">
+                          <input
+                            type="checkbox"
+                            disabled={readOnly}
+                            checked={vRo}
+                            onChange={(e) => commit(setAttrExpr(document, v.path, 'read_only', e.target.checked ? 'true' : 'false'))}
+                          />
+                          只读
+                        </label>
+                        {!readOnly && (
+                          <button
+                            type="button"
+                            aria-label={`删除卷 ${v.label}`}
+                            onClick={() => commit(removeNodeAtPath(document, v.path))}
+                            className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      {vType === 'csi' && (
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 border-t border-slate-200/70 pt-2 dark:border-slate-800">
+                          <Select
+                            label="CSI 挂载模式 (attachment_mode)"
+                            size="sm"
+                            disabled={readOnly}
+                            value={vAttach}
+                            onChange={(e) => commit(setAttrExpr(document, v.path, 'attachment_mode', JSON.stringify(e.target.value)))}
+                          >
+                            <option value="file-system">file-system（文件系统）</option>
+                            <option value="block-device">block-device（裸块设备）</option>
+                          </Select>
+                          <Select
+                            label="CSI 访问模式 (access_mode)"
+                            size="sm"
+                            disabled={readOnly}
+                            value={vAccess}
+                            onChange={(e) => commit(setAttrExpr(document, v.path, 'access_mode', JSON.stringify(e.target.value)))}
+                          >
+                            <option value="single-node-writer">single-node-writer</option>
+                            <option value="single-node-reader-only">single-node-reader-only</option>
+                            <option value="multi-node-reader-only">multi-node-reader-only</option>
+                            <option value="multi-node-single-writer">multi-node-single-writer</option>
+                            <option value="multi-node-multi-writer">multi-node-multi-writer</option>
+                          </Select>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {knownHostVolumes.length > 0 && (
               <datalist id="vb-host-volumes">
                 {knownHostVolumes.map((name) => (
@@ -1559,8 +1620,8 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         <SectionBox
           icon={<Shield className="h-4 w-4" />}
-          title={`服务发现与健康检查 (${services.length})`}
-          description="将端口注册到 Nomad 原生服务发现或 Consul，并配置 HTTP / TCP 探活"
+          title={`服务发现与健康检查 (service · ${services.length})`}
+          description="推荐在任务组级注册服务（Nomad 原生服务发现或 Consul），支持标签与 HTTP / TCP 探活"
           actions={
             !readOnly && (
               <Button
@@ -1580,130 +1641,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             )
           }
         >
-          {services.length === 0 ? (
-            <div className="text-[11px] text-slate-400">未注册服务。如需服务发现或自动健康探测，点击「注册服务」。</div>
-          ) : (
-            <div className="space-y-3">
-              {services.map((svc) => {
-                const svcName = parseLiteralString(getAttrExpr(document, svc.path, 'name')) || '';
-                const provider = parseLiteralString(getAttrExpr(document, svc.path, 'provider')) || 'nomad';
-                const portRef = parseLiteralString(getAttrExpr(document, svc.path, 'port')) || '';
-                const checks = listChildBlocks(document, svc.path, 'check');
-                return (
-                  <div key={svc.path.join('.')} className="space-y-2.5 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 dark:border-slate-800 dark:bg-slate-950/30">
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1.2fr_120px_1fr_auto] items-end">
-                      <Input
-                        label="服务名"
-                        disabled={readOnly}
-                        value={svcName}
-                        onChange={(e) => commit(setAttrExpr(document, svc.path, 'name', JSON.stringify(e.target.value)))}
-                      />
-                      <Select
-                        label="注册中心"
-                        size="sm"
-                        disabled={readOnly}
-                        value={provider}
-                        onChange={(e) => commit(setAttrExpr(document, svc.path, 'provider', JSON.stringify(e.target.value)))}
-                      >
-                        <option value="nomad">nomad</option>
-                        <option value="consul">consul</option>
-                      </Select>
-                      <Select
-                        label="绑定端口"
-                        size="sm"
-                        disabled={readOnly}
-                        value={portRef}
-                        onChange={(e) => commit(setAttrExpr(document, svc.path, 'port', e.target.value ? JSON.stringify(e.target.value) : null))}
-                      >
-                        <option value="">不指定端口</option>
-                        {Array.from(new Set([...ports.map((p) => p.label), ...(portRef ? [portRef] : [])])).map((pl) => (
-                          <option key={pl} value={pl}>
-                            {pl}
-                          </option>
-                        ))}
-                      </Select>
-                      {!readOnly && (
-                        <Button size="sm" variant="danger-outline" onClick={() => commit(removeNodeAtPath(document, svc.path))}>
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                    </div>
-                    <div className="space-y-1.5 border-t border-slate-200/70 pt-2 dark:border-slate-800">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-medium text-slate-600 dark:text-slate-300">健康检查 ({checks.length})</span>
-                        {!readOnly && (
-                          <button
-                            type="button"
-                            onClick={() => commit(addServiceCheck(document, svc.path))}
-                            className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-                          >
-                            <Plus className="h-3 w-3" />
-                            添加探活
-                          </button>
-                        )}
-                      </div>
-                      {checks.map((chk) => {
-                        const cType = parseLiteralString(getAttrExpr(document, chk.path, 'type')) || 'http';
-                        const cPath = parseLiteralString(getAttrExpr(document, chk.path, 'path')) || '/';
-                        const cInterval = parseLiteralString(getAttrExpr(document, chk.path, 'interval')) || '10s';
-                        const cTimeout = parseLiteralString(getAttrExpr(document, chk.path, 'timeout')) || '2s';
-                        return (
-                          <div key={chk.path.join('.')} className="grid grid-cols-2 gap-1.5 sm:grid-cols-[95px_1fr_90px_90px_auto] items-center">
-                            <Select
-                              aria-label="检查类型"
-                              size="sm"
-                              disabled={readOnly}
-                              value={cType}
-                              onChange={(e) => commit(setAttrExpr(document, chk.path, 'type', JSON.stringify(e.target.value)))}
-                            >
-                              <option value="http">http</option>
-                              <option value="tcp">tcp</option>
-                              <option value="grpc">grpc</option>
-                              <option value="script">script</option>
-                            </Select>
-                            <input
-                              aria-label="HTTP 路径"
-                              disabled={readOnly || cType !== 'http'}
-                              value={cType === 'http' ? cPath : ''}
-                              placeholder={cType === 'http' ? '/health' : '无需路径'}
-                              onChange={(e) => commit(setAttrExpr(document, chk.path, 'path', JSON.stringify(e.target.value)))}
-                              className="rounded-lg border border-[#dce3ee] bg-white px-2 py-1.5 font-mono text-xs disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
-                            />
-                            <input
-                              aria-label="检查间隔"
-                              disabled={readOnly}
-                              value={cInterval}
-                              placeholder="10s"
-                              onChange={(e) => commit(setAttrExpr(document, chk.path, 'interval', JSON.stringify(e.target.value)))}
-                              className="rounded-lg border border-[#dce3ee] bg-white px-2 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
-                            />
-                            <input
-                              aria-label="超时时间"
-                              disabled={readOnly}
-                              value={cTimeout}
-                              placeholder="2s"
-                              onChange={(e) => commit(setAttrExpr(document, chk.path, 'timeout', JSON.stringify(e.target.value)))}
-                              className="rounded-lg border border-[#dce3ee] bg-white px-2 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
-                            />
-                            {!readOnly && (
-                              <button
-                                type="button"
-                                aria-label="删除健康检查"
-                                onClick={() => commit(removeNodeAtPath(document, chk.path))}
-                                className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          {renderServiceCards(services, ports, '未注册服务。如需服务发现或自动健康探测，点击「注册服务」。')}
         </SectionBox>
 
         <SectionBox
@@ -1775,6 +1713,157 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
     );
   };
 
+  const renderServiceCards = (
+    services: ReturnType<typeof listChildBlocks>,
+    ports: ReturnType<typeof listGroupPorts>,
+    emptyText: string,
+  ) => {
+    if (services.length === 0) {
+      return <div className="text-[11px] text-slate-400">{emptyText}</div>;
+    }
+    return (
+      <div className="space-y-3">
+        {services.map((svc) => {
+          const svcName = parseLiteralString(getAttrExpr(document, svc.path, 'name')) || '';
+          const provider = parseLiteralString(getAttrExpr(document, svc.path, 'provider')) || 'nomad';
+          const portRef = parseLiteralString(getAttrExpr(document, svc.path, 'port')) || '';
+          const tags = parseLiteralStringList(getAttrExpr(document, svc.path, 'tags')) || [];
+          const checks = listChildBlocks(document, svc.path, 'check');
+          return (
+            <div
+              key={svc.path.join('.')}
+              className="space-y-2.5 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 dark:border-slate-800 dark:bg-slate-950/30"
+            >
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1.2fr_110px_1fr_auto] items-end">
+                <Input
+                  label="服务名 (name)"
+                  disabled={readOnly}
+                  value={svcName}
+                  onChange={(e) => commit(setAttrExpr(document, svc.path, 'name', JSON.stringify(e.target.value)))}
+                />
+                <Select
+                  label="注册中心"
+                  size="sm"
+                  disabled={readOnly}
+                  value={provider}
+                  onChange={(e) => commit(setAttrExpr(document, svc.path, 'provider', JSON.stringify(e.target.value)))}
+                >
+                  <option value="nomad">nomad</option>
+                  <option value="consul">consul</option>
+                </Select>
+                <Select
+                  label="绑定端口"
+                  size="sm"
+                  disabled={readOnly}
+                  value={portRef}
+                  onChange={(e) => commit(setAttrExpr(document, svc.path, 'port', e.target.value ? JSON.stringify(e.target.value) : null))}
+                >
+                  <option value="">不指定端口</option>
+                  {Array.from(new Set([...ports.map((p) => p.label), ...(portRef ? [portRef] : [])])).map((pl) => (
+                    <option key={pl} value={pl}>
+                      {pl}
+                    </option>
+                  ))}
+                </Select>
+                {!readOnly && (
+                  <Button size="sm" variant="danger-outline" onClick={() => commit(removeNodeAtPath(document, svc.path))}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
+
+              <Input
+                label="服务标签 (tags，逗号分隔，可选)"
+                disabled={readOnly}
+                value={tags.join(', ')}
+                placeholder="例如 prod, traefik.enable=true"
+                onChange={(e) => {
+                  const next = e.target.value
+                    .split(',')
+                    .map((item) => item.trim())
+                    .filter(Boolean);
+                  commit(setAttrExpr(document, svc.path, 'tags', next.length > 0 ? JSON.stringify(next) : null));
+                }}
+              />
+
+              <div className="space-y-1.5 border-t border-slate-200/70 pt-2 dark:border-slate-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-slate-600 dark:text-slate-300">健康检查 (check · {checks.length})</span>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => commit(addServiceCheck(document, svc.path))}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      <Plus className="h-3 w-3" />
+                      添加探活
+                    </button>
+                  )}
+                </div>
+                {checks.map((chk) => {
+                  const cType = parseLiteralString(getAttrExpr(document, chk.path, 'type')) || 'http';
+                  const cPath = parseLiteralString(getAttrExpr(document, chk.path, 'path')) || '/';
+                  const cInterval = parseLiteralString(getAttrExpr(document, chk.path, 'interval')) || '10s';
+                  const cTimeout = parseLiteralString(getAttrExpr(document, chk.path, 'timeout')) || '2s';
+                  return (
+                    <div key={chk.path.join('.')} className="grid grid-cols-2 gap-1.5 sm:grid-cols-[95px_1fr_85px_85px_auto] items-center">
+                      <Select
+                        aria-label="检查类型"
+                        size="sm"
+                        disabled={readOnly}
+                        value={cType}
+                        onChange={(e) => commit(setAttrExpr(document, chk.path, 'type', JSON.stringify(e.target.value)))}
+                      >
+                        <option value="http">http</option>
+                        <option value="tcp">tcp</option>
+                        <option value="grpc">grpc</option>
+                        <option value="script">script</option>
+                      </Select>
+                      <input
+                        aria-label="HTTP 路径"
+                        disabled={readOnly || cType !== 'http'}
+                        value={cType === 'http' ? cPath : ''}
+                        placeholder={cType === 'http' ? '/health' : '无需路径'}
+                        onChange={(e) => commit(setAttrExpr(document, chk.path, 'path', JSON.stringify(e.target.value)))}
+                        className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2 py-1.5 font-mono text-xs disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
+                      />
+                      <input
+                        aria-label="检查间隔"
+                        disabled={readOnly}
+                        value={cInterval}
+                        placeholder="10s"
+                        onChange={(e) => commit(setAttrExpr(document, chk.path, 'interval', JSON.stringify(e.target.value)))}
+                        className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                      />
+                      <input
+                        aria-label="超时时间"
+                        disabled={readOnly}
+                        value={cTimeout}
+                        placeholder="2s"
+                        onChange={(e) => commit(setAttrExpr(document, chk.path, 'timeout', JSON.stringify(e.target.value)))}
+                        className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                      />
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          aria-label="删除健康检查"
+                          onClick={() => commit(removeNodeAtPath(document, chk.path))}
+                          className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderTaskForm = (tPath: NodePath, gPath: NodePath) => {
     const taskNode = nodeAt(document, tPath)!;
     const taskName = taskNode.labels?.[0] || '';
@@ -1811,6 +1900,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
     const vaultEnvVal = vaultBlk ? parseLiteralBool(getAttrExpr(document, vaultBlk.path, 'env')) ?? false : false;
     const templates = listChildBlocks(document, tPath, 'template');
     const volumeMounts = listChildBlocks(document, tPath, 'volume_mount');
+    const taskServices = listChildBlocks(document, tPath, 'service');
     const unhandled = listUnhandledBlocks(document, tPath, TASK_HANDLED_BLOCKS);
 
     return (
@@ -2112,71 +2202,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           )}
         </SectionBox>
 
-        {/* 2. Resources */}
-        <SectionBox
-          icon={<Cpu className="h-4 w-4" />}
-          title="计算资源配额 (resources)"
-          description="Nomad 会依据配额自动寻找剩余算力足够的 Client 节点"
-        >
-          {!readOnly && (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {RESOURCE_PRESETS.map((p) => {
-                const active = cpu === p.cpu && mem === p.memory;
-                return (
-                  <button
-                    key={p.label}
-                    type="button"
-                    onClick={() => commit(setTaskResources(document, tPath, { cpu: p.cpu, memory: p.memory }))}
-                    className={`rounded-xl border px-3 py-2 text-left transition ${
-                      active
-                        ? 'border-indigo-500 bg-indigo-50/70 ring-1 ring-indigo-500/20 dark:border-indigo-400 dark:bg-indigo-500/15'
-                        : 'border-slate-200 bg-slate-50/50 hover:border-indigo-300 dark:border-slate-800 dark:bg-slate-950/30'
-                    }`}
-                  >
-                    <div className="font-semibold text-slate-900 dark:text-slate-100">{p.label}</div>
-                    <div className="mt-0.5 font-mono text-[10px] text-slate-500 dark:text-slate-400">{p.hint}</div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 items-end">
-            <Input
-              label="CPU 配额 (MHz)"
-              type="number"
-              min={20}
-              step={50}
-              disabled={readOnly}
-              value={cpu !== undefined ? String(cpu) : ''}
-              placeholder="100"
-              onChange={(e) => commit(setTaskResources(document, tPath, { cpu: e.target.value ? Number(e.target.value) : null }))}
-            />
-            <Input
-              label="内存配额 (MiB)"
-              type="number"
-              min={16}
-              step={32}
-              disabled={readOnly}
-              value={mem !== undefined ? String(mem) : ''}
-              placeholder="128"
-              onChange={(e) => commit(setTaskResources(document, tPath, { memory: e.target.value ? Number(e.target.value) : null }))}
-            />
-            <Input
-              label="突发内存上限 (MiB)"
-              type="number"
-              min={16}
-              step={64}
-              disabled={readOnly}
-              value={memMax !== undefined ? String(memMax) : ''}
-              placeholder="可选"
-              onChange={(e) =>
-                commit(setTaskResources(document, tPath, { memoryMax: e.target.value ? Number(e.target.value) : null }))
-              }
-            />
-          </div>
-        </SectionBox>
-
-        {/* 3. Environment Variables */}
+        {/* 2. Environment Variables */}
         <SectionBox
           icon={<Code2 className="h-4 w-4" />}
           title={`环境变量 (env · ${envState.rows.length})`}
@@ -2540,13 +2566,17 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           )}
         </SectionBox>
 
-        {/* 5. Volume Mounts (shown when Group has volumes or Task already has mounts) */}
-        {(groupVolumes.length > 0 || volumeMounts.length > 0) && (
-          <SectionBox
-            icon={<Database className="h-4 w-4" />}
-            title={`持久化卷挂载 (volume_mount · ${volumeMounts.length})`}
-            actions={
-              !readOnly && (
+        {/* 4. Volume Mounts (always visible so users can easily discover and attach group volumes) */}
+        <SectionBox
+          icon={<Database className="h-4 w-4" />}
+          title={`持久化卷挂载 (volume_mount · ${volumeMounts.length})`}
+          description="将任务组中声明的 volume（host / csi）挂载到容器指定目录"
+          actions={
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button size="sm" variant="ghost" onClick={() => selectInForm(gPath)}>
+                管理任务组 volume
+              </Button>
+              {!readOnly && (
                 <Button
                   size="sm"
                   onClick={() =>
@@ -2556,63 +2586,181 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   <Plus className="h-3.5 w-3.5" />
                   <span>挂载卷</span>
                 </Button>
-              )
-            }
-          >
-            {volumeMounts.map((vm) => {
-              const vRef = parseLiteralString(getAttrExpr(document, vm.path, 'volume')) || '';
-              const vDest = parseLiteralString(getAttrExpr(document, vm.path, 'destination')) || '';
-              const vRo = parseLiteralBool(getAttrExpr(document, vm.path, 'read_only')) ?? false;
-              return (
-                <div
-                  key={vm.path.join('.')}
-                  className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1.4fr_auto_auto] items-center rounded-lg border border-slate-200/80 bg-slate-50/50 p-2 dark:border-slate-800 dark:bg-slate-950/30"
-                >
-                  <Select
-                    aria-label="选择任务组存储卷"
-                    size="sm"
-                    disabled={readOnly}
-                    value={vRef}
-                    onChange={(e) => commit(setAttrExpr(document, vm.path, 'volume', JSON.stringify(e.target.value)))}
+              )}
+            </div>
+          }
+        >
+          {volumeMounts.length === 0 ? (
+            <div className="text-[11px] text-slate-400">
+              {groupVolumes.length > 0
+                ? `所属任务组已声明 ${groupVolumes.length} 个卷（${groupVolumes.map((v) => v.label).join(', ')}），点击右上角「挂载卷」即可挂载进容器。`
+                : '暂未挂载持久化卷。可先在任务组声明 volume（host / csi），或直接点击「挂载卷」填写卷名与容器路径。'}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="hidden sm:grid sm:grid-cols-[1fr_1.4fr_auto_auto] gap-2 px-2 text-[11px] text-slate-500">
+                <span>引用卷名 (volume)</span>
+                <span>容器内挂载目录 (destination)</span>
+                <span>权限</span>
+                <span className="w-7" />
+              </div>
+              {volumeMounts.map((vm) => {
+                const vRef = parseLiteralString(getAttrExpr(document, vm.path, 'volume')) || '';
+                const vDest = parseLiteralString(getAttrExpr(document, vm.path, 'destination')) || '';
+                const vRo = parseLiteralBool(getAttrExpr(document, vm.path, 'read_only')) ?? false;
+                return (
+                  <div
+                    key={vm.path.join('.')}
+                    className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1.4fr_auto_auto] items-center rounded-lg border border-slate-200/80 bg-slate-50/50 p-2 dark:border-slate-800 dark:bg-slate-950/30"
                   >
-                    {Array.from(new Set([...groupVolumes.map((g) => g.label), ...(vRef ? [vRef] : [])])).map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </Select>
-                  <input
-                    aria-label="容器挂载路径"
-                    disabled={readOnly}
-                    value={vDest}
-                    placeholder="/var/lib/data"
-                    onChange={(e) => commit(setAttrExpr(document, vm.path, 'destination', JSON.stringify(e.target.value)))}
-                    className="rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
-                  />
-                  <label className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 px-1">
+                    {groupVolumes.length > 0 ? (
+                      <Select
+                        aria-label="选择任务组存储卷"
+                        size="sm"
+                        disabled={readOnly}
+                        value={vRef}
+                        onChange={(e) => commit(setAttrExpr(document, vm.path, 'volume', JSON.stringify(e.target.value)))}
+                      >
+                        {Array.from(new Set([...groupVolumes.map((g) => g.label), ...(vRef ? [vRef] : [])])).map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </Select>
+                    ) : (
+                      <input
+                        aria-label="引用卷名称"
+                        disabled={readOnly}
+                        value={vRef}
+                        placeholder="data"
+                        onChange={(e) => commit(setAttrExpr(document, vm.path, 'volume', JSON.stringify(e.target.value)))}
+                        className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                      />
+                    )}
                     <input
-                      type="checkbox"
+                      aria-label="容器挂载路径"
                       disabled={readOnly}
-                      checked={vRo}
-                      onChange={(e) => commit(setAttrExpr(document, vm.path, 'read_only', e.target.checked ? 'true' : 'false'))}
+                      value={vDest}
+                      placeholder="/var/lib/data"
+                      onChange={(e) => commit(setAttrExpr(document, vm.path, 'destination', JSON.stringify(e.target.value)))}
+                      className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
                     />
-                    只读
-                  </label>
-                  {!readOnly && (
-                    <button
-                      type="button"
-                      aria-label="删除卷挂载"
-                      onClick={() => commit(removeNodeAtPath(document, vm.path))}
-                      className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </SectionBox>
-        )}
+                    <label className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 px-1 whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        disabled={readOnly}
+                        checked={vRo}
+                        onChange={(e) => commit(setAttrExpr(document, vm.path, 'read_only', e.target.checked ? 'true' : 'false'))}
+                      />
+                      只读
+                    </label>
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        aria-label="删除卷挂载"
+                        onClick={() => commit(removeNodeAtPath(document, vm.path))}
+                        className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </SectionBox>
+
+        {/* 5. Task-level Service registration */}
+        <SectionBox
+          icon={<Shield className="h-4 w-4" />}
+          title={`任务级服务注册 (service · ${taskServices.length})`}
+          description="通常推荐在任务组中注册服务；如需绑定单个 Task 生命周期，也可直接在此配置"
+          actions={
+            !readOnly && (
+              <Button
+                size="sm"
+                onClick={() =>
+                  commit(
+                    addGroupService(document, tPath, {
+                      name: taskName || 'my-service',
+                      port: groupPorts[0]?.label,
+                    }),
+                  )
+                }
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>注册服务</span>
+              </Button>
+            )
+          }
+        >
+          {renderServiceCards(taskServices, groupPorts, '未配置任务级 service 块。')}
+        </SectionBox>
+
+        {/* 6. Resources (placed at bottom of Task form) */}
+        <SectionBox
+          icon={<Cpu className="h-4 w-4" />}
+          title="计算资源配额 (resources)"
+          description="Nomad 会依据配额自动寻找剩余算力足够的 Client 节点"
+        >
+          {!readOnly && (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {RESOURCE_PRESETS.map((p) => {
+                const active = cpu === p.cpu && mem === p.memory;
+                return (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => commit(setTaskResources(document, tPath, { cpu: p.cpu, memory: p.memory }))}
+                    className={`rounded-xl border px-3 py-2 text-left transition ${
+                      active
+                        ? 'border-indigo-500 bg-indigo-50/70 ring-1 ring-indigo-500/20 dark:border-indigo-400 dark:bg-indigo-500/15'
+                        : 'border-slate-200 bg-slate-50/50 hover:border-indigo-300 dark:border-slate-800 dark:bg-slate-950/30'
+                    }`}
+                  >
+                    <div className="font-semibold text-slate-900 dark:text-slate-100">{p.label}</div>
+                    <div className="mt-0.5 font-mono text-[10px] text-slate-500 dark:text-slate-400">{p.hint}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 items-end">
+            <Input
+              label="CPU 配额 (MHz)"
+              type="number"
+              min={20}
+              step={50}
+              disabled={readOnly}
+              value={cpu !== undefined ? String(cpu) : ''}
+              placeholder="100"
+              onChange={(e) => commit(setTaskResources(document, tPath, { cpu: e.target.value ? Number(e.target.value) : null }))}
+            />
+            <Input
+              label="内存配额 (MiB)"
+              type="number"
+              min={16}
+              step={32}
+              disabled={readOnly}
+              value={mem !== undefined ? String(mem) : ''}
+              placeholder="128"
+              onChange={(e) => commit(setTaskResources(document, tPath, { memory: e.target.value ? Number(e.target.value) : null }))}
+            />
+            <Input
+              label="突发内存上限 (MiB)"
+              type="number"
+              min={16}
+              step={64}
+              disabled={readOnly}
+              value={memMax !== undefined ? String(memMax) : ''}
+              placeholder="可选"
+              onChange={(e) =>
+                commit(setTaskResources(document, tPath, { memoryMax: e.target.value ? Number(e.target.value) : null }))
+              }
+            />
+          </div>
+        </SectionBox>
 
         {unhandled.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3.5 py-2.5 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">

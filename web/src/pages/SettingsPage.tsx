@@ -603,19 +603,19 @@ export function SettingsPage() {
               title="下载代理（HTTP / HTTPS / SOCKS5）"
               actions={<StatusBadge value={proxy.configured ? 'enabled' : 'disabled'} label={proxy.configured ? '已启用自定义代理' : '直连'} />}
             >
-              <form onSubmit={saveProxy} className="space-y-6">
-                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              <form onSubmit={saveProxy} className="max-w-[1040px] space-y-5">
+                <p className="max-w-3xl text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
                   集中控制 Nomad 集群、Vault 集群、Docker 安装/升级及镜像拉取、控制面 GitHub 自更新与版本检查是否走系统代理，保存后立即生效。
                 </p>
 
-                <div className="space-y-2">
+                <div className="max-w-2xl space-y-2">
                   <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">出站方式</div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button
                       type="button"
                       disabled={!isAdmin}
                       onClick={() => switchProxyMode('direct')}
-                      className={`text-left rounded-xl border p-3.5 transition ${
+                      className={`text-left rounded-xl border p-3 transition ${
                         proxy.mode === 'direct'
                           ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-400 dark:bg-indigo-500/15'
                           : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700'
@@ -625,13 +625,13 @@ export function SettingsPage() {
                         <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">直连网络</span>
                         <span className={`h-2.5 w-2.5 rounded-full ${proxy.mode === 'direct' ? 'bg-indigo-600 dark:bg-indigo-400' : 'bg-slate-200 dark:bg-slate-700'}`} />
                       </div>
-                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">控制面直接访问官方下载源与 GitHub，适合出网畅通的环境。</p>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">直接访问官方下载源与 GitHub，适合出网畅通环境。</p>
                     </button>
                     <button
                       type="button"
                       disabled={!isAdmin}
                       onClick={() => switchProxyMode('custom')}
-                      className={`text-left rounded-xl border p-3.5 transition ${
+                      className={`text-left rounded-xl border p-3 transition ${
                         proxy.mode === 'custom'
                           ? 'border-indigo-500 bg-indigo-50/70 dark:border-indigo-400 dark:bg-indigo-500/15'
                           : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700'
@@ -641,22 +641,22 @@ export function SettingsPage() {
                         <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">自定义下载代理</span>
                         <span className={`h-2.5 w-2.5 rounded-full ${proxy.mode === 'custom' ? 'bg-indigo-600 dark:bg-indigo-400' : 'bg-slate-200 dark:bg-slate-700'}`} />
                       </div>
-                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">通过 HTTP / HTTPS / SOCKS5 代理出站，可单独测试连通性。</p>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">通过 HTTP / HTTPS / SOCKS5 代理出站，支持连通性测试。</p>
                     </button>
                   </div>
                 </div>
 
                 {proxy.mode === 'custom' && (
-                  <div className="space-y-5">
-                    <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/30 p-4 space-y-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">1. 代理服务器地址</span>
-                        <span className="text-[11px] text-slate-400 dark:text-slate-500">
-                          可直接粘贴 <code className="font-mono">http://user:pass@host:port</code> 自动拆分
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5 items-end">
-                        <div className="sm:col-span-3">
+                  <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
+                    <div className="xl:col-span-6 space-y-4">
+                      <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/30 p-4 space-y-3.5">
+                        <div className="space-y-0.5">
+                          <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">1. 代理服务器地址</div>
+                          <div className="text-[11px] text-slate-400 dark:text-slate-500">
+                            支持在主机地址框直接粘贴 <code className="font-mono">http://user:pass@host:port</code> 自动拆分
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-[112px_minmax(0,1fr)_92px] gap-3 items-start">
                           <Select
                             label="协议"
                             disabled={!isAdmin}
@@ -674,13 +674,11 @@ export function SettingsPage() {
                             <option value="https">HTTPS</option>
                             <option value="socks5">SOCKS5</option>
                           </Select>
-                        </div>
-                        <div className="sm:col-span-6">
                           <Input
                             label="主机地址"
                             required
                             disabled={!isAdmin}
-                            placeholder="proxy.example.com 或粘贴完整代理 URL"
+                            placeholder="10.0.0.1 或 proxy.example.com"
                             value={proxy.host}
                             onPaste={(e) => {
                               const text = e.clipboardData?.getData('text') || '';
@@ -692,11 +690,11 @@ export function SettingsPage() {
                             }}
                             onChange={(e) => setProxy({ ...proxy, host: e.target.value })}
                           />
-                        </div>
-                        <div className="sm:col-span-3">
                           <Input
                             label="端口"
                             type="number"
+                            min={1}
+                            max={65535}
                             required
                             disabled={!isAdmin}
                             placeholder="3128"
@@ -705,51 +703,51 @@ export function SettingsPage() {
                           />
                         </div>
                       </div>
-                    </div>
 
-                    <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/30 p-4 space-y-4">
-                      <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">2. 身份认证与直连例外（可选）</div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/30 p-4 space-y-3.5">
+                        <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">2. 身份认证与直连例外（可选）</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <Input
+                            label="用户名"
+                            disabled={!isAdmin}
+                            placeholder="无需认证可留空"
+                            value={proxy.username}
+                            onChange={(e) => setProxy({ ...proxy, username: e.target.value })}
+                          />
+                          <SecretInput
+                            label="密码"
+                            disabled={!isAdmin}
+                            value={proxy.password}
+                            hasStoredValue={Boolean(proxy.password_set)}
+                            resetKey={proxy.password_set}
+                            onChangeValue={(v) => setProxy({ ...proxy, password: v })}
+                            onRevealStored={
+                              isAdmin
+                                ? async () => {
+                                    const r = await apiPost('/api/v1/settings/proxy/reveal', {});
+                                    return r.password || '';
+                                  }
+                                : undefined
+                            }
+                          />
+                        </div>
                         <Input
-                          label="用户名"
+                          label={<TermLabel term="直连例外（no_proxy）" tip="不经过代理直连的主机名、IP 或 CIDR，多个值用英文逗号分隔。" />}
                           disabled={!isAdmin}
-                          placeholder="无需认证可留空"
-                          value={proxy.username}
-                          onChange={(e) => setProxy({ ...proxy, username: e.target.value })}
-                        />
-                        <SecretInput
-                          label="密码"
-                          disabled={!isAdmin}
-                          value={proxy.password}
-                          hasStoredValue={Boolean(proxy.password_set)}
-                          resetKey={proxy.password_set}
-                          onChangeValue={(v) => setProxy({ ...proxy, password: v })}
-                          onRevealStored={
-                            isAdmin
-                              ? async () => {
-                                  const r = await apiPost('/api/v1/settings/proxy/reveal', {});
-                                  return r.password || '';
-                                }
-                              : undefined
-                          }
+                          placeholder="localhost,127.0.0.1,10.0.0.0/8,.corp.local"
+                          value={proxy.no_proxy}
+                          onChange={(e) => setProxy({ ...proxy, no_proxy: e.target.value })}
                         />
                       </div>
-                      <Input
-                        label={<TermLabel term="直连例外（no_proxy）" tip="不经过代理直连的主机名、IP 或 CIDR，多个值用英文逗号分隔。" />}
-                        disabled={!isAdmin}
-                        placeholder="localhost,127.0.0.1,10.0.0.0/8,.corp.local"
-                        value={proxy.no_proxy}
-                        onChange={(e) => setProxy({ ...proxy, no_proxy: e.target.value })}
-                      />
                     </div>
 
-                    <div className="rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/30 p-4 space-y-3">
+                    <div className="xl:col-span-6 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-950/30 p-4 space-y-3">
                       <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">3. 按场景启用下载代理</div>
                       <div className="divide-y divide-slate-200/70 dark:divide-slate-800/80">
-                        <div className="flex items-center justify-between gap-4 py-2 first:pt-0">
+                        <div className="flex items-center justify-between gap-4 py-2.5 first:pt-0">
                           <div className="min-w-0">
                             <div className="text-xs font-medium text-slate-800 dark:text-slate-200">Nomad 集群（部署 / 扩容 / 升级 / CNI 插件）</div>
-                            <div className="text-[11px] text-slate-500 dark:text-slate-400">获取 Nomad 官方版本列表、安装包以及下载 CNI 插件包时使用系统代理</div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">获取 Nomad 官方版本列表、安装包及 CNI 插件包时使用系统代理</div>
                           </div>
                           <Switch
                             checked={Boolean(proxy.use_for_nomad)}
@@ -758,7 +756,7 @@ export function SettingsPage() {
                             label="Nomad 集群使用系统代理"
                           />
                         </div>
-                        <div className="flex items-center justify-between gap-4 py-2">
+                        <div className="flex items-center justify-between gap-4 py-2.5">
                           <div className="min-w-0">
                             <div className="text-xs font-medium text-slate-800 dark:text-slate-200">Vault 集群（部署 / 扩容 / 升级 / 版本列表）</div>
                             <div className="text-[11px] text-slate-500 dark:text-slate-400">获取 Vault 官方版本列表、部署、扩容与滚动升级安装包时使用系统代理</div>
@@ -770,7 +768,7 @@ export function SettingsPage() {
                             label="Vault 集群使用系统代理"
                           />
                         </div>
-                        <div className="flex items-center justify-between gap-4 py-2">
+                        <div className="flex items-center justify-between gap-4 py-2.5">
                           <div className="min-w-0">
                             <div className="text-xs font-medium text-slate-800 dark:text-slate-200">Docker 安装 / 升级（主机与版本列表）</div>
                             <div className="text-[11px] text-slate-500 dark:text-slate-400">拉取 Docker 官方仓库索引及分发安装包到主机时使用系统代理</div>
@@ -782,13 +780,13 @@ export function SettingsPage() {
                             label="Docker 安装与升级使用系统代理"
                           />
                         </div>
-                        <div className="flex items-center justify-between gap-4 py-2">
+                        <div className="flex items-center justify-between gap-4 py-2.5">
                           <div className="min-w-0">
                             <div className="text-xs font-medium text-slate-800 dark:text-slate-200">Docker 拉取容器镜像</div>
                             <div className="text-[11px] text-slate-500 dark:text-slate-400">
                               {proxy.type === 'socks5'
                                 ? 'Docker 守护进程镜像拉取仅支持 HTTP / HTTPS 代理，SOCKS5 下不可用'
-                                : '为主机 Docker 守护进程默认配置 HTTP(S) 拉取代理（保存后将同步到未单独指定自定义代理的主机）'}
+                                : '为主机 Docker 守护进程配置 HTTP(S) 拉取代理（保存后同步至默认主机）'}
                             </div>
                           </div>
                           <Switch
@@ -798,7 +796,7 @@ export function SettingsPage() {
                             label="Docker 拉取容器镜像使用系统代理"
                           />
                         </div>
-                        <div className="flex items-center justify-between gap-4 py-2 last:pb-0">
+                        <div className="flex items-center justify-between gap-4 py-2.5 last:pb-0">
                           <div className="min-w-0">
                             <div className="text-xs font-medium text-slate-800 dark:text-slate-200">控制面自更新与版本检查（GitHub）</div>
                             <div className="text-[11px] text-slate-500 dark:text-slate-400">控制面检测新版本并从 GitHub Release 下载二进制包时使用系统代理</div>

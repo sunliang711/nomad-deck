@@ -3,6 +3,8 @@ import {
   ArrowLeft,
   ChevronRight,
   Copy,
+  FileText,
+  Folder,
   Minus,
   Pencil,
   Play,
@@ -84,6 +86,7 @@ export function JobRuntimePanel({
   const [memHist, setMemHist] = useState<number[]>([]);
   const [fsPath, setFsPath] = useState('');
   const [fsFiles, setFsFiles] = useState<any[]>([]);
+  const [fsLoading, setFsLoading] = useState(false);
   const [filePreview, setFilePreview] = useState<{ path: string; text: string } | null>(null);
   const [allocLogs, setAllocLogs] = useState('');
   const [logTask, setLogTask] = useState('');
@@ -94,16 +97,19 @@ export function JobRuntimePanel({
 
   const jobRequestRef = useRef(0);
   const allocRequestRef = useRef(0);
+  const fsRequestRef = useRef(0);
   const jobId = job.id;
   const jobNs = job.namespace || 'default';
 
   const closeAllocDrawer = useCallback(() => {
     ++allocRequestRef.current;
+    ++fsRequestRef.current;
     setSelectedAlloc(null);
     setAllocStats(null);
     setAllocLogs('');
     setFsFiles([]);
     setFsPath('');
+    setFsLoading(false);
     setFilePreview(null);
   }, []);
 
@@ -208,6 +214,7 @@ export function JobRuntimePanel({
 
   const inspectAlloc = async (alloc: any, initialTab: 'logs' | 'events' | 'files' = 'logs') => {
     const request = ++allocRequestRef.current;
+    ++fsRequestRef.current;
     const sameAlloc = selectedAlloc?.ID === alloc.ID;
     setAllocTab(initialTab);
     setSelectedAlloc(alloc);
@@ -218,6 +225,7 @@ export function JobRuntimePanel({
     setAllocLogs('');
     setLogRevision((r) => r + 1);
     setFsPath('');
+    setFsLoading(false);
     setFilePreview(null);
     const firstTask = Object.keys(alloc.TaskStates || {})[0] || '';
     setLogTask((current) => (sameAlloc && alloc.TaskStates?.[current] ? current : firstTask));
@@ -242,6 +250,52 @@ export function JobRuntimePanel({
       if (request === allocRequestRef.current) setErr(ex?.message || '加载 Allocation 详情失败');
     }
   };
+
+  const browseAllocDir = useCallback(
+    async (targetPath: string) => {
+      if (!selectedAlloc?.ID) return;
+      const allocId = selectedAlloc.ID;
+      const allocReq = allocRequestRef.current;
+      const fsReq = ++fsRequestRef.current;
+      setFsLoading(true);
+      setErr('');
+      try {
+        const r = await apiGet(
+          `/api/v1/nomad/${clusterId}/allocs/${allocId}/fs/ls?path=${encodeURIComponent(targetPath)}`,
+        );
+        if (allocReq !== allocRequestRef.current || fsReq !== fsRequestRef.current) return;
+        setFsPath(targetPath);
+        setFsFiles(r.files || r || []);
+      } catch (ex: any) {
+        if (allocReq === allocRequestRef.current && fsReq === fsRequestRef.current) {
+          setErr(ex?.message || '读取目录失败');
+        }
+      } finally {
+        if (allocReq === allocRequestRef.current && fsReq === fsRequestRef.current) {
+          setFsLoading(false);
+        }
+      }
+    },
+    [clusterId, selectedAlloc?.ID],
+  );
+
+  const previewAllocFile = useCallback(
+    async (filePath: string) => {
+      if (!selectedAlloc?.ID) return;
+      try {
+        const r = await apiGet(
+          `/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/content/readat?path=${encodeURIComponent(filePath)}&offset=0&limit=32768`,
+        );
+        setFilePreview({
+          path: filePath,
+          text: typeof r === 'string' ? r : r.data || JSON.stringify(r),
+        });
+      } catch (ex: any) {
+        setErr(ex?.message || '预览文件失败');
+      }
+    },
+    [clusterId, selectedAlloc?.ID],
+  );
 
   useEffect(() => {
     if (!selectedAlloc?.ID) return;
@@ -1015,17 +1069,57 @@ export function JobRuntimePanel({
 
             {allocTab === 'files' && (
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-800 dark:text-slate-100">文件浏览器 ({fsPath || '/'})</span>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-1 min-w-0">
+                    <span className="font-semibold text-slate-800 dark:text-slate-100">文件浏览器</span>
+                    <div className="flex flex-wrap items-center gap-0.5 font-mono text-xs text-slate-500 dark:text-slate-400">
+                      <span>(</span>
+                      {fsPath ? (
+                        <button
+                          type="button"
+                          disabled={fsLoading}
+                          onClick={() => void browseAllocDir('')}
+                          className="rounded px-1 text-indigo-600 hover:bg-indigo-50 hover:underline disabled:opacity-50 dark:text-indigo-400 dark:hover:bg-indigo-950/40"
+                        >
+                          /
+                        </button>
+                      ) : (
+                        <span className="px-0.5 text-slate-700 dark:text-slate-200">/</span>
+                      )}
+                      {fsPath
+                        .split('/')
+                        .filter(Boolean)
+                        .map((seg, idx, arr) => {
+                          const target = arr.slice(0, idx + 1).join('/');
+                          const isLast = idx === arr.length - 1;
+                          return (
+                            <span key={target} className="inline-flex items-center gap-0.5">
+                              {idx > 0 && <ChevronRight className="h-3 w-3 text-slate-400" />}
+                              {isLast ? (
+                                <span className="px-0.5 font-semibold text-slate-800 dark:text-slate-100">{seg}</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={fsLoading}
+                                  onClick={() => void browseAllocDir(target)}
+                                  className="rounded px-1 text-indigo-600 hover:bg-indigo-50 hover:underline disabled:opacity-50 dark:text-indigo-400 dark:hover:bg-indigo-950/40"
+                                >
+                                  {seg}
+                                </button>
+                              )}
+                            </span>
+                          );
+                        })}
+                      <span>)</span>
+                    </div>
+                  </div>
                   {fsPath && (
                     <Button
                       size="sm"
+                      disabled={fsLoading}
                       onClick={() => {
                         const parent = fsPath.split('/').slice(0, -1).join('/');
-                        setFsPath(parent);
-                        void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/ls?path=${encodeURIComponent(parent)}`)
-                          .then((r) => setFsFiles(r.files || r || []))
-                          .catch((ex) => setErr(ex.message));
+                        void browseAllocDir(parent);
                       }}
                     >
                       上级目录
@@ -1033,71 +1127,88 @@ export function JobRuntimePanel({
                   )}
                 </div>
                 <div className="h-[440px] overflow-auto rounded-xl border border-slate-200 p-2.5 dark:border-slate-800">
-                  {(fsFiles || []).length === 0 ? (
+                  {fsLoading && (fsFiles || []).length === 0 ? (
+                    <div className="py-10 text-center text-slate-400">正在读取目录…</div>
+                  ) : (fsFiles || []).length === 0 ? (
                     <div className="py-10 text-center text-slate-400">当前目录为空</div>
                   ) : (
-                    (fsFiles || []).map((f: any) => (
-                      <div
-                        key={f.name}
-                        className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800/60"
-                      >
-                        <span className="font-mono truncate">{f.is_dir ? `${f.name}/` : f.name}</span>
-                        <div className="flex shrink-0 items-center gap-1.5">
-                          <span className="text-slate-500">{fmtBytes(f.size)}</span>
-                          {f.is_dir ? (
-                            <Button
-                              size="sm"
-                              onClick={() => {
-                                const np = fsPath ? `${fsPath}/${f.name}` : f.name;
-                                setFsPath(np);
-                                void apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/ls?path=${encodeURIComponent(np)}`)
-                                  .then((r) => setFsFiles(r.files || r || []))
-                                  .catch((ex) => setErr(ex.message));
-                              }}
+                    <div className={fsLoading ? 'opacity-60 transition-opacity' : undefined}>
+                      {(fsFiles || []).map((f: any) => {
+                        const entryPath = fsPath ? `${fsPath}/${f.name}` : f.name;
+                        const canReadFile = !f.is_dir && isAdmin && f.readable !== false;
+                        const entryContent = (
+                          <>
+                            <span
+                              className={`flex min-w-0 items-center gap-2 font-mono ${
+                                !f.is_dir && !canReadFile ? 'text-slate-500 dark:text-slate-400' : ''
+                              }`}
                             >
-                              进入
-                            </Button>
-                          ) : (
-                            isAdmin &&
-                            f.readable !== false && (
-                              <>
+                              {f.is_dir ? (
+                                <Folder className="h-4 w-4 shrink-0 text-amber-500" />
+                              ) : (
+                                <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                              )}
+                              <span className="truncate">{f.is_dir ? `${f.name}/` : f.name}</span>
+                            </span>
+                            <span className="shrink-0 text-slate-500">{fmtBytes(f.size)}</span>
+                          </>
+                        );
+                        return (
+                          <div
+                            key={f.name}
+                            className="flex items-center justify-between gap-2 rounded-lg pr-2 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                          >
+                            {f.is_dir || canReadFile ? (
+                              <button
+                                type="button"
+                                disabled={f.is_dir && fsLoading}
+                                onClick={() =>
+                                  void (f.is_dir ? browseAllocDir(entryPath) : previewAllocFile(entryPath))
+                                }
+                                className="flex min-w-0 flex-1 cursor-pointer items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:text-indigo-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-wait dark:hover:text-indigo-300"
+                              >
+                                {entryContent}
+                              </button>
+                            ) : (
+                              <div className="flex min-w-0 flex-1 items-center justify-between gap-2 px-2 py-1.5">
+                                {entryContent}
+                              </div>
+                            )}
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              {f.is_dir ? (
                                 <Button
                                   size="sm"
-                                  onClick={() => {
-                                    const fp = fsPath ? `${fsPath}/${f.name}` : f.name;
-                                    void apiGet(
-                                      `/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/content/readat?path=${encodeURIComponent(fp)}&offset=0&limit=32768`,
-                                    )
-                                      .then((r) =>
-                                        setFilePreview({
-                                          path: fp,
-                                          text: typeof r === 'string' ? r : r.data || JSON.stringify(r),
-                                        }),
-                                      )
-                                      .catch((ex) => setErr(ex.message));
-                                  }}
+                                  disabled={fsLoading}
+                                  onClick={() => void browseAllocDir(entryPath)}
                                 >
-                                  预览
+                                  进入
                                 </Button>
-                                <Button
-                                  size="sm"
-                                  onClick={() => {
-                                    const fp = fsPath ? `${fsPath}/${f.name}` : f.name;
-                                    void apiDownload(
-                                      `/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/content/download?path=${encodeURIComponent(fp)}`,
-                                      undefined,
-                                      f.name,
-                                    ).catch((ex) => setErr(ex.message));
-                                  }}
-                                >
-                                  下载
-                                </Button>
-                              </>
-                            )
-                          )}
-                        </div>
-                      </div>
-                    ))
+                              ) : (
+                                canReadFile && (
+                                  <>
+                                    <Button size="sm" onClick={() => void previewAllocFile(entryPath)}>
+                                      预览
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      onClick={() => {
+                                        void apiDownload(
+                                          `/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/fs/content/download?path=${encodeURIComponent(entryPath)}`,
+                                          undefined,
+                                          f.name,
+                                        ).catch((ex) => setErr(ex.message));
+                                      }}
+                                    >
+                                      下载
+                                    </Button>
+                                  </>
+                                )
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </div>
               </div>

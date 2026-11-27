@@ -7,8 +7,10 @@ import { buildTemplateData, parseKVPath } from '../lib/vaultHelpers';
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import {
+  buildTabSearchParams,
   readStoredSelection,
   resolveClusterSelection,
+  resolveTabParam,
   VAULT_CLUSTER_KEY,
   writeStoredSelection,
 } from '../lib/selectionMemory';
@@ -59,23 +61,24 @@ export function VaultPage() {
   const { openTask, openNodeLogs, tasks } = useOpsDrawer();
   const toast = useToast();
   const askConfirm = useConfirm();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryId = searchParams.get('id') || '';
-  const queryTab = searchParams.get('tab') || '';
-  const validTabs = ['status', 'custody', 'snapshots', 'manage'];
   const [clusters, setClusters] = useState<any[]>([]);
   const [nodes, setNodes] = useState<any[]>([]);
   const [selectedId, setSelectedId] = useState(() => queryId || readStoredSelection(VAULT_CLUSTER_KEY));
   const [loadingList, setLoadingList] = useState(true);
   const selectionRef = useRef(selectedId);
   selectionRef.current = selectedId;
-  const [tab, setTab] = useState(validTabs.includes(queryTab) ? queryTab : 'status');
-
-  useEffect(() => {
-    if (queryTab && validTabs.includes(queryTab)) {
-      setTab(queryTab);
-    }
-  }, [queryTab]);
+  const tab = resolveTabParam(searchParams, ['status', 'custody', 'snapshots', 'manage'] as const, 'status');
+  const setTab = useCallback(
+    (nextTab: string) => {
+      const next = buildTabSearchParams(searchParams, nextTab, 'status');
+      if (next.toString() !== searchParams.toString()) {
+        setSearchParams(next);
+      }
+    },
+    [searchParams, setSearchParams],
+  );
 
   useEffect(() => {
     if (queryId && clusters.some((c: any) => c.id === queryId)) {
@@ -515,10 +518,7 @@ export function VaultPage() {
                 { id: 'manage', label: 'Auth / Policy / KV', title: tr('管理 Vault 认证挂载（Userpass/JWT/AppRole）、HCL 权限策略（Policy）以及 KV v2 密钥引擎', 'Manage Vault Auth methods, HCL policies, and KV v2 secret engines') },
               ]}
               active={tab}
-              onChange={(t) => {
-                setTab(t);
-                if (t === 'manage') void loadManage();
-              }}
+              onChange={setTab}
             />
           </div>
 

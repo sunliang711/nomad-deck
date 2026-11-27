@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { CheckCircle2, RefreshCw, RotateCw, X, XCircle } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { buildTabSearchParams, resolveTabParam } from '../lib/selectionMemory';
 import { useI18n } from '../lib/i18n';
 import { useToast } from '../components/Toast';
 import { useConfirm, type BeforeNavigateDetail } from '../components/ConfirmDialog';
@@ -79,19 +80,13 @@ export function SettingsPage() {
   const askConfirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const validTabs = new Set(['general', 'releases', 'clusters', 'proxy', 'security']);
-  const queryTab = searchParams.get('tab');
-  const [tab, setTabState] = useState<'general' | 'releases' | 'clusters' | 'proxy' | 'security'>(() =>
-    queryTab && validTabs.has(queryTab) ? (queryTab as 'general' | 'releases' | 'clusters' | 'proxy' | 'security') : 'general',
-  );
-  useEffect(() => {
-    if (queryTab && validTabs.has(queryTab) && queryTab !== tab) {
-      setTabState(queryTab as typeof tab);
-    }
-  }, [queryTab, tab]);
+  const validTabs = ['general', 'releases', 'clusters', 'proxy', 'security'] as const;
+  const tab = resolveTabParam(searchParams, validTabs, 'general');
   const setTab = (next: 'general' | 'releases' | 'clusters' | 'proxy' | 'security') => {
-    setTabState(next);
-    setSearchParams(next === 'general' ? {} : { tab: next }, { replace: true });
+    const params = buildTabSearchParams(searchParams, next, 'general');
+    if (params.toString() !== searchParams.toString()) {
+      setSearchParams(params);
+    }
   };
   const [loading, setLoading] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);

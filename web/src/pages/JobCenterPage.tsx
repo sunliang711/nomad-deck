@@ -31,9 +31,12 @@ import {
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import {
+  buildTabSearchParams,
   JOB_CENTER_CLUSTER_KEY,
+  type JobCenterTab,
   readStoredSelection,
   resolveClusterSelection,
+  resolveJobCenterTab,
   writeStoredSelection,
 } from '../lib/selectionMemory';
 import { useToast } from '../components/Toast';
@@ -79,13 +82,16 @@ export function JobCenterPage() {
   const [templates, setTemplates] = useState<any[]>([]);
 
   // Active top-level tab: 'list' (Runtime Jobs & inline detail), 'builder' (Composer), 'templates' (Library)
-  const [pageTab, setPageTab] = useState<'list' | 'builder' | 'templates'>(() => {
-    if (queryFrom === 'integration') return 'builder';
-    if (queryTab === 'templates') return 'templates';
-    if (queryTab === 'builder') return 'builder';
-    if (queryTab === 'runtime') return 'list';
-    return queryJobId ? 'builder' : 'list';
-  });
+  const pageTab = resolveJobCenterTab(searchParams);
+  const updatePageTab = useCallback(
+    (nextTab: JobCenterTab, opts?: { replace?: boolean }) => {
+      const next = buildTabSearchParams(searchParams, nextTab, 'list', { deleteKeys: ['from', 'job'] });
+      if (next.toString() !== searchParams.toString()) {
+        setSearchParams(next, opts?.replace ? { replace: true } : undefined);
+      }
+    },
+    [searchParams, setSearchParams],
+  );
 
   // Currently inspected Job in Runtime Detail view (inside 'list' tab)
   const [inspectingJob, setInspectingJob] = useState<JobRuntimeRef | null>(() =>
@@ -153,7 +159,6 @@ export function JobCenterPage() {
           setJobVariables({});
           setPlan(null);
           setValidationWarnings([]);
-          setPageTab('builder');
         }
         window.sessionStorage.removeItem(INTEGRATION_DRAFT_JOB_STORAGE_KEY);
         toast.info(
@@ -166,10 +171,8 @@ export function JobCenterPage() {
     } catch {
       // Ignore malformed sessionStorage drafts.
     }
-    const next = new URLSearchParams(searchParams);
-    next.delete('from');
-    setSearchParams(next, { replace: true });
-  }, [queryFrom]);
+    updatePageTab('builder', { replace: true });
+  }, [queryFrom, updatePageTab]);
 
   const loadClusters = useCallback(async () => {
     setErr('');
@@ -467,7 +470,7 @@ export function JobCenterPage() {
       await loadJobs();
       if (targetJobId) {
         setInspectingJob({ id: targetJobId, namespace: targetNs });
-        setPageTab('list');
+        updatePageTab('list');
       }
     } catch (ex: any) {
       setErr(ex?.message || tr('Apply 失败', 'Apply failed'));
@@ -475,14 +478,14 @@ export function JobCenterPage() {
   };
 
   const loadJobForEdit = useCallback(
-    async (j: { id: string; namespace?: string }, preferredMode?: 'visual' | 'hcl') => {
+    async (j: { id: string; namespace?: string }, preferredMode?: 'visual' | 'hcl', opts?: { replaceHistory?: boolean }) => {
       const request = ++editRequestRef.current;
       modeRequestRef.current++;
       setModeBusy(false);
       formatCacheRef.current = null;
       const ns = j.namespace || effectiveBuilderNamespace;
       setSelectedJobId(j.id);
-      setPageTab('builder');
+      updatePageTab('builder', { replace: opts?.replaceHistory });
       clearPlan();
       setHcl('');
       setJobVariables({});
@@ -512,7 +515,7 @@ export function JobCenterPage() {
         if (request === editRequestRef.current) setErr(ex?.message || tr('读取 Job 编辑源码失败', 'Failed to load Job edit source'));
       }
     },
-    [clusterId, effectiveBuilderNamespace, isAdmin],
+    [clusterId, effectiveBuilderNamespace, isAdmin, updatePageTab],
   );
 
   // Handle URL deep links (?job=...&tab=runtime|builder)
@@ -521,15 +524,11 @@ export function JobCenterPage() {
     const targetNs = queryNamespace || (namespace === '*' ? 'default' : namespace) || 'default';
     if (queryTab === 'runtime') {
       setInspectingJob({ id: queryJobId, namespace: targetNs });
-      setPageTab('list');
+      updatePageTab('list', { replace: true });
     } else {
-      void loadJobForEdit({ id: queryJobId, namespace: targetNs });
+      void loadJobForEdit({ id: queryJobId, namespace: targetNs }, undefined, { replaceHistory: true });
     }
-    const next = new URLSearchParams(searchParams);
-    next.delete('job');
-    next.delete('tab');
-    setSearchParams(next, { replace: true });
-  }, [queryJobId, queryTab, queryFrom, selectedCluster, needsDeployment, loadJobForEdit]);
+  }, [queryJobId, queryTab, queryFrom, selectedCluster, needsDeployment, loadJobForEdit, namespace, updatePageTab]);
 
   const namespaceOptions = useMemo(() => {
     const set = new Set<string>(clusterNamespaces.length > 0 ? clusterNamespaces : ['default']);
@@ -618,7 +617,7 @@ export function JobCenterPage() {
     } else if (editMode === 'json') {
       setEditMode(isAdmin ? 'visual' : 'hcl');
     }
-    setPageTab('builder');
+    updatePageTab('builder');
   };
 
   const startFreshDraft = () => {
@@ -719,8 +718,9 @@ export function JobCenterPage() {
           ]}
           active={pageTab}
           onChange={(next) => {
-            setPageTab(next as 'list' | 'builder' | 'templates');
-            if (next === 'list') void loadJobs();
+            const nextTab = next as JobCenterTab;
+            updatePageTab(nextTab);
+            if (nextTab === 'list') void loadJobs();
           }}
         />
       </div>
@@ -813,7 +813,7 @@ export function JobCenterPage() {
                           <FilePlus2 className="h-3.5 w-3.5" />
                           <span>{tr('可视化新建任务', 'New Visual Job')}</span>
                         </Button>
-                        <Button size="sm" onClick={() => setPageTab('templates')}>
+                        <Button size="sm" onClick={() => updatePageTab('templates')}>
                           <Sparkles className="h-3.5 w-3.5" />
                           <span>{tr('浏览场景蓝图', 'Browse Blueprints')}</span>
                         </Button>
@@ -989,7 +989,7 @@ export function JobCenterPage() {
                   size="sm"
                   onClick={() => {
                     setInspectingJob({ id: selectedJobId, namespace: effectiveBuilderNamespace });
-                    setPageTab('list');
+                    updatePageTab('list');
                   }}
                 >
                   <Activity className="h-3.5 w-3.5" />

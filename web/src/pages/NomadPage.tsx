@@ -5,9 +5,11 @@ import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, f
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import {
+  buildTabSearchParams,
   NOMAD_CLUSTER_KEY,
   readStoredSelection,
   resolveClusterSelection,
+  resolveTabParam,
   writeStoredSelection,
 } from '../lib/selectionMemory';
 import { useOpsDrawer } from '../lib/opsDrawer';
@@ -47,9 +49,8 @@ export function NomadPage() {
   const { openTask, openNodeLogs, tasks } = useOpsDrawer();
   const toast = useToast();
   const askConfirm = useConfirm();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryId = searchParams.get('id') || '';
-  const queryTab = searchParams.get('tab') || '';
   const queryNs = searchParams.get('ns') || '';
   const queryJob = searchParams.get('job') || '';
   const querySub = searchParams.get('sub') || '';
@@ -59,7 +60,16 @@ export function NomadPage() {
   const [loadingList, setLoadingList] = useState(true);
   const selectionRef = useRef(selectedId);
   selectionRef.current = selectedId;
-  const [tab, setTab] = useState(queryTab === 'workbench' ? 'workbench' : 'status');
+  const tab = resolveTabParam(searchParams, ['status', 'workbench', 'snapshots', 'governance'] as const, 'status');
+  const setTab = useCallback(
+    (nextTab: string) => {
+      const next = buildTabSearchParams(searchParams, nextTab, 'status');
+      if (next.toString() !== searchParams.toString()) {
+        setSearchParams(next);
+      }
+    },
+    [searchParams, setSearchParams],
+  );
   const [govSubTab, setGovSubTab] = useState<'tenants' | 'policies' | 'tokens'>('tenants');
   const [tokenModal, setTokenModal] = useState<{ name: string; policies: string[] } | null>(null);
 
@@ -86,12 +96,6 @@ export function NomadPage() {
       writeStoredSelection(NOMAD_CLUSTER_KEY, selectedId);
     }
   }, [selectedId, clusters]);
-
-  useEffect(() => {
-    if (queryTab === 'workbench' || queryTab === 'status' || queryTab === 'snapshots' || queryTab === 'governance') {
-      setTab(queryTab);
-    }
-  }, [queryTab]);
   const [status, setStatus] = useState<any>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
   const [namespaces, setNamespaces] = useState<any[]>([]);

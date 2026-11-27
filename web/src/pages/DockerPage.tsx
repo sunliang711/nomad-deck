@@ -15,6 +15,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '../lib/api';
+import { buildTabSearchParams, resolveTabParam } from '../lib/selectionMemory';
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import { useOpsDrawer } from '../lib/opsDrawer';
@@ -113,12 +114,7 @@ export function DockerPage() {
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const initialTab = ((): DockerTab => {
-    const t = searchParams.get('tab');
-    return t === 'inspect' || t === 'clusters' ? t : 'hosts';
-  })();
-
-  const [tab, setTab] = useState<DockerTab>(initialTab);
+  const tab = resolveTabParam(searchParams, ['hosts', 'inspect', 'clusters'] as const, 'hosts');
   const [nodes, setNodes] = useState<any[]>([]);
   const [clusters, setClusters] = useState<any[]>([]);
   const [settings, setSettings] = useState<Record<string, any>>({});
@@ -170,15 +166,10 @@ export function DockerPage() {
   );
 
   const switchTab = (next: DockerTab, extra?: Record<string, string>) => {
-    setTab(next);
-    const params = new URLSearchParams(searchParams);
-    params.set('tab', next);
-    if (extra) {
-      for (const [k, v] of Object.entries(extra)) {
-        if (v) params.set(k, v);
-      }
+    const params = buildTabSearchParams(searchParams, next, 'hosts', { extra });
+    if (params.toString() !== searchParams.toString()) {
+      setSearchParams(params);
     }
-    setSearchParams(params, { replace: true });
   };
 
   const load = useCallback(async () => {

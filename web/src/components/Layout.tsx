@@ -14,6 +14,8 @@ import {
   LogOut,
   Menu,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   ScrollText,
   Server,
   Settings,
@@ -49,16 +51,39 @@ export function navLabelForPath(path: string): string {
   return item?.label || '控制面';
 }
 
+const SIDEBAR_COLLAPSED_KEY = 'nomad-deck.sidebar-collapsed';
+
+function readSidebarCollapsed(): boolean {
+  try {
+    return typeof window !== 'undefined' && window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, isAdmin, version, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const { runningCount, unreadCount, openTaskList } = useOpsDrawer();
   const { unreadCount: notifUnreadCount, unreadErrorCount: notifUnreadErrorCount, markHistoryRead } = useToast();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState<boolean>(readSidebarCollapsed);
   const [notifOpen, setNotifOpen] = useState(false);
   const navigation = useRef<HTMLElement>(null);
   const loc = useLocation();
   const navigate = useNavigate();
+
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0');
+      } catch {
+        // Ignore storage quota / private mode failures.
+      }
+      return next;
+    });
+  };
 
   const currentItem = navItems.find((n) => (n.to === '/' ? loc.pathname === '/' : loc.pathname.startsWith(n.to))) || navItems[0];
   const versionLabel = version && version !== 'dev' && !version.startsWith('v') ? `v${version}` : version || 'dev';
@@ -136,19 +161,37 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <aside
         ref={navigation}
         id="app-navigation"
-        className={`app-sidebar fixed inset-y-0 left-0 w-64 text-slate-200 flex-col z-40 transition-transform duration-200 ${
+        className={`app-sidebar fixed inset-y-0 left-0 w-64 ${
+          collapsed ? 'lg:w-[72px]' : 'lg:w-64'
+        } text-slate-200 flex-col z-40 transition-[transform,width] duration-200 ${
           menuOpen ? 'flex translate-x-0' : 'hidden -translate-x-full'
         } lg:flex lg:translate-x-0`}
       >
-        <div className="px-5 py-5 shrink-0">
-          <div className="flex items-center gap-3">
-            <img src="/favicon.svg" alt="NomadDeck" width={40} height={40} className="w-10 h-10 shrink-0" />
-            <div className="min-w-0 flex-1">
+        <div className={`shrink-0 ${collapsed ? 'px-5 py-5 lg:px-3 lg:py-4' : 'px-5 py-5'}`}>
+          <div className={`flex items-center gap-3 ${collapsed ? 'lg:flex-col lg:gap-2.5' : ''}`}>
+            <img
+              src="/favicon.svg"
+              alt="NomadDeck"
+              width={40}
+              height={40}
+              className={`shrink-0 ${collapsed ? 'w-10 h-10 lg:w-9 lg:h-9' : 'w-10 h-10'}`}
+            />
+            <div className={`min-w-0 flex-1 ${collapsed ? 'lg:hidden' : ''}`}>
               <div className="font-semibold text-lg text-white tracking-tight leading-none">
                 NomadDeck<span className="text-indigo-400">.</span>
               </div>
               <div className="text-[11px] text-slate-400 mt-2 tracking-wider">集群运维控制面</div>
             </div>
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              title={collapsed ? '展开左侧导航栏' : '折叠左侧导航栏'}
+              aria-label={collapsed ? '展开左侧导航栏' : '折叠左侧导航栏'}
+              aria-expanded={!collapsed}
+              className="hidden lg:inline-flex shrink-0 items-center justify-center rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white transition"
+            >
+              {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+            </button>
             <button
               type="button"
               onClick={() => setMenuOpen(false)}
@@ -162,7 +205,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
             href="/version"
             onClick={(e) => void handleNavClick(e, '/version')}
             title={`当前版本 ${versionLabel}（点击查看版本与升级）`}
-            className="mt-3 flex items-start gap-2 rounded-lg bg-white/5 px-2.5 py-2 text-xs text-slate-300 hover:bg-indigo-500/20 hover:text-white transition"
+            className={`${
+              collapsed ? 'lg:hidden ' : ''
+            }mt-3 flex items-start gap-2 rounded-lg bg-white/5 px-2.5 py-2 text-xs text-slate-300 hover:bg-indigo-500/20 hover:text-white transition`}
           >
             <span className="shrink-0 text-slate-400">版本</span>
             <span className="min-w-0 break-all font-mono leading-4">{versionLabel}</span>
@@ -170,7 +215,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </a>
         </div>
 
-        <nav aria-label="主导航" className="flex-1 px-4 py-3 overflow-y-auto">
+        <nav aria-label="主导航" className={`flex-1 py-3 overflow-y-auto ${collapsed ? 'px-4 lg:px-2.5' : 'px-4'}`}>
           {navItems.map((item, index) => {
             const Icon = item.icon;
             const isActive = item.to === '/' ? loc.pathname === '/' : loc.pathname.startsWith(item.to);
@@ -178,38 +223,56 @@ export function Layout({ children }: { children: React.ReactNode }) {
             return (
               <React.Fragment key={item.to}>
                 {showGroup && (
-                  <div
-                    className={`text-[10px] font-medium uppercase text-slate-500 tracking-widest px-3 mb-2.5 ${
-                      index === 0 ? 'mt-1' : 'mt-6'
-                    }`}
-                  >
-                    {item.group === 'workspace' ? '集群工作区' : '系统与管理'}
-                  </div>
+                  <>
+                    <div
+                      className={`text-[10px] font-medium uppercase text-slate-500 tracking-widest px-3 mb-2.5 ${
+                        index === 0 ? 'mt-1' : 'mt-6'
+                      } ${collapsed ? 'lg:hidden' : ''}`}
+                    >
+                      {item.group === 'workspace' ? '集群工作区' : '系统与管理'}
+                    </div>
+                    {collapsed && index > 0 && (
+                      <div className="hidden lg:block mx-2 my-3 border-t border-white/10" aria-hidden="true" />
+                    )}
+                  </>
                 )}
                 <a
                   href={item.to}
+                  title={collapsed ? item.label : undefined}
+                  aria-label={item.label}
                   aria-current={isActive ? 'page' : undefined}
                   onClick={(e) => void handleNavClick(e, item.to)}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 mb-1 rounded-xl text-[13px] transition ${
+                    collapsed ? 'lg:justify-center lg:px-0' : ''
+                  } ${
                     isActive
                       ? 'bg-indigo-500 text-white font-medium shadow-md shadow-indigo-950/20'
                       : 'text-slate-400 hover:bg-white/5 hover:text-white'
                   }`}
                 >
-                  <Icon className="w-4 h-4 shrink-0" />
-                  <span className="truncate">{item.label}</span>
-                  {isActive && <ChevronRight className="w-3.5 h-3.5 ml-auto opacity-70 shrink-0" />}
+                  <Icon className={`shrink-0 ${collapsed ? 'w-4 h-4 lg:w-[18px] lg:h-[18px]' : 'w-4 h-4'}`} />
+                  <span className={`truncate ${collapsed ? 'lg:hidden' : ''}`}>{item.label}</span>
+                  {isActive && (
+                    <ChevronRight className={`w-3.5 h-3.5 ml-auto opacity-70 shrink-0 ${collapsed ? 'lg:hidden' : ''}`} />
+                  )}
                 </a>
               </React.Fragment>
             );
           })}
         </nav>
 
-        <div className="mx-4 mb-4 rounded-xl bg-white/[0.04] p-3 flex items-center gap-3 text-xs shrink-0">
-          <div className="w-9 h-9 rounded-full bg-indigo-400/15 text-indigo-200 flex items-center justify-center font-semibold text-sm shrink-0">
+        <div
+          className={`rounded-xl bg-white/[0.04] flex items-center text-xs shrink-0 ${
+            collapsed ? 'mx-4 mb-4 p-3 gap-3 lg:mx-2.5 lg:p-2 lg:flex-col lg:gap-2' : 'mx-4 mb-4 p-3 gap-3'
+          }`}
+        >
+          <div
+            title={`${user?.username || '-'}（${isAdmin ? '系统管理员' : '只读运维'}）`}
+            className="w-9 h-9 rounded-full bg-indigo-400/15 text-indigo-200 flex items-center justify-center font-semibold text-sm shrink-0"
+          >
             {(user?.username || 'A').slice(0, 1).toUpperCase()}
           </div>
-          <div className="truncate flex-1">
+          <div className={`truncate flex-1 ${collapsed ? 'lg:hidden' : ''}`}>
             <div className="text-white font-medium truncate">{user?.username || '-'}</div>
             <div className="text-slate-400 mt-0.5">{isAdmin ? '系统管理员' : '只读运维'}</div>
           </div>
@@ -225,7 +288,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <div className="lg:pl-64 min-h-screen flex flex-col">
+      <div className={`min-h-screen flex flex-col transition-[padding] duration-200 ${collapsed ? 'lg:pl-[72px]' : 'lg:pl-64'}`}>
         <header className="h-16 border-b border-slate-200/70 dark:border-slate-800/90 bg-white/90 dark:bg-[#0d1425]/90 backdrop-blur-md flex items-center justify-between gap-3 px-5 sm:px-8 sticky top-0 z-20">
           <div className="flex items-center gap-2.5 text-xs text-slate-400 dark:text-slate-500 min-w-0">
             <button

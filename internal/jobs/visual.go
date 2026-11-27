@@ -147,18 +147,20 @@ type BuilderOptions struct {
 	Datacenters []string `json:"datacenters"`
 	// HostVolumes maps host volume names to the clients that offer them.
 	HostVolumes map[string][]string `json:"host_volumes"`
-	Drivers     []string            `json:"drivers"`
+	// HostNetworks maps host network names to the clients that offer them.
+	HostNetworks map[string][]string `json:"host_networks"`
+	Drivers      []string            `json:"drivers"`
 }
 
-// Options lists namespaces, node pools, datacenters, client host volumes
-// and healthy drivers of a cluster.
+// Options lists namespaces, node pools, datacenters, client host volumes,
+// host networks and healthy drivers of a cluster.
 func (s *Service) Options(ctx context.Context, clusterID string) (*BuilderOptions, error) {
 	c, err := s.api(ctx, clusterID)
 	if err != nil {
 		return nil, err
 	}
-	o := &BuilderOptions{Namespaces: []string{}, NodePools: []string{}, Datacenters: []string{}, HostVolumes: map[string][]string{},
-		Drivers: []string{}}
+	o := &BuilderOptions{Namespaces: []string{}, NodePools: []string{}, Datacenters: []string{},
+		HostVolumes: map[string][]string{}, HostNetworks: map[string][]string{}, Drivers: []string{}}
 	var nss []struct {
 		Name string `json:"Name"`
 	}
@@ -180,14 +182,18 @@ func (s *Service) Options(ctx context.Context, clusterID string) (*BuilderOption
 	for _, n := range nodes {
 		dcs[n.Datacenter] = true
 		var d struct {
-			HostVolumes map[string]any `json:"HostVolumes"`
-			Drivers     map[string]struct {
+			HostVolumes  map[string]any `json:"HostVolumes"`
+			HostNetworks map[string]any `json:"HostNetworks"`
+			Drivers      map[string]struct {
 				Healthy bool `json:"Healthy"`
 			} `json:"Drivers"`
 		}
 		if err := c.Request(ctx, http.MethodGet, "node/"+url.PathEscape(n.ID), nil, &d); err == nil {
 			for v := range d.HostVolumes {
 				o.HostVolumes[v] = append(o.HostVolumes[v], n.Name)
+			}
+			for hn := range d.HostNetworks {
+				o.HostNetworks[hn] = append(o.HostNetworks[hn], n.Name)
 			}
 			for name, dr := range d.Drivers {
 				if dr.Healthy {

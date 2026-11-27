@@ -118,6 +118,7 @@ interface BuilderOptions {
   datacenters: string[];
   drivers: string[];
   host_volumes: Record<string, string[]>;
+  host_networks: Record<string, string[]>;
 }
 
 export interface VisualJobBuilderHandle {
@@ -475,6 +476,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
     datacenters: [],
     drivers: [],
     host_volumes: {},
+    host_networks: {},
   });
   const [vaultRoles, setVaultRoles] = useState<VaultRoleOption[]>([]);
   const [vaultIntegrations, setVaultIntegrations] = useState<VaultIntegrationOption[]>([]);
@@ -555,7 +557,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         vault_roles?: VaultRoleOption[];
         vault_integrations?: VaultIntegrationOption[];
       }>(`/api/v1/nomad/${clusterId}/builder-options`);
-      setOptions(res.options || { namespaces: [], node_pools: [], datacenters: [], drivers: [], host_volumes: {} });
+      setOptions(res.options || { namespaces: [], node_pools: [], datacenters: [], drivers: [], host_volumes: {}, host_networks: {} });
       const roles = res.vault_roles || [];
       setVaultRoles(roles);
       setVaultIntegrations(res.vault_integrations || []);
@@ -579,7 +581,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
     }>(`/api/v1/nomad/${clusterId}/builder-options`)
       .then((res) => {
         if (!active) return;
-        setOptions(res.options || { namespaces: [], node_pools: [], datacenters: [], drivers: [], host_volumes: {} });
+        setOptions(res.options || { namespaces: [], node_pools: [], datacenters: [], drivers: [], host_volumes: {}, host_networks: {} });
         const roles = res.vault_roles || [];
         setVaultRoles(roles);
         setVaultIntegrations(res.vault_integrations || []);
@@ -1325,6 +1327,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
     const tasks = listChildBlocks(document, gPath, 'task');
     const unhandled = listUnhandledBlocks(document, gPath, GROUP_HANDLED_BLOCKS);
     const knownHostVolumes = Object.keys(options.host_volumes || {});
+    const knownHostNetworks = Object.keys(options.host_networks || {});
 
     return (
       <div className="space-y-4">
@@ -1499,16 +1502,17 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             </div>
           ) : (
             <div className="space-y-2">
-              <div className="hidden sm:grid sm:grid-cols-[1.2fr_1fr_1fr_auto] gap-2 px-2 text-[11px] text-slate-500">
+              <div className="hidden sm:grid sm:grid-cols-[1.1fr_1fr_1fr_1fr_auto] gap-2 px-2 text-[11px] text-slate-500">
                 <span>{tr('端口标签 (label)', 'Port Label (label)')}</span>
                 <span>{tr('宿主机端口 (static，留空动态)', 'Host Port (static, blank = dynamic)')}</span>
                 <span>{tr('容器内端口 (to)', 'Container Port (to)')}</span>
+                <span>{tr('宿主机网络 (host_network，可选)', 'Host Network (optional)')}</span>
                 <span className="w-8" />
               </div>
               {ports.map((p) => (
                 <div
                   key={p.path.join('.')}
-                  className="grid grid-cols-1 gap-2 sm:grid-cols-[1.2fr_1fr_1fr_auto] items-center rounded-lg border border-slate-200/80 bg-slate-50/50 p-2 dark:border-slate-800 dark:bg-slate-950/30"
+                  className="grid grid-cols-1 gap-2 sm:grid-cols-[1.1fr_1fr_1fr_1fr_auto] items-center rounded-lg border border-slate-200/80 bg-slate-50/50 p-2 dark:border-slate-800 dark:bg-slate-950/30"
                 >
                   <input
                     aria-label={tr('端口标签', 'Port label')}
@@ -1540,6 +1544,15 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     onChange={(e) => commit(updateGroupPort(document, p.path, { toPort: e.target.value }))}
                     className="rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
                   />
+                  <input
+                    aria-label={tr('宿主机网络', 'Host network')}
+                    list="vb-host-networks"
+                    disabled={readOnly}
+                    value={p.hostNetwork}
+                    placeholder={tr('默认 (留空)', 'Default')}
+                    onChange={(e) => commit(updateGroupPort(document, p.path, { hostNetwork: e.target.value }))}
+                    className="rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                  />
                   {!readOnly && (
                     <button
                       type="button"
@@ -1552,6 +1565,13 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   )}
                 </div>
               ))}
+              {knownHostNetworks.length > 0 && (
+                <datalist id="vb-host-networks">
+                  {knownHostNetworks.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+              )}
             </div>
           )}
         </SectionBox>

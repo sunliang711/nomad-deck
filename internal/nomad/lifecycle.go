@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -777,7 +778,7 @@ func (s *Service) UpdateNodeConfig(ctx context.Context, actor audit.Actor, clust
 	if err != nil {
 		return nil, err
 	}
-	if !IsClient(m.Role) && (in.CNI || in.RawExec || len(in.HostVolumes) > 0 || len(in.Meta) > 0 || in.NodePool != "") {
+	if !IsClient(m.Role) && (in.CNI || in.RawExec || len(in.HostVolumes) > 0 || len(in.HostNetworks) > 0 || len(in.Meta) > 0 || in.NodePool != "") {
 		return nil, badRequest("纯 Server 节点不支持 Client 配置")
 	}
 	if err := validateClient(&in.ClientSettings); err != nil {
@@ -1068,14 +1069,15 @@ func (s *Service) addHostVolumeToMember(ctx context.Context, t *ops.Task, cl *no
 
 // SettingsInput updates cluster-level settings.
 type SettingsInput struct {
-	PublicAPIURL     *string     `json:"public_api_url"`
-	UI               *UISettings `json:"ui"`
-	DisableTelemetry *bool       `json:"disable_telemetry"`
-	JobGCThreshold   *string     `json:"job_gc_threshold"`
-	ExecEnabled      *bool       `json:"exec_enabled"`
-	CNIVersion       *string     `json:"cni_version"`
-	UseProxy         *bool       `json:"use_proxy"`
-	ConfirmSingle    bool        `json:"confirm_single_node"`
+	PublicAPIURL     *string            `json:"public_api_url"`
+	UI               *UISettings        `json:"ui"`
+	DisableTelemetry *bool              `json:"disable_telemetry"`
+	Telemetry        *TelemetrySettings `json:"telemetry"`
+	JobGCThreshold   *string            `json:"job_gc_threshold"`
+	ExecEnabled      *bool              `json:"exec_enabled"`
+	CNIVersion       *string            `json:"cni_version"`
+	UseProxy         *bool              `json:"use_proxy"`
+	ConfirmSingle    bool               `json:"confirm_single_node"`
 }
 
 // UpdateSettings stores cluster settings. Settings rendered into node
@@ -1105,14 +1107,36 @@ func (s *Service) UpdateSettings(ctx context.Context, actor audit.Actor, cluster
 	}
 	if in.DisableTelemetry != nil && *in.DisableTelemetry != cl.Settings.DisableTelemetry {
 		cl.Settings.DisableTelemetry, rollout = *in.DisableTelemetry, true
+		if in.Telemetry == nil {
+			cl.Settings.Telemetry.PrometheusMetrics = nil
+			cl.Settings.Telemetry.PublishAllocationMetrics = nil
+			cl.Settings.Telemetry.PublishNodeMetrics = nil
+		}
 	}
-	if in.JobGCThreshold != nil && *in.JobGCThreshold != cl.Settings.JobGCThreshold {
-		if *in.JobGCThreshold != "" {
-			if _, err := time.ParseDuration(*in.JobGCThreshold); err != nil {
-				return nil, badRequest("job_gc_threshold 格式不正确")
+	if in.Telemetry != nil {
+		if err := validateTelemetry(in.Telemetry); err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(*in.Telemetry, cl.Settings.Telemetry) {
+			cl.Settings.Telemetry, rollout = *in.Telemetry, true
+		}
+		if in.DisableTelemetry == nil && in.Telemetry.PrometheusMetrics != nil && in.Telemetry.PublishAllocationMetrics != nil && in.Telemetry.PublishNodeMetrics != nil {
+			disabled := !(*in.Telemetry.PrometheusMetrics || *in.Telemetry.PublishAllocationMetrics || *in.Telemetry.PublishNodeMetrics)
+			if disabled != cl.Settings.DisableTelemetry {
+				cl.Settings.DisableTelemetry, rollout = disabled, true
 			}
 		}
-		cl.Settings.JobGCThreshold, rollout = *in.JobGCThreshold, true
+	}
+	if in.JobGCThreshold != nil {
+		trimmed := strings.TrimSpace(*in.JobGCThreshold)
+		if trimmed != cl.Settings.JobGCThreshold {
+			if trimmed != "" {
+				if d, err := time.ParseDuration(trimmed); err != nil || d < 0 {
+					return nil, badRequest("job_gc_threshold 格式不正确")
+				}
+			}
+			cl.Settings.JobGCThreshold, rollout = trimmed, true
+		}
 	}
 	if in.ExecEnabled != nil {
 		v := *in.ExecEnabled

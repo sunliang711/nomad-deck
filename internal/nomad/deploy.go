@@ -160,8 +160,9 @@ func (s *Service) nodeConfig(gi *genInput, m *db.ClusterNode, gen int) NodeConfi
 	return NodeConfig{Region: cl.Region, Datacenter: cl.Datacenter, NodeName: mc.NodeName, Role: m.Role, Advertise: m.AdvertiseAddr,
 		HTTPPort: cl.Settings.HTTPPort, RPCPort: cl.Settings.RPCPort, SerfPort: cl.Settings.SerfPort, Generation: gen,
 		Servers: addrs, BootstrapN: len(addrs), GossipKey: gi.gossip, TLS: cl.TLSEnabled, VerifyHTTPS: cl.Settings.VerifyHTTPSClient,
-		UI: cl.Settings.UI, Telemetry: !cl.Settings.DisableTelemetry, JobGC: cl.Settings.JobGCThreshold, NodePool: mc.NodePool,
-		Meta: mc.Meta, HostVolumes: mc.HostVolumes, Docker: mc.Docker, RawExec: mc.RawExec, Denylist: mc.Denylist, CNI: mc.CNI,
+		UI: cl.Settings.UI, Telemetry: !cl.Settings.DisableTelemetry, TelemetryOptions: cl.Settings.Telemetry,
+		JobGC: cl.Settings.JobGCThreshold, NodePool: mc.NodePool, Meta: mc.Meta, HostVolumes: mc.HostVolumes,
+		HostNetworks: mc.HostNetworks, Docker: mc.Docker, RawExec: mc.RawExec, Denylist: mc.Denylist, CNI: mc.CNI,
 		CPUTotal: mc.CPUTotalCompute}
 }
 

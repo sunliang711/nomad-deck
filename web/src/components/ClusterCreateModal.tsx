@@ -4,9 +4,13 @@ import { ArrowRight, Check, Info, Server } from 'lucide-react';
 import { apiGet, apiPost } from '../lib/api';
 import {
   buildClientSettingsPayload,
+  buildTelemetryPayload,
   ClientPluginFields,
   defaultClientPluginDraft,
+  defaultTelemetryDraft,
+  TelemetryFields,
   type ClientPluginDraft,
+  type TelemetryDraft,
 } from './NomadConfigModals';
 import { Badge, Button, EmptyState, ErrorAlert, Input, Modal, Select, StatusBadge } from './UI';
 import { useI18n } from '../lib/i18n';
@@ -30,6 +34,8 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
   const [publicURL, setPublicURL] = useState('');
   const [cniVersions, setCniVersions] = useState<string[]>([]);
   const [cniVersion, setCniVersion] = useState('');
+  const [jobGCThreshold, setJobGCThreshold] = useState('');
+  const [telemetryDraft, setTelemetryDraft] = useState<TelemetryDraft>(defaultTelemetryDraft);
   const [clientDefaults, setClientDefaults] = useState<ClientPluginDraft>(defaultClientPluginDraft);
   const [allowInsecureHTTP, setAllowInsecureHTTP] = useState(false);
   const [verifyHTTPSClient, setVerifyHTTPSClient] = useState(false);
@@ -66,6 +72,8 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
     setDatacenter('dc1');
     setPublicURL('');
     setCniVersion('');
+    setJobGCThreshold('');
+    setTelemetryDraft(defaultTelemetryDraft());
     setClientDefaults(defaultClientPluginDraft());
     setAllowInsecureHTTP(false);
     setVerifyHTTPSClient(false);
@@ -107,6 +115,8 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
             rpc_port: Number(rpcPort) || 4647,
             serf_port: Number(serfPort) || 4648,
             cni_version: cniVersion.trim() || undefined,
+            job_gc_threshold: jobGCThreshold.trim() || undefined,
+            ...buildTelemetryPayload(telemetryDraft),
             client_defaults: buildClientSettingsPayload(clientDefaults),
           }
         : {};
@@ -355,6 +365,13 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
                 />
                 {isNomad && (
                   <>
+                    <Input
+                      label={tr('Job GC 回收阈值（可选，例如 4h）', 'Job GC Threshold (optional, e.g. 4h)')}
+                      placeholder={tr('留空保持 Nomad 默认', 'Leave blank for Nomad default')}
+                      value={jobGCThreshold}
+                      onChange={(e) => setJobGCThreshold(e.target.value)}
+                    />
+                    <TelemetryFields value={telemetryDraft} onChange={setTelemetryDraft} />
                     <ClientPluginFields
                       value={clientDefaults}
                       onChange={setClientDefaults}

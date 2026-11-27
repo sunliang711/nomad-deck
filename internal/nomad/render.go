@@ -74,13 +74,43 @@ type HostVolume struct {
 	Create bool `json:"create"`
 }
 
+// HostNetwork is a client host_network block.
+type HostNetwork struct {
+	Name          string `json:"name"`
+	CIDR          string `json:"cidr,omitempty"`
+	Interface     string `json:"interface,omitempty"`
+	ReservedPorts string `json:"reserved_ports,omitempty"`
+}
+
+// TelemetrySettings customizes 40-telemetry.hcl. Zero/nil fields inherit
+// cluster defaults (collection_interval="10s", disable_hostname=true, and the
+// cluster's disable_telemetry toggle).
+type TelemetrySettings struct {
+	CollectionInterval       string `json:"collection_interval,omitempty"`
+	DisableHostname          *bool  `json:"disable_hostname,omitempty"`
+	PrometheusMetrics        *bool  `json:"prometheus_metrics,omitempty"`
+	PublishAllocationMetrics *bool  `json:"publish_allocation_metrics,omitempty"`
+	PublishNodeMetrics       *bool  `json:"publish_node_metrics,omitempty"`
+}
+
+// DanglingContainersGC configures plugin.docker.config.gc.dangling_containers.
+type DanglingContainersGC struct {
+	Enabled       bool   `json:"enabled"`
+	DryRun        bool   `json:"dry_run"`
+	Period        string `json:"period,omitempty"`
+	CreationGrace string `json:"creation_grace,omitempty"`
+}
+
 // DockerDriver configures the Docker task driver plugin.
 type DockerDriver struct {
-	AllowPrivileged bool   `json:"allow_privileged"`
-	Volumes         bool   `json:"volumes"`
-	DisableImageGC  bool   `json:"disable_image_gc"`
-	ImageGCDelay    string `json:"image_gc_delay,omitempty"`
-	AuthConfig      string `json:"auth_config,omitempty"`
+	AllowPrivileged    bool                  `json:"allow_privileged"`
+	Volumes            bool                  `json:"volumes"`
+	DisableImageGC     bool                  `json:"disable_image_gc"`
+	ImageGCDelay       string                `json:"image_gc_delay,omitempty"`
+	DisableContainerGC bool                  `json:"disable_container_gc,omitempty"`
+	DanglingContainers *DanglingContainersGC `json:"dangling_containers,omitempty"`
+	ExtraLabels        []string              `json:"extra_labels,omitempty"`
+	AuthConfig         string                `json:"auth_config,omitempty"`
 }
 
 // UISettings configures the native Nomad UI.
@@ -94,31 +124,33 @@ type UISettings struct {
 
 // NodeConfig is everything needed to render one node's config generation.
 type NodeConfig struct {
-	Region      string
-	Datacenter  string
-	NodeName    string
-	Role        string
-	Advertise   string
-	HTTPPort    int
-	RPCPort     int
-	SerfPort    int
-	Generation  int
-	Servers     []string // advertise addresses of every server (retry_join)
-	BootstrapN  int      // bootstrap_expect for servers
-	GossipKey   string
-	TLS         bool
-	VerifyHTTPS bool
-	UI          UISettings
-	Telemetry   bool
-	JobGC       string
-	NodePool    string
-	Meta        map[string]string
-	HostVolumes []HostVolume
-	Docker      DockerDriver
-	RawExec     bool
-	Denylist    []string
-	CNI         bool
-	CPUTotal    int
+	Region           string
+	Datacenter       string
+	NodeName         string
+	Role             string
+	Advertise        string
+	HTTPPort         int
+	RPCPort          int
+	SerfPort         int
+	Generation       int
+	Servers          []string // advertise addresses of every server (retry_join)
+	BootstrapN       int      // bootstrap_expect for servers
+	GossipKey        string
+	TLS              bool
+	VerifyHTTPS      bool
+	UI               UISettings
+	Telemetry        bool
+	TelemetryOptions TelemetrySettings
+	JobGC            string
+	NodePool         string
+	Meta             map[string]string
+	HostVolumes      []HostVolume
+	HostNetworks     []HostNetwork
+	Docker           DockerDriver
+	RawExec          bool
+	Denylist         []string
+	CNI              bool
+	CPUTotal         int
 	// Extra holds integration fragments (e.g. 60-vault.hcl, tls/vault-ca.crt)
 	// keyed by file name relative to the generation directory.
 	Extra map[string]string
@@ -257,15 +289,35 @@ func RenderUI(c NodeConfig) string {
 
 // RenderTelemetry renders 40-telemetry.hcl.
 func RenderTelemetry(c NodeConfig) string {
+	interval := c.TelemetryOptions.CollectionInterval
+	if interval == "" {
+		interval = "10s"
+	}
+	disableHostname := true
+	if c.TelemetryOptions.DisableHostname != nil {
+		disableHostname = *c.TelemetryOptions.DisableHostname
+	}
+	prom := c.Telemetry
+	if c.TelemetryOptions.PrometheusMetrics != nil {
+		prom = *c.TelemetryOptions.PrometheusMetrics
+	}
+	alloc := c.Telemetry
+	if c.TelemetryOptions.PublishAllocationMetrics != nil {
+		alloc = *c.TelemetryOptions.PublishAllocationMetrics
+	}
+	node := c.Telemetry
+	if c.TelemetryOptions.PublishNodeMetrics != nil {
+		node = *c.TelemetryOptions.PublishNodeMetrics
+	}
 	return fmt.Sprintf(`%s
 telemetry {
-  collection_interval        = "10s"
-  disable_hostname           = true
+  collection_interval        = %q
+  disable_hostname           = %t
   prometheus_metrics         = %t
   publish_allocation_metrics = %t
   publish_node_metrics       = %t
 }
-`, ManagedMark, c.Telemetry, c.Telemetry, c.Telemetry)
+`, ManagedMark, interval, disableHostname, prom, alloc, node)
 }
 
 // RenderHostVolume renders 70-host-volume-<name>.hcl.
@@ -278,6 +330,23 @@ client {
   }
 }
 `, ManagedMark, v.Name, v.Path, v.ReadOnly)
+}
+
+// RenderHostNetwork renders 71-host-network-<name>.hcl.
+func RenderHostNetwork(n HostNetwork) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\nclient {\n  host_network %q {\n", ManagedMark, n.Name)
+	if n.CIDR != "" {
+		fmt.Fprintf(&b, "    cidr           = %q\n", n.CIDR)
+	}
+	if n.Interface != "" {
+		fmt.Fprintf(&b, "    interface      = %q\n", n.Interface)
+	}
+	if n.ReservedPorts != "" {
+		fmt.Fprintf(&b, "    reserved_ports = %q\n", n.ReservedPorts)
+	}
+	fmt.Fprintf(&b, "  }\n}\n")
+	return b.String()
 }
 
 // RenderMeta renders 72-client-meta.hcl.
@@ -301,8 +370,24 @@ func RenderDocker(d DockerDriver) string {
 	if delay == "" {
 		delay = "3m"
 	}
-	fmt.Fprintf(&b, "    gc {\n      image       = %t\n      image_delay = %q\n      container   = true\n    }\n",
-		!d.DisableImageGC, delay)
+	fmt.Fprintf(&b, "    gc {\n      image       = %t\n      image_delay = %q\n      container   = %t\n",
+		!d.DisableImageGC, delay, !d.DisableContainerGC)
+	if dc := d.DanglingContainers; dc != nil {
+		fmt.Fprintf(&b, "\n      dangling_containers {\n")
+		fmt.Fprintf(&b, "        enabled        = %t\n", dc.Enabled)
+		fmt.Fprintf(&b, "        dry_run        = %t\n", dc.DryRun)
+		if dc.Period != "" {
+			fmt.Fprintf(&b, "        period         = %q\n", dc.Period)
+		}
+		if dc.CreationGrace != "" {
+			fmt.Fprintf(&b, "        creation_grace = %q\n", dc.CreationGrace)
+		}
+		fmt.Fprintf(&b, "      }\n")
+	}
+	fmt.Fprintf(&b, "    }\n")
+	if len(d.ExtraLabels) > 0 {
+		fmt.Fprintf(&b, "\n    extra_labels = %s\n", quoteList(d.ExtraLabels))
+	}
 	if d.AuthConfig != "" {
 		fmt.Fprintf(&b, "\n    auth {\n      config = %q\n    }\n", d.AuthConfig)
 	}
@@ -352,6 +437,12 @@ func RenderFiles(c NodeConfig) ([]GenerationFile, error) {
 				return nil, fmt.Errorf("invalid host volume name %q", v.Name)
 			}
 			files = append(files, GenerationFile{Name: "70-host-volume-" + v.Name + ".hcl", Content: []byte(RenderHostVolume(v))})
+		}
+		for _, hn := range c.HostNetworks {
+			if !reVolumeName.MatchString(hn.Name) {
+				return nil, fmt.Errorf("invalid host network name %q", hn.Name)
+			}
+			files = append(files, GenerationFile{Name: "71-host-network-" + hn.Name + ".hcl", Content: []byte(RenderHostNetwork(hn))})
 		}
 		if len(c.Meta) > 0 {
 			files = append(files, GenerationFile{Name: "72-client-meta.hcl", Content: []byte(RenderMeta(c.Meta))})

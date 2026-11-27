@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,10 +63,11 @@ type Settings struct {
 	HTTPPort          int        `json:"http_port"`
 	RPCPort           int        `json:"rpc_port"`
 	SerfPort          int        `json:"serf_port"`
-	AllowInsecureHTTP bool       `json:"allow_insecure_http"`
-	VerifyHTTPSClient bool       `json:"verify_https_client"`
-	DisableTelemetry  bool       `json:"disable_telemetry"`
-	UI                UISettings `json:"ui"`
+	AllowInsecureHTTP bool              `json:"allow_insecure_http"`
+	VerifyHTTPSClient bool              `json:"verify_https_client"`
+	DisableTelemetry  bool              `json:"disable_telemetry"`
+	Telemetry         TelemetrySettings `json:"telemetry,omitempty"`
+	UI                UISettings        `json:"ui"`
 	JobGCThreshold    string     `json:"job_gc_threshold,omitempty"`
 	// ExecEnabled allows interactive terminals and job actions (default on).
 	ExecEnabled *bool  `json:"exec_enabled,omitempty"`
@@ -93,13 +95,14 @@ func (s *Settings) defaults() {
 // ClientSettings are the client-side options of a member (ignored on pure
 // servers).
 type ClientSettings struct {
-	NodePool    string            `json:"node_pool,omitempty"`
-	Meta        map[string]string `json:"meta,omitempty"`
-	HostVolumes []HostVolume      `json:"host_volumes,omitempty"`
-	Docker      DockerDriver      `json:"docker"`
-	RawExec     bool              `json:"raw_exec"`
-	Denylist    []string          `json:"driver_denylist,omitempty"`
-	CNI         bool              `json:"cni"`
+	NodePool     string            `json:"node_pool,omitempty"`
+	Meta         map[string]string `json:"meta,omitempty"`
+	HostVolumes  []HostVolume      `json:"host_volumes,omitempty"`
+	HostNetworks []HostNetwork     `json:"host_networks,omitempty"`
+	Docker       DockerDriver      `json:"docker"`
+	RawExec      bool              `json:"raw_exec"`
+	Denylist     []string          `json:"driver_denylist,omitempty"`
+	CNI          bool              `json:"cni"`
 	// CPUTotalCompute overrides the fingerprinted CPU capacity (MHz) on
 	// hosts where Nomad cannot detect the CPU frequency.
 	CPUTotalCompute int `json:"cpu_total_compute,omitempty"`
@@ -123,12 +126,14 @@ var (
 )
 
 var (
-	reClusterName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
-	reRegion      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`)
-	reMetaKey     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
-	reDriver      = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
-	reHostPath    = regexp.MustCompile(`^/[A-Za-z0-9._/@+-]*$`)
-	reNodeName    = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
+	reClusterName   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
+	reRegion        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`)
+	reMetaKey       = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+	reDriver        = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+	reHostPath      = regexp.MustCompile(`^/[A-Za-z0-9._/@+-]*$`)
+	reNodeName      = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
+	reInterfaceName = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
+	reDockerLabel   = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 )
 
 func (s *Service) apiTimeout() time.Duration {
@@ -217,6 +222,9 @@ type CreateInput struct {
 	PublicAPIURL      string                `json:"public_api_url"`
 	AllowInsecureHTTP bool                  `json:"allow_insecure_http"`
 	VerifyHTTPSClient bool                  `json:"verify_https_client"`
+	DisableTelemetry  bool                  `json:"disable_telemetry"`
+	Telemetry         *TelemetrySettings    `json:"telemetry"`
+	JobGCThreshold    string                `json:"job_gc_threshold"`
 	HTTPPort          int                   `json:"http_port"`
 	RPCPort           int                   `json:"rpc_port"`
 	SerfPort          int                   `json:"serf_port"`
@@ -257,6 +265,74 @@ func validateHostVolumes(vols []HostVolume) error {
 	return nil
 }
 
+func validReservedPorts(raw string) error {
+	for _, part := range strings.Split(raw, ",") {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			return badRequest("reserved_ports 格式不正确（存在空项）")
+		}
+		if a, b, ok := strings.Cut(p, "-"); ok {
+			start, err1 := strconv.Atoi(strings.TrimSpace(a))
+			end, err2 := strconv.Atoi(strings.TrimSpace(b))
+			if err1 != nil || err2 != nil || start < 1 || start > 65535 || end < start || end > 65535 {
+				return badRequest("reserved_ports 端口范围 %q 不合法", p)
+			}
+			continue
+		}
+		port, err := strconv.Atoi(p)
+		if err != nil || port < 1 || port > 65535 {
+			return badRequest("reserved_ports 端口 %q 不合法", p)
+		}
+	}
+	return nil
+}
+
+func validateHostNetworks(nets []HostNetwork) error {
+	seen := map[string]bool{}
+	for i := range nets {
+		nets[i].Name = strings.TrimSpace(nets[i].Name)
+		nets[i].CIDR = strings.TrimSpace(nets[i].CIDR)
+		nets[i].Interface = strings.TrimSpace(nets[i].Interface)
+		nets[i].ReservedPorts = strings.TrimSpace(nets[i].ReservedPorts)
+		n := nets[i]
+		if !reVolumeName.MatchString(n.Name) || seen[n.Name] {
+			return badRequest("Host Network 名称 %q 不合法或重复", n.Name)
+		}
+		seen[n.Name] = true
+		if n.CIDR == "" && n.Interface == "" {
+			return badRequest("Host Network %s 需至少指定 cidr 或 interface", n.Name)
+		}
+		if n.CIDR != "" {
+			if _, _, err := net.ParseCIDR(n.CIDR); err != nil {
+				return badRequest("Host Network %s 的 CIDR %q 不合法", n.Name, n.CIDR)
+			}
+		}
+		if n.Interface != "" && !reInterfaceName.MatchString(n.Interface) {
+			return badRequest("Host Network %s 的网卡名 %q 不合法", n.Name, n.Interface)
+		}
+		if n.ReservedPorts != "" {
+			if err := validReservedPorts(n.ReservedPorts); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateTelemetry(t *TelemetrySettings) error {
+	if t == nil {
+		return nil
+	}
+	t.CollectionInterval = strings.TrimSpace(t.CollectionInterval)
+	if t.CollectionInterval != "" {
+		d, err := time.ParseDuration(t.CollectionInterval)
+		if err != nil || d <= 0 {
+			return badRequest("telemetry.collection_interval 格式不正确（需为正时长，例如 1s、10s）")
+		}
+	}
+	return nil
+}
+
 // validateClient checks client settings.
 func validateClient(c *ClientSettings) error {
 	if c.NodePool != "" && !reRegion.MatchString(c.NodePool) {
@@ -270,6 +346,9 @@ func validateClient(c *ClientSettings) error {
 	if err := validateHostVolumes(c.HostVolumes); err != nil {
 		return err
 	}
+	if err := validateHostNetworks(c.HostNetworks); err != nil {
+		return err
+	}
 	for _, d := range c.Denylist {
 		if !reDriver.MatchString(d) {
 			return badRequest("驱动名称 %q 不合法", d)
@@ -279,9 +358,36 @@ func validateClient(c *ClientSettings) error {
 		return badRequest("cpu_total_compute 不合法")
 	}
 	if c.Docker.ImageGCDelay != "" {
-		if _, err := time.ParseDuration(c.Docker.ImageGCDelay); err != nil {
+		if d, err := time.ParseDuration(c.Docker.ImageGCDelay); err != nil || d < 0 {
 			return badRequest("镜像回收延迟格式不正确")
 		}
+	}
+	if dc := c.Docker.DanglingContainers; dc != nil {
+		dc.Period = strings.TrimSpace(dc.Period)
+		dc.CreationGrace = strings.TrimSpace(dc.CreationGrace)
+		if dc.Period != "" {
+			if d, err := time.ParseDuration(dc.Period); err != nil || d <= 0 {
+				return badRequest("悬空容器回收周期格式不正确（需为正时长，例如 10m）")
+			}
+		}
+		if dc.CreationGrace != "" {
+			if d, err := time.ParseDuration(dc.CreationGrace); err != nil || d < 0 {
+				return badRequest("悬空容器创建宽限期格式不正确")
+			}
+		}
+	}
+	if len(c.Docker.ExtraLabels) > 0 {
+		seen := map[string]bool{}
+		cleaned := make([]string, 0, len(c.Docker.ExtraLabels))
+		for _, raw := range c.Docker.ExtraLabels {
+			lbl := strings.TrimSpace(raw)
+			if !reDockerLabel.MatchString(lbl) || seen[lbl] {
+				return badRequest("Docker extra_labels 项 %q 不合法或重复", raw)
+			}
+			seen[lbl] = true
+			cleaned = append(cleaned, lbl)
+		}
+		c.Docker.ExtraLabels = cleaned
 	}
 	if c.Docker.AuthConfig != "" && !reHostPath.MatchString(c.Docker.AuthConfig) {
 		return badRequest("私有仓库认证文件路径不合法")
@@ -366,11 +472,26 @@ func (s *Service) CreateCluster(ctx context.Context, actor audit.Actor, in Creat
 	if err := validateClient(&in.ClientDefaults); err != nil {
 		return nil, err
 	}
+	in.JobGCThreshold = strings.TrimSpace(in.JobGCThreshold)
+	if in.JobGCThreshold != "" {
+		if d, err := time.ParseDuration(in.JobGCThreshold); err != nil || d < 0 {
+			return nil, badRequest("job_gc_threshold 格式不正确")
+		}
+	}
+	if err := validateTelemetry(in.Telemetry); err != nil {
+		return nil, err
+	}
 	if in.ClientDefaults.CNI && in.CNIVersion == "" {
 		return nil, badRequest("启用 CNI 时需选择 CNI 版本")
 	}
 	st := Settings{HTTPPort: in.HTTPPort, RPCPort: in.RPCPort, SerfPort: in.SerfPort, AllowInsecureHTTP: in.AllowInsecureHTTP,
-		VerifyHTTPSClient: in.VerifyHTTPSClient, CNIVersion: in.CNIVersion}
+		VerifyHTTPSClient: in.VerifyHTTPSClient, DisableTelemetry: in.DisableTelemetry, JobGCThreshold: in.JobGCThreshold, CNIVersion: in.CNIVersion}
+	if in.Telemetry != nil {
+		st.Telemetry = *in.Telemetry
+		if in.Telemetry.PrometheusMetrics != nil && in.Telemetry.PublishAllocationMetrics != nil && in.Telemetry.PublishNodeMetrics != nil {
+			st.DisableTelemetry = !(*in.Telemetry.PrometheusMetrics || *in.Telemetry.PublishAllocationMetrics || *in.Telemetry.PublishNodeMetrics)
+		}
+	}
 	st.defaults()
 	cfg, _ := json.Marshal(st)
 	tlsCfg, _ := json.Marshal(map[string]any{"http": !in.AllowInsecureHTTP, "rpc": !in.AllowInsecureHTTP,

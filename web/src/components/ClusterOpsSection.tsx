@@ -302,6 +302,7 @@ export function ClusterOpsSection({
                 {clusterNodes.map((n: any) => {
                   const cfg = nodeConfigs?.[n.node_id];
                   const hvCount = Array.isArray(cfg?.host_volumes) ? cfg.host_volumes.length : 0;
+                  const hnCount = Array.isArray(cfg?.host_networks) ? cfg.host_networks.length : 0;
                   return (
                     <div key={n.node_id} className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-1.5 font-mono">
@@ -310,6 +311,7 @@ export function ClusterOpsSection({
                         {cfg?.cni && <Badge tone="blue">CNI</Badge>}
                         {cfg?.raw_exec && <Badge tone="amber">raw_exec</Badge>}
                         {hvCount > 0 && <Badge tone="green">HostVolume×{hvCount}</Badge>}
+                        {hnCount > 0 && <Badge tone="blue">HostNet×{hnCount}</Badge>}
                       </div>
                       {onConfigureNode && (
                         <Button size="sm" disabled={blocked} onClick={() => onConfigureNode(n)}>
@@ -568,6 +570,9 @@ export function ClusterOpsSection({
                               {nodeConfigs?.[n.node_id]?.raw_exec && <Badge tone="amber">raw_exec</Badge>}
                               {Array.isArray(nodeConfigs?.[n.node_id]?.host_volumes) && nodeConfigs[n.node_id].host_volumes.length > 0 && (
                                 <Badge tone="green">HV×{nodeConfigs[n.node_id].host_volumes.length}</Badge>
+                              )}
+                              {Array.isArray(nodeConfigs?.[n.node_id]?.host_networks) && nodeConfigs[n.node_id].host_networks.length > 0 && (
+                                <Badge tone="blue">HN×{nodeConfigs[n.node_id].host_networks.length}</Badge>
                               )}
                             </div>
                           )}

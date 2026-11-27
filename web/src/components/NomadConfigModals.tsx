@@ -16,6 +16,29 @@ export interface HostVolumeDraft {
   customPath?: boolean;
 }
 
+export interface HostNetworkDraft {
+  name: string;
+  cidr: string;
+  interface: string;
+  reserved_ports: string;
+}
+
+export interface DanglingContainersDraft {
+  customized: boolean;
+  enabled: boolean;
+  dry_run: boolean;
+  period: string;
+  creation_grace: string;
+}
+
+export interface TelemetryDraft {
+  collection_interval: string;
+  disable_hostname: boolean;
+  prometheus_metrics: boolean;
+  publish_allocation_metrics: boolean;
+  publish_node_metrics: boolean;
+}
+
 export interface MetaDraft {
   key: string;
   value: string;
@@ -29,17 +52,59 @@ export interface ClientPluginDraft {
   driver_denylist: string[];
   extra_denylist: string;
   host_volumes: HostVolumeDraft[];
+  host_networks: HostNetworkDraft[];
   meta: MetaDraft[];
   docker: {
     allow_privileged: boolean;
     volumes: boolean;
     disable_image_gc: boolean;
     image_gc_delay: string;
+    disable_container_gc: boolean;
+    dangling_containers: DanglingContainersDraft;
+    extra_labels: string;
     auth_config: string;
   };
 }
 
 const COMMON_DRIVERS = ['docker', 'exec', 'raw_exec', 'java', 'qemu'];
+const COMMON_DOCKER_EXTRA_LABELS = 'job_name, task_group_name, task_name, namespace, node_name, short_alloc_id';
+
+export function defaultTelemetryDraft(): TelemetryDraft {
+  return {
+    collection_interval: '10s',
+    disable_hostname: true,
+    prometheus_metrics: true,
+    publish_allocation_metrics: true,
+    publish_node_metrics: true,
+  };
+}
+
+export function telemetryDraftFromSettings(settings: any): TelemetryDraft {
+  const st = settings || {};
+  const t = st.telemetry || {};
+  const enabled = !st.disable_telemetry;
+  return {
+    collection_interval: t.collection_interval || '10s',
+    disable_hostname: t.disable_hostname !== undefined ? Boolean(t.disable_hostname) : true,
+    prometheus_metrics: t.prometheus_metrics !== undefined ? Boolean(t.prometheus_metrics) : enabled,
+    publish_allocation_metrics: t.publish_allocation_metrics !== undefined ? Boolean(t.publish_allocation_metrics) : enabled,
+    publish_node_metrics: t.publish_node_metrics !== undefined ? Boolean(t.publish_node_metrics) : enabled,
+  };
+}
+
+export function buildTelemetryPayload(draft: TelemetryDraft) {
+  const interval = draft.collection_interval.trim() || '10s';
+  return {
+    disable_telemetry: !(draft.prometheus_metrics || draft.publish_allocation_metrics || draft.publish_node_metrics),
+    telemetry: {
+      collection_interval: interval,
+      disable_hostname: draft.disable_hostname,
+      prometheus_metrics: draft.prometheus_metrics,
+      publish_allocation_metrics: draft.publish_allocation_metrics,
+      publish_node_metrics: draft.publish_node_metrics,
+    },
+  };
+}
 
 export function defaultClientPluginDraft(): ClientPluginDraft {
   return {
@@ -50,12 +115,22 @@ export function defaultClientPluginDraft(): ClientPluginDraft {
     driver_denylist: [],
     extra_denylist: '',
     host_volumes: [],
+    host_networks: [],
     meta: [],
     docker: {
       allow_privileged: false,
       volumes: true,
       disable_image_gc: false,
       image_gc_delay: '3m',
+      disable_container_gc: false,
+      dangling_containers: {
+        customized: false,
+        enabled: true,
+        dry_run: false,
+        period: '5m',
+        creation_grace: '5m',
+      },
+      extra_labels: '',
       auth_config: '',
     },
   };
@@ -64,6 +139,7 @@ export function defaultClientPluginDraft(): ClientPluginDraft {
 export function clientPluginDraftFromConfig(cfg: any): ClientPluginDraft {
   const c = cfg || {};
   const d = c.docker || {};
+  const dc = d.dangling_containers || null;
   const deny = Array.isArray(c.driver_denylist) ? (c.driver_denylist as string[]) : [];
   const knownDeny = deny.filter((x) => COMMON_DRIVERS.includes(x));
   const extraDeny = deny.filter((x) => !COMMON_DRIVERS.includes(x)).join(', ');
@@ -76,10 +152,19 @@ export function clientPluginDraftFromConfig(cfg: any): ClientPluginDraft {
         customPath: true,
       }))
     : [];
+  const nets: HostNetworkDraft[] = Array.isArray(c.host_networks)
+    ? c.host_networks.map((hn: any) => ({
+        name: hn.name || '',
+        cidr: hn.cidr || '',
+        interface: hn.interface || '',
+        reserved_ports: hn.reserved_ports || '',
+      }))
+    : [];
   const metaObj = c.meta && typeof c.meta === 'object' ? (c.meta as Record<string, string>) : {};
   const metaRows: MetaDraft[] = Object.entries(metaObj)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => ({ key, value: String(value ?? '') }));
+  const extraLabels = Array.isArray(d.extra_labels) ? (d.extra_labels as string[]).join(', ') : '';
 
   return {
     cni: Boolean(c.cni),
@@ -89,12 +174,22 @@ export function clientPluginDraftFromConfig(cfg: any): ClientPluginDraft {
     driver_denylist: knownDeny,
     extra_denylist: extraDeny,
     host_volumes: vols,
+    host_networks: nets,
     meta: metaRows,
     docker: {
       allow_privileged: Boolean(d.allow_privileged),
       volumes: d.volumes !== undefined ? Boolean(d.volumes) : true,
       disable_image_gc: Boolean(d.disable_image_gc),
       image_gc_delay: d.image_gc_delay || '3m',
+      disable_container_gc: Boolean(d.disable_container_gc),
+      dangling_containers: {
+        customized: Boolean(dc),
+        enabled: dc?.enabled !== undefined ? Boolean(dc.enabled) : true,
+        dry_run: Boolean(dc?.dry_run),
+        period: dc?.period || '5m',
+        creation_grace: dc?.creation_grace || '5m',
+      },
+      extra_labels: extraLabels,
       auth_config: d.auth_config || '',
     },
   };
@@ -119,6 +214,23 @@ export function buildClientSettingsPayload(draft: ClientPluginDraft) {
       read_only: v.read_only,
       create: v.create,
     }));
+  const hostNetworks = draft.host_networks
+    .filter((n) => n.name.trim() || n.cidr.trim() || n.interface.trim() || n.reserved_ports.trim())
+    .map((n) => ({
+      name: n.name.trim(),
+      cidr: n.cidr.trim() || undefined,
+      interface: n.interface.trim() || undefined,
+      reserved_ports: n.reserved_ports.trim() || undefined,
+    }));
+  const extraLabels = Array.from(
+    new Set(
+      draft.docker.extra_labels
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  );
+  const dc = draft.docker.dangling_containers;
 
   return {
     cni: draft.cni,
@@ -127,15 +239,86 @@ export function buildClientSettingsPayload(draft: ClientPluginDraft) {
     cpu_total_compute: Number(draft.cpu_total_compute) || 0,
     driver_denylist: denylist.length > 0 ? denylist : undefined,
     host_volumes: hostVolumes.length > 0 ? hostVolumes : undefined,
+    host_networks: hostNetworks.length > 0 ? hostNetworks : undefined,
     meta: Object.keys(meta).length > 0 ? meta : undefined,
     docker: {
       allow_privileged: draft.docker.allow_privileged,
       volumes: draft.docker.volumes,
       disable_image_gc: draft.docker.disable_image_gc,
       image_gc_delay: draft.docker.image_gc_delay.trim() || undefined,
+      disable_container_gc: draft.docker.disable_container_gc || undefined,
+      dangling_containers: dc.customized
+        ? {
+            enabled: dc.enabled,
+            dry_run: dc.dry_run,
+            period: dc.period.trim() || undefined,
+            creation_grace: dc.creation_grace.trim() || undefined,
+          }
+        : undefined,
+      extra_labels: extraLabels.length > 0 ? extraLabels : undefined,
       auth_config: draft.docker.auth_config.trim() || undefined,
     },
   };
+}
+
+export function TelemetryFields({
+  value,
+  onChange,
+}: {
+  value: TelemetryDraft;
+  onChange: (next: TelemetryDraft) => void;
+}) {
+  const { tr } = useI18n();
+  return (
+    <div className="space-y-3 rounded-xl border border-slate-200 dark:border-slate-700 p-3.5 text-xs">
+      <div className="font-semibold text-slate-800 dark:text-slate-100">
+        {tr('运行指标采集 (40-telemetry.hcl)', 'Telemetry (40-telemetry.hcl)')}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+        <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-200">
+          <input
+            type="checkbox"
+            checked={value.prometheus_metrics}
+            onChange={(e) => onChange({ ...value, prometheus_metrics: e.target.checked })}
+          />
+          <span>{tr('暴露 Prometheus 指标 (prometheus_metrics)', 'Expose Prometheus Metrics')}</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-200">
+          <input
+            type="checkbox"
+            checked={value.publish_allocation_metrics}
+            onChange={(e) => onChange({ ...value, publish_allocation_metrics: e.target.checked })}
+          />
+          <span>{tr('上报 Allocation 指标 (publish_allocation_metrics)', 'Publish Allocation Metrics')}</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-200">
+          <input
+            type="checkbox"
+            checked={value.publish_node_metrics}
+            onChange={(e) => onChange({ ...value, publish_node_metrics: e.target.checked })}
+          />
+          <span>{tr('上报 Node 指标 (publish_node_metrics)', 'Publish Node Metrics')}</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-200">
+          <input
+            type="checkbox"
+            checked={value.disable_hostname}
+            onChange={(e) => onChange({ ...value, disable_hostname: e.target.checked })}
+          />
+          <span>{tr('指标名省略主机名前缀 (disable_hostname)', 'Omit Hostname Prefix (disable_hostname)')}</span>
+        </label>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Input
+          label={tr('指标采集周期 (collection_interval)', 'Collection Interval')}
+          placeholder="10s"
+          hint={tr('Go 时长格式，例如 1s、10s、1m', 'Go duration, e.g. 1s, 10s, 1m')}
+          value={value.collection_interval}
+          onChange={(e) => onChange({ ...value, collection_interval: e.target.value })}
+        />
+      </div>
+    </div>
+  );
 }
 
 export function ClientPluginFields({
@@ -350,6 +533,112 @@ export function ClientPluginFields({
         )}
       </div>
 
+      {/* Host Networks */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="font-semibold text-slate-800 dark:text-slate-100">
+            <TermLabel
+              term={tr('Host Networks（宿主机网络）', 'Host Networks')}
+              tip={tr('在 Client 节点生成 71-host-network-<name>.hcl（client { host_network }），需至少填写 CIDR 或网卡名，Job 端口可通过 host_network 绑定指定网络。', 'Generates 71-host-network-<name>.hcl (client { host_network }) on Client nodes. Specify cidr and/or interface so Job ports can bind via host_network.')}
+            />
+          </div>
+          <Button
+            size="sm"
+            onClick={() =>
+              onChange({
+                ...value,
+                host_networks: [
+                  ...value.host_networks,
+                  { name: '', cidr: '', interface: '', reserved_ports: '' },
+                ],
+              })
+            }
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>{tr('添加网络', 'Add Network')}</span>
+          </Button>
+        </div>
+        {value.host_networks.length === 0 ? (
+          <p className="text-slate-500">{tr('未配置 Host Network（默认使用宿主机主网卡）。', 'No Host Networks configured.')}</p>
+        ) : (
+          <div className="space-y-2.5">
+            {value.host_networks.map((hn, idx) => (
+              <div key={idx} className="rounded-lg border border-slate-200/80 dark:border-slate-800 p-2.5 space-y-2 bg-slate-50/50 dark:bg-slate-950/30">
+                <div className="grid grid-cols-1 sm:grid-cols-[130px_1fr_1fr_1fr_auto] gap-2 items-end">
+                  <Input
+                    label={tr('网络名称', 'Name')}
+                    required
+                    placeholder="loopback"
+                    pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,62}"
+                    value={hn.name}
+                    onChange={(e) =>
+                      onChange({
+                        ...value,
+                        host_networks: value.host_networks.map((item, i) =>
+                          i === idx ? { ...item, name: e.target.value } : item,
+                        ),
+                      })
+                    }
+                  />
+                  <Input
+                    label="CIDR"
+                    placeholder="127.0.0.1/32"
+                    value={hn.cidr}
+                    onChange={(e) =>
+                      onChange({
+                        ...value,
+                        host_networks: value.host_networks.map((item, i) =>
+                          i === idx ? { ...item, cidr: e.target.value } : item,
+                        ),
+                      })
+                    }
+                  />
+                  <Input
+                    label={tr('网卡接口 (interface)', 'Interface')}
+                    placeholder={tr('例如 lo / eth0', 'e.g. lo / eth0')}
+                    value={hn.interface}
+                    onChange={(e) =>
+                      onChange({
+                        ...value,
+                        host_networks: value.host_networks.map((item, i) =>
+                          i === idx ? { ...item, interface: e.target.value } : item,
+                        ),
+                      })
+                    }
+                  />
+                  <Input
+                    label={tr('保留端口 (reserved_ports)', 'Reserved Ports')}
+                    placeholder={tr('例如 22,80-85', 'e.g. 22,80-85')}
+                    value={hn.reserved_ports}
+                    onChange={(e) =>
+                      onChange({
+                        ...value,
+                        host_networks: value.host_networks.map((item, i) =>
+                          i === idx ? { ...item, reserved_ports: e.target.value } : item,
+                        ),
+                      })
+                    }
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    title={tr('移除该 Host Network', 'Remove Host Network')}
+                    onClick={() =>
+                      onChange({
+                        ...value,
+                        host_networks: value.host_networks.filter((_, i) => i !== idx),
+                      })
+                    }
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-rose-500" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Task Drivers: Docker / raw_exec / Denylist */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5 space-y-3">
         <div className="font-semibold text-slate-800 dark:text-slate-100">{tr('任务驱动插件（Docker / raw_exec / 驱动黑白名单）', 'Task Drivers (Docker / raw_exec / Denylist)')}</div>
@@ -378,7 +667,15 @@ export function ClientPluginFields({
             />
             <span>{tr('关闭 Docker 镜像自动 GC', 'Disable Docker Image Auto-GC')}</span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer text-amber-700 dark:text-amber-300">
+          <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-200">
+            <input
+              type="checkbox"
+              checked={value.docker.disable_container_gc}
+              onChange={(e) => onChange({ ...value, docker: { ...value.docker, disable_container_gc: e.target.checked } })}
+            />
+            <span>{tr('关闭 Docker 容器自动 GC (gc.container=false)', 'Disable Docker Container GC (gc.container=false)')}</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer text-amber-700 dark:text-amber-300 sm:col-span-2">
             <input
               type="checkbox"
               checked={value.raw_exec}
@@ -389,7 +686,7 @@ export function ClientPluginFields({
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Input
-            label={tr('Docker 镜像 GC 延迟', 'Docker Image GC Delay')}
+            label={tr('Docker 镜像 GC 延迟 (gc.image_delay)', 'Docker Image GC Delay')}
             placeholder="3m"
             value={value.docker.image_gc_delay}
             onChange={(e) => onChange({ ...value, docker: { ...value.docker, image_gc_delay: e.target.value } })}
@@ -400,6 +697,111 @@ export function ClientPluginFields({
             value={value.docker.auth_config}
             onChange={(e) => onChange({ ...value, docker: { ...value.docker, auth_config: e.target.value } })}
           />
+        </div>
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-medium text-slate-700 dark:text-slate-300">
+              {tr('Docker 附加容器标签 (extra_labels，逗号分隔)', 'Docker Extra Labels (extra_labels, comma-separated)')}
+            </span>
+            <button
+              type="button"
+              onClick={() => onChange({ ...value, docker: { ...value.docker, extra_labels: COMMON_DOCKER_EXTRA_LABELS } })}
+              className="text-indigo-600 hover:underline dark:text-indigo-400"
+            >
+              {tr('填入常用 Nomad 标签', 'Fill common Nomad labels')}
+            </button>
+          </div>
+          <Input
+            placeholder="job_name, task_group_name, task_name, namespace, node_name, short_alloc_id"
+            value={value.docker.extra_labels}
+            onChange={(e) => onChange({ ...value, docker: { ...value.docker, extra_labels: e.target.value } })}
+          />
+        </div>
+        <div className="rounded-lg border border-slate-200/80 dark:border-slate-800 p-2.5 space-y-2.5 bg-slate-50/50 dark:bg-slate-950/30">
+          <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700 dark:text-slate-200">
+            <input
+              type="checkbox"
+              checked={value.docker.dangling_containers.customized}
+              onChange={(e) =>
+                onChange({
+                  ...value,
+                  docker: {
+                    ...value.docker,
+                    dangling_containers: { ...value.docker.dangling_containers, customized: e.target.checked },
+                  },
+                })
+              }
+            />
+            <span>{tr('自定义 Docker 悬空容器回收策略 (gc.dangling_containers)', 'Customize Dangling Containers GC (gc.dangling_containers)')}</span>
+          </label>
+          {value.docker.dangling_containers.customized && (
+            <div className="space-y-2.5 pt-1">
+              <div className="flex flex-wrap gap-4">
+                <label className="flex items-center gap-1.5 cursor-pointer text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={value.docker.dangling_containers.enabled}
+                    onChange={(e) =>
+                      onChange({
+                        ...value,
+                        docker: {
+                          ...value.docker,
+                          dangling_containers: { ...value.docker.dangling_containers, enabled: e.target.checked },
+                        },
+                      })
+                    }
+                  />
+                  <span>{tr('启用悬空容器清理 (enabled)', 'Enabled')}</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={value.docker.dangling_containers.dry_run}
+                    onChange={(e) =>
+                      onChange({
+                        ...value,
+                        docker: {
+                          ...value.docker,
+                          dangling_containers: { ...value.docker.dangling_containers, dry_run: e.target.checked },
+                        },
+                      })
+                    }
+                  />
+                  <span>{tr('仅演练不删除 (dry_run)', 'Dry Run')}</span>
+                </label>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Input
+                  label={tr('巡检周期 (period)', 'Period')}
+                  placeholder="10m"
+                  value={value.docker.dangling_containers.period}
+                  onChange={(e) =>
+                    onChange({
+                      ...value,
+                      docker: {
+                        ...value.docker,
+                        dangling_containers: { ...value.docker.dangling_containers, period: e.target.value },
+                      },
+                    })
+                  }
+                />
+                <Input
+                  label={tr('创建宽限期 (creation_grace)', 'Creation Grace')}
+                  placeholder="10m"
+                  value={value.docker.dangling_containers.creation_grace}
+                  onChange={(e) =>
+                    onChange({
+                      ...value,
+                      docker: {
+                        ...value.docker,
+                        dangling_containers: { ...value.docker.dangling_containers, creation_grace: e.target.value },
+                      },
+                    })
+                  }
+                />
+              </div>
+            </div>
+          )}
         </div>
         <div className="space-y-2 pt-1">
           <div className="text-slate-700 dark:text-slate-300 font-medium">{tr('驱动禁用列表（driver.denylist）', 'Driver Denylist (driver.denylist)')}</div>
@@ -517,7 +919,7 @@ export function NomadClusterSettingsModal({
   const [cniVersions, setCniVersions] = useState<string[]>([]);
   const [cniVersion, setCniVersion] = useState('');
   const [publicURL, setPublicURL] = useState('');
-  const [telemetry, setTelemetry] = useState(true);
+  const [telemetryDraft, setTelemetryDraft] = useState<TelemetryDraft>(defaultTelemetryDraft);
   const [uiEnabled, setUiEnabled] = useState(true);
   const [uiLabel, setUiLabel] = useState('');
   const [uiLabelBG, setUiLabelBG] = useState('');
@@ -538,7 +940,7 @@ export function NomadClusterSettingsModal({
     const ui = st.ui || {};
     setCniVersion(st.cni_version || '');
     setPublicURL(cluster.public_api_url || '');
-    setTelemetry(!st.disable_telemetry);
+    setTelemetryDraft(telemetryDraftFromSettings(st));
     setUiEnabled(!ui.disabled);
     setUiLabel(ui.label || '');
     setUiLabelBG(ui.label_background || '');
@@ -566,7 +968,7 @@ export function NomadClusterSettingsModal({
       const res = await apiPut(`/api/v1/clusters/${cluster.id}`, {
         public_api_url: publicURL.trim(),
         cni_version: cniVersion,
-        disable_telemetry: !telemetry,
+        ...buildTelemetryPayload(telemetryDraft),
         job_gc_threshold: jobGC.trim(),
         exec_enabled: execEnabled,
         confirm_single_node: confirmSingle,
@@ -614,15 +1016,11 @@ export function NomadClusterSettingsModal({
           onChange={(e) => setPublicURL(e.target.value)}
         />
         <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5 space-y-3">
-          <div className="font-semibold text-slate-800 dark:text-slate-100">{tr('Nomad 原生 UI 与运行指标', 'Nomad Native UI & Telemetry')}</div>
+          <div className="font-semibold text-slate-800 dark:text-slate-100">{tr('Nomad 原生 UI 与交互控制', 'Nomad Native UI & Exec Controls')}</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={uiEnabled} onChange={(e) => setUiEnabled(e.target.checked)} />
               <span>{tr('启用 Nomad 原生 UI（35-ui.hcl）', 'Enable Nomad Native UI (35-ui.hcl)')}</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={telemetry} onChange={(e) => setTelemetry(e.target.checked)} />
-              <span>{tr('启用 Prometheus Telemetry（40-telemetry.hcl）', 'Enable Prometheus Telemetry (40-telemetry.hcl)')}</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={execEnabled} onChange={(e) => setExecEnabled(e.target.checked)} />
@@ -644,6 +1042,7 @@ export function NomadClusterSettingsModal({
             </div>
           )}
         </div>
+        <TelemetryFields value={telemetryDraft} onChange={setTelemetryDraft} />
         {isSingleDeployed && (
           <label className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 cursor-pointer">
             <input

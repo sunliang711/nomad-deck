@@ -325,12 +325,24 @@ func TestUndeployedNodeConfigAndCNISettings(t *testing.T) {
 	}
 	task, err := e.s.UpdateNodeConfig(ctx, testActor, cl.ID, "h1", NodeConfigInput{
 		ClientSettings: ClientSettings{
-			CNI:         true,
-			RawExec:     true,
-			Denylist:    []string{"java"},
-			Meta:        map[string]string{"env": "lab"},
-			HostVolumes: []HostVolume{{Name: "data", Path: "/opt/nomad-deck/nomad/volumes/data", Create: true}},
-			Docker:      DockerDriver{Volumes: true, AllowPrivileged: true, ImageGCDelay: "5m"},
+			CNI:          true,
+			RawExec:      true,
+			Denylist:     []string{"java"},
+			Meta:         map[string]string{"env": "lab"},
+			HostVolumes:  []HostVolume{{Name: "data", Path: "/opt/nomad-deck/nomad/volumes/data", Create: true}},
+			HostNetworks: []HostNetwork{{Name: "loopback", CIDR: "127.0.0.1/32", ReservedPorts: "22,80-85"}},
+			Docker: DockerDriver{
+				Volumes:         true,
+				AllowPrivileged: true,
+				ImageGCDelay:    "100h",
+				DanglingContainers: &DanglingContainersGC{
+					Enabled:       true,
+					DryRun:        false,
+					Period:        "10m",
+					CreationGrace: "10m",
+				},
+				ExtraLabels: []string{"job_name", "task_name"},
+			},
 		},
 		ReinstallCNI: true,
 	})
@@ -349,8 +361,46 @@ func TestUndeployedNodeConfigAndCNISettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	mc := memberConfig(m1)
-	if !mc.CNI || !mc.RawExec || len(mc.HostVolumes) != 1 || mc.Meta["env"] != "lab" || !mc.Docker.AllowPrivileged {
+	if !mc.CNI || !mc.RawExec || len(mc.HostVolumes) != 1 || len(mc.HostNetworks) != 1 || mc.HostNetworks[0].CIDR != "127.0.0.1/32" ||
+		mc.Meta["env"] != "lab" || !mc.Docker.AllowPrivileged || mc.Docker.DanglingContainers == nil || len(mc.Docker.ExtraLabels) != 2 {
 		t.Fatalf("unexpected persisted member config: %+v", mc)
+	}
+	// Validation guards for invalid host_network, telemetry interval, and docker dangling_containers.
+	if _, err := e.s.UpdateNodeConfig(ctx, testActor, cl.ID, "h1", NodeConfigInput{
+		ClientSettings: ClientSettings{HostNetworks: []HostNetwork{{Name: "bad", CIDR: "not-a-cidr"}}},
+	}); err == nil {
+		t.Fatal("expected invalid CIDR to fail")
+	}
+	if _, err := e.s.UpdateNodeConfig(ctx, testActor, cl.ID, "h1", NodeConfigInput{
+		ClientSettings: ClientSettings{HostNetworks: []HostNetwork{{Name: "empty"}}},
+	}); err == nil {
+		t.Fatal("expected host_network without cidr/interface to fail")
+	}
+	if _, err := e.s.UpdateNodeConfig(ctx, testActor, cl.ID, "h1", NodeConfigInput{
+		ClientSettings: ClientSettings{HostNetworks: []HostNetwork{{Name: "badport", CIDR: "127.0.0.1/32", ReservedPorts: "90-80"}}},
+	}); err == nil {
+		t.Fatal("expected invalid reserved_ports range to fail")
+	}
+	badInterval := "0s"
+	if _, err := e.s.UpdateSettings(ctx, testActor, cl.ID, SettingsInput{Telemetry: &TelemetrySettings{CollectionInterval: badInterval}}); err == nil {
+		t.Fatal("expected non-positive telemetry collection_interval to fail")
+	}
+	goodInterval := "1s"
+	disableHost := false
+	jobGC := "4h"
+	if _, err := e.s.UpdateSettings(ctx, testActor, cl.ID, SettingsInput{
+		JobGCThreshold: &jobGC,
+		Telemetry: &TelemetrySettings{
+			CollectionInterval: goodInterval,
+			DisableHostname:    &disableHost,
+		},
+	}); err != nil {
+		t.Fatalf("update pending cluster telemetry/job_gc_threshold: %v", err)
+	}
+	updatedCl := e.load()
+	if updatedCl.Settings.JobGCThreshold != "4h" || updatedCl.Settings.Telemetry.CollectionInterval != "1s" ||
+		updatedCl.Settings.Telemetry.DisableHostname == nil || *updatedCl.Settings.Telemetry.DisableHostname {
+		t.Fatalf("unexpected persisted cluster settings: %+v", updatedCl.Settings)
 	}
 }
 

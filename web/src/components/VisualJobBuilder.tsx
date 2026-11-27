@@ -497,6 +497,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
   const docRef = useRef<HCLDocument | null>(null);
   const formPanelRef = useRef<HTMLDivElement>(null);
   const treePanelRef = useRef<HTMLDivElement>(null);
+  const vaultRoleInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const query = window.matchMedia('(min-width: 1440px)');
@@ -2525,9 +2526,31 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           actions={
             !readOnly && (
               <div className="flex flex-wrap items-center gap-1.5">
-                <Button size="sm" onClick={() => setShowVaultWizardInline((v) => !v)}>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (!vaultBlk) {
+                      setShowVaultWizardInline(false);
+                      toast.error(tr('请先在下方绑定 Vault 身份 (vault.role)，再接入 Vault 密钥', 'Please bind a Vault identity (vault.role) below before adding Vault secrets'));
+                      vaultRoleInputRef.current?.focus();
+                      return;
+                    }
+                    setShowVaultWizardInline((v) => {
+                      const next = !v;
+                      if (next) {
+                        const matched = vaultRoles.find((r) => r.role === vaultRoleVal);
+                        setVaultHelper((prev) => ({
+                          ...prev,
+                          role: vaultRoleVal || 'default',
+                          secretPath: matched?.secret_paths?.[0] || prev.secretPath,
+                        }));
+                      }
+                      return next;
+                    });
+                  }}
+                >
                   <KeyRound className="h-3.5 w-3.5" />
-                  <span>{showVaultWizardInline ? tr('收起快捷向导', 'Hide Wizard') : tr('一键接入 Vault 密钥', 'Vault Secret Wizard')}</span>
+                  <span>{showVaultWizardInline && vaultBlk ? tr('收起快捷向导', 'Hide Wizard') : tr('一键接入 Vault 密钥', 'Vault Secret Wizard')}</span>
                 </Button>
                 <Button size="sm" onClick={() => commit(addTaskTemplateBlock(document, tPath))}>
                   <Plus className="h-3.5 w-3.5" />
@@ -2542,7 +2565,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-slate-800 dark:text-slate-100">{tr('Vault 身份绑定 (vault.role)', 'Vault Identity Binding (vault.role)')}</span>
-                {vaultBlk ? <Badge tone="green">{tr('已绑定', 'Bound')} {vaultRoleVal || 'default'}</Badge> : <Badge>{tr('未启用', 'Disabled')}</Badge>}
+                {vaultBlk ? <Badge tone="green">{tr('已绑定', 'Bound')} {vaultRoleVal || 'default'}</Badge> : <Badge>{tr('未绑定', 'Unbound')}</Badge>}
               </div>
               <div className="flex items-center gap-2">
                 <Link to="/integrations" className="text-[11px] text-indigo-600 hover:underline dark:text-indigo-400">
@@ -2551,7 +2574,10 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 {!readOnly && vaultBlk && (
                   <button
                     type="button"
-                    onClick={() => commit(setTaskVault(document, tPath, null))}
+                    onClick={() => {
+                      setShowVaultWizardInline(false);
+                      commit(setTaskVault(document, tPath, null));
+                    }}
                     className="text-[11px] text-rose-600 hover:underline dark:text-rose-400"
                   >
                     {tr('解除绑定', 'Unbind')}
@@ -2588,12 +2614,14 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] items-center">
               <input
+                ref={vaultRoleInputRef}
                 aria-label={tr('自定义 Vault Role 名称', 'Custom Vault Role name')}
                 disabled={readOnly}
                 value={vaultRoleVal}
                 placeholder={vaultIntegrations.length === 0 ? tr('未建联动，或直接填写 Role 名', 'No integration yet, or enter role name') : tr('选择上方 Role 或手动输入', 'Pick a Role above or enter manually')}
                 onChange={(e) => {
                   const v = e.target.value;
+                  if (!v) setShowVaultWizardInline(false);
                   commit(setTaskVault(document, tPath, v ? v : null, { env: vaultEnvVal }));
                 }}
                 className="rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
@@ -2613,39 +2641,17 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           </div>
 
           {/* Inline quick Vault Secret wizard */}
-          {showVaultWizardInline && !readOnly && (
+          {showVaultWizardInline && !readOnly && vaultBlk && (
             <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-3.5 space-y-3 dark:border-indigo-500/30 dark:bg-indigo-950/25">
               <div className="font-semibold text-indigo-950 dark:text-indigo-100">
-                {tr(`为任务「${taskName}」一键生成 vault + template 密钥配置`, `Generate vault + template secret config for task "${taskName}"`)}
+                {tr(`为任务「${taskName}」一键生成密钥模板（已绑定身份：${vaultRoleVal || 'default'}）`, `Generate secret template for task "${taskName}" (Bound role: ${vaultRoleVal || 'default'})`)}
               </div>
-              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                <Input
-                  label={tr('Vault Role 名称', 'Vault Role Name')}
-                  list="vb-inline-vault-roles"
-                  value={vaultHelper.role}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    const matched = vaultRoles.find((r) => r.role === val);
-                    setVaultHelper((prev) => ({
-                      ...prev,
-                      role: val,
-                      secretPath: matched?.secret_paths?.[0] || prev.secretPath,
-                    }));
-                  }}
-                  placeholder={tr('例如 postgres', 'e.g. postgres')}
-                />
-                <datalist id="vb-inline-vault-roles">
-                  {vaultRoles.map((r) => (
-                    <option key={r.role} value={r.role} />
-                  ))}
-                </datalist>
-                <Input
-                  label={tr('Secret 路径（自动补全 /data/）', 'Secret Path (auto /data/)')}
-                  value={vaultHelper.secretPath}
-                  onChange={(e) => setVaultHelper((prev) => ({ ...prev, secretPath: e.target.value }))}
-                  placeholder="secret/apps/postgres"
-                />
-              </div>
+              <Input
+                label={tr('Secret 路径（自动补全 /data/）', 'Secret Path (auto /data/)')}
+                value={vaultHelper.secretPath}
+                onChange={(e) => setVaultHelper((prev) => ({ ...prev, secretPath: e.target.value }))}
+                placeholder="secret/apps/postgres"
+              />
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 <Select
                   label={tr('注入方式', 'Injection Mode')}
@@ -2693,11 +2699,12 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                     const templateData = buildTemplateData(parsed.templatePath, keys, vaultHelper.mode);
                     commit(
                       applyVaultToTask(document, tPath, {
-                        role: vaultHelper.role.trim() || 'default',
+                        role: vaultRoleVal || 'default',
                         templateData,
                         mode: vaultHelper.mode,
                         fileName: vaultHelper.fileName,
                         envVarName: vaultHelper.envVarName,
+                        vaultEnv: vaultEnvVal,
                       }),
                     );
                     setShowVaultWizardInline(false);

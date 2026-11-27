@@ -203,6 +203,7 @@ export interface TaskVaultInsertOptions {
   mode: 'env' | 'file';
   fileName?: string;
   envVarName?: string;
+  vaultEnv?: boolean;
 }
 
 function upsertAttribute(body: HCLDocument, name: string, expression: string) {
@@ -232,7 +233,7 @@ export function applyVaultToTask(
     }
     vaultBlock.body = vaultBlock.body || { nodes: [], trailing: '\n' };
     upsertAttribute(vaultBlock.body, 'role', JSON.stringify(opts.role || 'default'));
-    upsertAttribute(vaultBlock.body, 'env', 'false');
+    upsertAttribute(vaultBlock.body, 'env', opts.vaultEnv ? 'true' : 'false');
 
     const safeFile = (opts.fileName || 'app.secret').replace(/^\/+/, '');
     if (opts.mode === 'file') {

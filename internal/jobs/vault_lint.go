@@ -14,6 +14,8 @@ type VaultIntegrationRef struct {
 	NomadSideEnabled bool
 	TargetClusterID  string
 	VaultTLSEnabled  bool
+	ConfigDrifted    bool
+	DriftReasons     []string
 	KVMountsQueried  bool
 	KVMounts         []string
 	Roles            []VaultRoleRef
@@ -157,7 +159,18 @@ func AnalyzeJobRequirements(j Job, integrations []VaultIntegrationRef, fallbackN
 						"Task %q 使用了 Vault 联动，但联动配置「%s」尚未应用生效（当前状态：%s），请先在「集群联动」点击「应用联动」。",
 						taskName, appliedIG.Name, orDefault(appliedIG.Status, "draft"),
 					))
-				} else if roleName != "" {
+				} else {
+					if appliedIG.ConfigDrifted {
+						detail := strings.Join(appliedIG.DriftReasons, "；")
+						if detail == "" {
+							detail = "Vault/Nomad CA 或联动地址已变更"
+						}
+						addBlock(fmt.Sprintf(
+							"Task %q 使用的联动「%s」存在配置漂移（%s），请先前往「集群联动」点击「重新应用联动」同步最新 CA 与配置。",
+							taskName, appliedIG.Name, detail,
+						))
+					}
+					if roleName != "" {
 					for i := range appliedIG.Roles {
 						if appliedIG.Roles[i].RoleName == roleName {
 							roleRef = &appliedIG.Roles[i]
@@ -183,6 +196,7 @@ func AnalyzeJobRequirements(j Job, integrations []VaultIntegrationRef, fallbackN
 							))
 						}
 					}
+				}
 				}
 			}
 

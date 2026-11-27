@@ -2,6 +2,8 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,6 +127,8 @@ type View struct {
 	Status            string          `json:"status"`
 	NomadSideEnabled  bool            `json:"nomad_side_enabled"`
 	NomadConfigSHA256 string          `json:"nomad_config_sha256"`
+	ConfigDrifted     bool            `json:"config_drifted"`
+	DriftReasons      []string        `json:"drift_reasons,omitempty"`
 	LastAppliedAt     *time.Time      `json:"last_applied_at"`
 	LastDoctor        json.RawMessage `json:"last_doctor"`
 	Roles             []RoleView      `json:"roles"`
@@ -171,6 +175,46 @@ func (l *loaded) view() View {
 	return v
 }
 
+func caSHA256(pem string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(pem)))
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *Service) computeDrift(ctx context.Context, l *loaded) []string {
+	if l.Status != "applied" {
+		return nil
+	}
+	var reasons []string
+	jwksURL, vaultAddr, _, err := s.addresses(ctx, l)
+	if err == nil {
+		wantNomadSHA := NomadSHA256(s.vaultSide(l, vaultAddr), l.dst.CACertPEM)
+		if !l.NomadSideEnabled {
+			reasons = append(reasons, "Nomad 侧联动配置尚未下发，请重新应用联动")
+		} else if l.NomadConfigSHA256 != wantNomadSHA {
+			reasons = append(reasons, "Vault 集群 CA 证书或接入地址已变更，Nomad 节点所持 vault-ca.crt / 60-vault.hcl 仍是旧配置")
+		}
+		if l.cfg.JWKSMode != "static" {
+			if l.src.TLSEnabled && l.cfg.AppliedJWKSCASHA256 != "" && caSHA256(l.src.CACertPEM) != l.cfg.AppliedJWKSCASHA256 {
+				reasons = append(reasons, "Nomad 集群 CA 证书已变更，Vault JWT Auth 中的 jwks_ca_pem 仍是旧证书")
+			}
+			if l.cfg.AppliedJWKSURL != "" && jwksURL != l.cfg.AppliedJWKSURL {
+				reasons = append(reasons, "Nomad 集群 JWKS 访问地址已变更，Vault JWT Auth 配置需同步更新")
+			}
+		}
+	}
+	return reasons
+}
+
+func (s *Service) viewOf(ctx context.Context, l *loaded) View {
+	v := l.view()
+	reasons := s.computeDrift(ctx, l)
+	if len(reasons) > 0 {
+		v.ConfigDrifted = true
+		v.DriftReasons = reasons
+	}
+	return v
+}
+
 // List lists integrations.
 func (s *Service) List(ctx context.Context) ([]View, error) {
 	is, err := db.ListIntegrations(ctx, s.DB.Reader, "")
@@ -183,7 +227,7 @@ func (s *Service) List(ctx context.Context) ([]View, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, l.view())
+		out = append(out, s.viewOf(ctx, l))
 	}
 	return out, nil
 }
@@ -194,7 +238,7 @@ func (s *Service) Get(ctx context.Context, id string) (*View, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := l.view()
+	v := s.viewOf(ctx, l)
 	return &v, nil
 }
 
@@ -897,7 +941,21 @@ func (s *Service) writeAuthConfig(ctx context.Context, l *loaded, log func(strin
 			cfg["jwks_ca_pem"] = l.src.CACertPEM
 		}
 	}
-	return vc.Request(ctx, http.MethodPost, "auth/"+l.AuthPath+"/config", cfg, nil)
+	if err := vc.Request(ctx, http.MethodPost, "auth/"+l.AuthPath+"/config", cfg, nil); err != nil {
+		return err
+	}
+	wantCA := ""
+	if l.src.TLSEnabled && l.cfg.JWKSMode != "static" {
+		wantCA = caSHA256(l.src.CACertPEM)
+	}
+	if l.cfg.AppliedJWKSURL != jwksURL || l.cfg.AppliedJWKSCASHA256 != wantCA {
+		l.cfg.AppliedJWKSURL = jwksURL
+		l.cfg.AppliedJWKSCASHA256 = wantCA
+		b, _ := json.Marshal(l.cfg)
+		l.ConfigJSON = string(b)
+		return db.UpdateIntegrationConfig(ctx, s.DB.Writer, l.Integration, s.DB.Now())
+	}
+	return nil
 }
 
 // SyncStaticKeys refreshes the published public keys of a static-mode

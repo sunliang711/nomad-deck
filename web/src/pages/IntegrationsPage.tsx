@@ -596,10 +596,13 @@ export function IntegrationsPage() {
   const hasBothClusters = Boolean(readyNomad && readyVault);
   const hasKVMounts = vaultMounts.length > 0;
   const hasIntegrationAndRole = Boolean(selected && (selected.roles || []).length > 0);
+  const isDrifted = Boolean(selected?.config_drifted);
+  const driftReasons: string[] = Array.isArray(selected?.drift_reasons) ? selected.drift_reasons : [];
   const needsApply = Boolean(
-    selected && (selected.status !== 'applied' || (selected.roles || []).some((r: any) => r.status !== 'applied')),
+    selected && (selected.status !== 'applied' || isDrifted || (selected.roles || []).some((r: any) => r.status !== 'applied')),
   );
   const isApplied = Boolean(selected && !needsApply);
+  const integrationDisplayStatus = (it: any) => (it?.status === 'applied' && it?.config_drifted ? 'needs_reapply' : it?.status);
   const lastDoc = doctor || selected?.last_doctor;
   const doctorPassed = Boolean(
     lastDoc && Array.isArray(lastDoc.checks) && lastDoc.checks.length > 0 && !lastDoc.checks.some((c: any) => c.status === 'FAIL'),
@@ -812,24 +815,42 @@ export function IntegrationsPage() {
         );
       })()}
 
-      {/* 草稿/未应用醒目提醒 */}
+      {/* 草稿/未应用或 CA 漂移醒目提醒 */}
       {selected && needsApply && (
         <div
           role="status"
           className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50/90 px-4 py-3 text-xs text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100"
         >
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" />
-            <span>
-              {tr(
-                <>当前联动或部分 Role 处于<strong>待应用（草稿/异常）</strong>状态，尚未下发到 Nomad 和 Vault 集群。请先点击「应用联动」，否则 Job 运行时无法获取密钥。</>,
-                <>This integration or some roles are <strong>pending apply</strong> and not yet synced to Nomad & Vault. Click &quot;Apply Integration&quot; before submitting jobs.</>,
+          <div className="flex items-start gap-2 min-w-0">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-300" />
+            <div className="space-y-1">
+              <div>
+                {isDrifted
+                  ? tr(
+                      <>检测到 Vault/Nomad <strong>CA 证书或联动地址已变更（配置漂移）</strong>，请点击右侧「重新应用联动」同步最新 CA，否则新任务或节点认证会失败。</>,
+                      <>Detected <strong>CA certificate or address drift</strong> between Vault and Nomad. Click &quot;Re-apply Integration&quot; to sync the updated CA and config.</>,
+                    )
+                  : tr(
+                      <>当前联动或部分 Role 处于<strong>待应用（草稿/异常）</strong>状态，尚未下发到 Nomad 和 Vault 集群。请先点击「应用联动」，否则 Job 运行时无法获取密钥。</>,
+                      <>This integration or some roles are <strong>pending apply</strong> and not yet synced to Nomad & Vault. Click &quot;Apply Integration&quot; before submitting jobs.</>,
+                    )}
+              </div>
+              {isDrifted && driftReasons.length > 0 && (
+                <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-amber-900 dark:text-amber-200">
+                  {driftReasons.map((reason, idx) => (
+                    <li key={idx}>{reason}</li>
+                  ))}
+                </ul>
               )}
-            </span>
+            </div>
           </div>
           {isAdmin && (
             <Button size="sm" variant="primary" loading={applying} disabled={applyPending || deletePending} onClick={() => void applyIntegration()}>
-              {applyPending ? tr('正在应用…', 'Applying...') : tr('立即应用联动', 'Apply Integration')}
+              {applyPending
+                ? tr('正在应用…', 'Applying...')
+                : isDrifted
+                  ? tr('重新应用联动', 'Re-apply Integration')
+                  : tr('立即应用联动', 'Apply Integration')}
             </Button>
           )}
         </div>
@@ -842,7 +863,7 @@ export function IntegrationsPage() {
         items={items.map((it) => ({
           id: it.id,
           name: it.name,
-          status: it.status,
+          status: integrationDisplayStatus(it),
           subtitle: `${it.source_cluster || it.source_cluster_id} ↔ ${it.target_cluster || it.target_cluster_id}`,
         }))}
       />
@@ -926,7 +947,7 @@ export function IntegrationsPage() {
                 <div>
                   <div className="text-[11px] text-slate-500 dark:text-slate-400">{tr('当前状态', 'Status')}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                    <StatusBadge value={selected.status} />
+                    <StatusBadge value={integrationDisplayStatus(selected)} />
                     {selected.config?.default_role && (
                       <Badge>{tr('默认', 'Default')} {selected.config.default_role}</Badge>
                     )}

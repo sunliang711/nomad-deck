@@ -62,6 +62,14 @@ func TestLintVaultIntegration(t *testing.T) {
 	if warns = LintVaultIntegration(job, igs, "default"); len(warns) != 0 {
 		t.Fatalf("expected no warnings, got: %v", warns)
 	}
+
+	// Drifted integration must produce a blocking error.
+	igs[0].ConfigDrifted = true
+	igs[0].DriftReasons = []string{"Vault 集群 CA 证书已变更"}
+	rep := AnalyzeJobRequirements(job, igs, "default", nil, false)
+	if len(rep.Blocking) == 0 || !strings.Contains(strings.Join(rep.Blocking, "\n"), "配置漂移") {
+		t.Fatalf("expected drifted integration blocker, got: %+v", rep)
+	}
 }
 
 func TestAnalyzeJobRequirementsKVAndPairedConfigs(t *testing.T) {

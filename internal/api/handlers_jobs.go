@@ -436,6 +436,8 @@ func NewVaultInspector(d *db.DB, ints *integration.Service, vlt *vault.Service) 
 				Status:           i.Status,
 				NomadSideEnabled: i.NomadSideEnabled,
 				TargetClusterID:  i.TargetClusterID,
+				ConfigDrifted:    i.ConfigDrifted,
+				DriftReasons:     i.DriftReasons,
 			}
 			if d != nil {
 				if dst, err := db.GetCluster(ctx, d.Reader, i.TargetClusterID); err == nil && dst != nil {

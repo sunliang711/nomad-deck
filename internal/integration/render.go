@@ -34,6 +34,11 @@ type Config struct {
 	VaultAddr   string   `json:"vault_address,omitempty"`
 	DefaultRole string   `json:"default_role,omitempty"`
 	IdentityTTL string   `json:"identity_ttl"`
+	// AppliedJWKSURL and AppliedJWKSCASHA256 snapshot the last Nomad JWKS
+	// endpoint and CA pushed to Vault's JWT auth config so external CA/URL
+	// changes surface as drift on the integration view.
+	AppliedJWKSURL      string `json:"applied_jwks_url,omitempty"`
+	AppliedJWKSCASHA256 string `json:"applied_jwks_ca_sha256,omitempty"`
 	// StaticKeys are the PEM public keys written in static mode, kept
 	// while tokens signed by them may still be valid.
 	StaticKeys []StaticKey `json:"static_keys,omitempty"`

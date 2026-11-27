@@ -106,7 +106,7 @@ const statusLabelsZh: Record<string, string> = {
   alive: '存活', leaving: '离开中', left: '已退出', stopped: '已停止', ineligible: '不可调度', draining: '排空中',
   initialized: '已初始化', uninitialized: '待部署', unknown: '待探测', degraded: '状态异常',
   pending: '等待中', waiting: '等待中', upgrading: '升级中', warn: '需关注', sealed: '已密封',
-  init_in_doubt: '初始化待核对', needs_reconcile: '需核对', partial_success: '部分成功',
+  init_in_doubt: '初始化待核对', needs_reconcile: '需核对', needs_reapply: '需重新应用', partial_success: '部分成功',
   timeout: '已超时', failed: '失败', failure: '失败', offline: '离线', unreachable: '无法连接',
   fail: '异常', rolled_back: '已回退', anomaly: '异常', timed_out: '已超时', cancelled: '已取消', idle: '空闲', disabled: '已停用',
   inactive: '未运行', interrupted: '已中断', sync: '同步', async: '异步', applied: '已应用', draft: '草稿', drifted: '已漂移', skipped: '已跳过',
@@ -118,7 +118,7 @@ const statusLabelsEn: Record<string, string> = {
   alive: 'Alive', leaving: 'Leaving', left: 'Left', stopped: 'Stopped', ineligible: 'Ineligible', draining: 'Draining',
   initialized: 'Initialized', uninitialized: 'Pending Deploy', unknown: 'Pending Probe', degraded: 'Degraded',
   pending: 'Pending', waiting: 'Waiting', upgrading: 'Upgrading', warn: 'Warning', sealed: 'Sealed',
-  init_in_doubt: 'Init Uncertain', needs_reconcile: 'Needs Reconcile', partial_success: 'Partial Success',
+  init_in_doubt: 'Init Uncertain', needs_reconcile: 'Needs Reconcile', needs_reapply: 'Needs Re-apply', partial_success: 'Partial Success',
   timeout: 'Timed Out', failed: 'Failed', failure: 'Failure', offline: 'Offline', unreachable: 'Unreachable',
   fail: 'Error', rolled_back: 'Rolled Back', anomaly: 'Anomaly', timed_out: 'Timed Out', cancelled: 'Cancelled', idle: 'Idle', disabled: 'Disabled',
   inactive: 'Inactive', interrupted: 'Interrupted', sync: 'Sync', async: 'Async', applied: 'Applied', draft: 'Draft', drifted: 'Drifted', skipped: 'Skipped',
@@ -187,6 +187,7 @@ export function statusTone(status?: string): Tone {
     case 'ineligible':
     case 'init_in_doubt':
     case 'needs_reconcile':
+    case 'needs_reapply':
     case 'partial_success':
     case 'timeout':
     case 'drifted':

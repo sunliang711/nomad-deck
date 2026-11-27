@@ -178,6 +178,13 @@ OPT={{ or .Data.data.optional_note "" | toJSON }}
 		t.Fatalf("expected write policy blocker for acme-cert-sync, got: %+v", rep)
 	}
 
+	// CustomPolicyHCL with create/update on policy_mode="explicit" (real UI form mode) must pass.
+	igs[0].Roles[1].CustomPolicyHCL = `path "secret/data/certs/tls" { capabilities = ["create", "update", "read"] }`
+	rep = AnalyzeJobRequirements(acmeJob, igs, "default", nil, false)
+	if len(rep.Blocking) != 0 {
+		t.Fatalf("expected custom write policy under explicit mode to pass, got: %+v", rep)
+	}
+
 	// 7. Nginx active /secrets/cert.pem without vault/cert template, and Traefik alidns without AK/SK.
 	gwJob := Job{
 		"Namespace": "default",

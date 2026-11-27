@@ -263,8 +263,9 @@ func AnalyzeJobRequirements(j Job, integrations []VaultIntegrationRef, fallbackN
 					logicalSub := strings.TrimPrefix(rest, "data/")
 					logicalFull := mnt + "/" + logicalSub
 
-					// Check role path coverage when explicit paths are configured.
+					// Check role path coverage when explicit paths are configured (skipped when CustomPolicyHCL overrides).
 					if roleRef != nil && roleRef.Status == "applied" &&
+						strings.TrimSpace(roleRef.CustomPolicyHCL) == "" &&
 						(roleRef.PolicyMode == "" || roleRef.PolicyMode == "explicit") &&
 						len(roleRef.SecretPaths) > 0 && !roleCoversLogicalPath(roleRef.SecretPaths, logicalFull) {
 						addBlock(fmt.Sprintf(
@@ -314,10 +315,10 @@ func AnalyzeJobRequirements(j Job, integrations []VaultIntegrationRef, fallbackN
 			}
 
 			if taskWritesToVault && roleRef != nil {
-				if roleRef.PolicyMode != "custom" ||
-					(!strings.Contains(roleRef.CustomPolicyHCL, "create") && !strings.Contains(roleRef.CustomPolicyHCL, "update")) {
+				customHCL := strings.TrimSpace(roleRef.CustomPolicyHCL)
+				if customHCL == "" || (!strings.Contains(customHCL, "create") && !strings.Contains(customHCL, "update")) {
 					addBlock(fmt.Sprintf(
-						"Task %q 在运行时需使用 $VAULT_TOKEN 向 Vault 写入数据（如推送证书），但 Role %q 当前不是包含 create/update 权限的自定义 Policy，请在「集群联动」编辑该 Role → 高级选项填入写权限 Policy 并重新应用。",
+						"Task %q 在运行时需使用 $VAULT_TOKEN 向 Vault 写入数据（如推送证书），但 Role %q 当前不是包含 create/update 权限的自定义 Policy，请在「集群联动」编辑该 Role → 展开高级选项填入写权限 Policy（可点「填入 acme-cert-sync 读写证书策略」）并重新应用。",
 						taskName, roleName,
 					))
 				}

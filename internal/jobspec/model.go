@@ -105,12 +105,13 @@ type Volume struct {
 
 // Check is a service check.
 type Check struct {
-	Name     string `json:"name,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Path     string `json:"path,omitempty"`
-	Port     string `json:"port,omitempty"`
-	Interval string `json:"interval,omitempty"`
-	Timeout  string `json:"timeout,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Path        string `json:"path,omitempty"`
+	Port        string `json:"port,omitempty"`
+	AddressMode string `json:"address_mode,omitempty"`
+	Interval    string `json:"interval,omitempty"`
+	Timeout     string `json:"timeout,omitempty"`
 }
 
 // Service is a service registration.

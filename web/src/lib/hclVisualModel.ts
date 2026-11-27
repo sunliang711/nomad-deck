@@ -590,7 +590,7 @@ export function setGroupRestart(
 export function addGroupService(
   doc: HCLDocument,
   groupPath: NodePath,
-  defaults: { name?: string; port?: string; provider?: string } = {},
+  defaults: { name?: string; port?: string; provider?: string; addressMode?: string } = {},
 ): HCLDocument {
   return editDocument(doc, (draft) => {
     const groupBody = bodyAt(draft, groupPath);
@@ -598,6 +598,9 @@ export function addGroupService(
       { kind: 'attribute', name: 'name', expression: JSON.stringify(defaults.name || 'my-service'), leading: '\n' },
       { kind: 'attribute', name: 'provider', expression: JSON.stringify(defaults.provider || 'nomad'), leading: '\n' },
     ];
+    if (defaults.addressMode) {
+      nodes.push({ kind: 'attribute', name: 'address_mode', expression: JSON.stringify(defaults.addressMode), leading: '\n' });
+    }
     if (defaults.port) {
       nodes.push({ kind: 'attribute', name: 'port', expression: JSON.stringify(defaults.port), leading: '\n' });
     }
@@ -614,7 +617,7 @@ export function addGroupService(
 export function addServiceCheck(
   doc: HCLDocument,
   servicePath: NodePath,
-  defaults: { type?: string; path?: string; interval?: string; timeout?: string } = {},
+  defaults: { type?: string; path?: string; interval?: string; timeout?: string; addressMode?: string } = {},
 ): HCLDocument {
   return editDocument(doc, (draft) => {
     const svcBody = bodyAt(draft, servicePath);
@@ -623,6 +626,9 @@ export function addServiceCheck(
       { kind: 'attribute', name: 'type', expression: JSON.stringify(type), leading: '\n' },
       ...(type === 'http'
         ? [{ kind: 'attribute' as const, name: 'path', expression: JSON.stringify(defaults.path || '/'), leading: '\n' }]
+        : []),
+      ...(defaults.addressMode
+        ? [{ kind: 'attribute' as const, name: 'address_mode', expression: JSON.stringify(defaults.addressMode), leading: '\n' }]
         : []),
       { kind: 'attribute', name: 'interval', expression: JSON.stringify(defaults.interval || '10s'), leading: '\n' },
       { kind: 'attribute', name: 'timeout', expression: JSON.stringify(defaults.timeout || '2s'), leading: '\n' },

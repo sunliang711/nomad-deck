@@ -160,7 +160,9 @@ const LABELS_EN: Record<string, string> = {
 const ENUM_VALUES: Record<string, string[]> = {
   'Job.type': ['service', 'batch', 'system', 'sysbatch'],
   'Service.provider': ['nomad', 'consul'],
+  'Service.address_mode': ['auto', 'host', 'driver', 'alloc', 'alloc_ipv6'],
   'ServiceCheck.type': ['http', 'tcp', 'script', 'grpc'],
+  'ServiceCheck.address_mode': ['host', 'driver', 'alloc', 'alloc_ipv6'],
   'NetworkResource.mode': ['host', 'bridge'],
   'TaskLifecycle.hook': ['prestart', 'poststart', 'poststop'],
   'RestartPolicy.mode': ['fail', 'delay'],
@@ -826,7 +828,13 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
       }
       const serviceIndex = bodyAt(draft, path).nodes.length;
       next = addGroupService(draft, path, value);
-      if (value.check) next = addServiceCheck(next, [...path, serviceIndex], { type: value.check, path: value.path });
+      if (value.check) {
+        next = addServiceCheck(next, [...path, serviceIndex], {
+          type: value.check,
+          path: value.path,
+          addressMode: value.checkAddressMode,
+        });
+      }
     }
     setQuickAdd(null);
     if (next === current) {
@@ -1944,11 +1952,17 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
     if (services.length === 0) {
       return <div className="text-[11px] text-slate-400">{emptyText}</div>;
     }
+    const serviceAddressModes = ENUM_VALUES['Service.address_mode'];
+    const checkAddressModes = ENUM_VALUES['ServiceCheck.address_mode'];
     return (
       <div className="space-y-3">
         {services.map((svc) => {
           const svcName = parseLiteralString(getAttrExpr(document, svc.path, 'name')) || '';
           const provider = parseLiteralString(getAttrExpr(document, svc.path, 'provider')) || 'nomad';
+          const addrExpr = getAttrExpr(document, svc.path, 'address_mode');
+          const addrLiteral = parseLiteralString(addrExpr);
+          const addrDynamic = addrExpr !== undefined && addrLiteral === undefined;
+          const addressMode = addrLiteral || '';
           const portRef = parseLiteralString(getAttrExpr(document, svc.path, 'port')) || '';
           const tags = parseLiteralStringList(getAttrExpr(document, svc.path, 'tags')) || [];
           const checks = listChildBlocks(document, svc.path, 'check');
@@ -1957,7 +1971,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               key={svc.path.join('.')}
               className="space-y-2.5 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 dark:border-slate-800 dark:bg-slate-950/30"
             >
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1.2fr_110px_1fr_auto] items-end">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1.1fr)_100px_130px_minmax(0,1fr)_auto] items-end">
                 <Input
                   label={tr('服务名 (name)', 'Service Name (name)')}
                   disabled={readOnly}
@@ -1973,6 +1987,26 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 >
                   <option value="nomad">nomad</option>
                   <option value="consul">consul</option>
+                </Select>
+                <Select
+                  label={tr('地址模式', 'Address Mode')}
+                  size="sm"
+                  disabled={readOnly || addrDynamic}
+                  value={addrDynamic ? '__dynamic__' : addressMode}
+                  onChange={(e) => commit(setAttrExpr(document, svc.path, 'address_mode', e.target.value ? JSON.stringify(e.target.value) : null))}
+                >
+                  {addrDynamic ? (
+                    <option value="__dynamic__">{tr('动态表达式', 'Expression')}</option>
+                  ) : (
+                    <>
+                      <option value="">{tr('默认 (auto)', 'Default (auto)')}</option>
+                      {Array.from(new Set([...serviceAddressModes, ...(addressMode ? [addressMode] : [])])).map((mode) => (
+                        <option key={mode} value={mode}>
+                          {mode}
+                        </option>
+                      ))}
+                    </>
+                  )}
                 </Select>
                 <Select
                   label={tr('绑定端口', 'Port')}
@@ -2026,10 +2060,14 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 {checks.map((chk) => {
                   const cType = parseLiteralString(getAttrExpr(document, chk.path, 'type')) || 'http';
                   const cPath = parseLiteralString(getAttrExpr(document, chk.path, 'path')) || '/';
+                  const cAddrExpr = getAttrExpr(document, chk.path, 'address_mode');
+                  const cAddrLiteral = parseLiteralString(cAddrExpr);
+                  const cAddrDynamic = cAddrExpr !== undefined && cAddrLiteral === undefined;
+                  const cAddressMode = cAddrLiteral || '';
                   const cInterval = parseLiteralString(getAttrExpr(document, chk.path, 'interval')) || '10s';
                   const cTimeout = parseLiteralString(getAttrExpr(document, chk.path, 'timeout')) || '2s';
                   return (
-                    <div key={chk.path.join('.')} className="grid grid-cols-2 gap-1.5 sm:grid-cols-[95px_1fr_85px_85px_auto] items-center">
+                    <div key={chk.path.join('.')} className="grid grid-cols-2 gap-1.5 sm:grid-cols-[90px_1fr_110px_80px_80px_auto] items-center">
                       <Select
                         aria-label={tr('检查类型', 'Check type')}
                         size="sm"
@@ -2050,6 +2088,26 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                         onChange={(e) => commit(setAttrExpr(document, chk.path, 'path', JSON.stringify(e.target.value)))}
                         className="min-w-0 rounded-lg border border-[#dce3ee] bg-white px-2 py-1.5 font-mono text-xs disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900"
                       />
+                      <Select
+                        aria-label={tr('检查地址模式 (address_mode)', 'Check address_mode')}
+                        size="sm"
+                        disabled={readOnly || cAddrDynamic}
+                        value={cAddrDynamic ? '__dynamic__' : cAddressMode}
+                        onChange={(e) => commit(setAttrExpr(document, chk.path, 'address_mode', e.target.value ? JSON.stringify(e.target.value) : null))}
+                      >
+                        {cAddrDynamic ? (
+                          <option value="__dynamic__">{tr('动态表达式', 'Expression')}</option>
+                        ) : (
+                          <>
+                            <option value="">{tr('地址: 默认', 'Addr: default')}</option>
+                            {Array.from(new Set([...checkAddressModes, ...(cAddressMode ? [cAddressMode] : [])])).map((mode) => (
+                              <option key={mode} value={mode}>
+                                {mode}
+                              </option>
+                            ))}
+                          </>
+                        )}
+                      </Select>
                       <input
                         aria-label={tr('检查间隔', 'Interval')}
                         disabled={readOnly}

@@ -232,7 +232,7 @@ func (m *mapper) services(l []any, path string) []Service {
 			cm, _ := c.(map[string]any)
 			cr := m.take(cm, r.path+".check")
 			svc.Checks = append(svc.Checks, Check{Name: cr.s("Name"), Type: cr.s("Type"), Path: cr.s("Path"), Port: cr.s("PortLabel"),
-				Interval: cr.d("Interval"), Timeout: cr.d("Timeout")})
+				AddressMode: cr.s("AddressMode"), Interval: cr.d("Interval"), Timeout: cr.d("Timeout")})
 			cr.done()
 		}
 		r.ignore("TaskName")

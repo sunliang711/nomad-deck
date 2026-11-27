@@ -195,6 +195,7 @@ func (w *writer) services(b *hclwrite.Body, path string, ss []Service) {
 			w.set(cb, cp, "type", "s", c.Type)
 			w.set(cb, cp, "path", "s", c.Path)
 			w.set(cb, cp, "port", "s", c.Port)
+			w.set(cb, cp, "address_mode", "s", c.AddressMode)
 			w.set(cb, cp, "interval", "s", c.Interval)
 			w.set(cb, cp, "timeout", "s", c.Timeout)
 		}

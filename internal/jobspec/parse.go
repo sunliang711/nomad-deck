@@ -424,6 +424,7 @@ func (p *parser) services(k *block) []Service {
 			ck.str("type", &c.Type)
 			ck.str("path", &c.Path)
 			ck.str("port", &c.Port)
+			ck.str("address_mode", &c.AddressMode)
 			ck.str("interval", &c.Interval)
 			ck.str("timeout", &c.Timeout)
 			ck.finish()

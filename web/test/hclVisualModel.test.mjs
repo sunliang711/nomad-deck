@@ -146,9 +146,12 @@ test('optional Job/Group features and unhandled block detection work cleanly', (
 
   const { document: d1, path: gp } = addReadyGroup(doc, [0]);
   doc = setGroupEphemeralDisk(d1, gp, true, { size: 1024, sticky: true });
-  doc = addGroupService(doc, gp, { name: 'pg', port: 'db', provider: 'nomad' });
+  doc = addGroupService(doc, gp, { name: 'pg', port: 'db', provider: 'nomad', addressMode: 'driver' });
   const svcPath = listChildBlocks(doc, gp, 'service')[0].path;
-  doc = addServiceCheck(doc, svcPath, { type: 'tcp', interval: '10s', timeout: '2s' });
+  assert.equal(getAttrExpr(doc, svcPath, 'address_mode'), '"driver"');
+  doc = addServiceCheck(doc, svcPath, { type: 'tcp', addressMode: 'alloc', interval: '10s', timeout: '2s' });
+  const chkPath = listChildBlocks(doc, svcPath, 'check')[0].path;
+  assert.equal(getAttrExpr(doc, chkPath, 'address_mode'), '"alloc"');
 
   assert.equal(listChildBlocks(doc, [0], 'update').length, 1);
   assert.equal(listChildBlocks(doc, [0], 'periodic').length, 1);

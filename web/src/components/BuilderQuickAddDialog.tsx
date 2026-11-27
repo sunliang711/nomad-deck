@@ -10,7 +10,7 @@ export type QuickAddForm =
 export type QuickAddValue =
   | { kind: 'port'; label: string; destination: number }
   | { kind: 'volume'; name: string; type: 'host' | 'csi'; source: string; destination: string; readOnly: boolean }
-  | { kind: 'service'; name: string; port: string; provider: string; check: string; path: string; newPort?: { label: string; destination: number } };
+  | { kind: 'service'; name: string; port: string; provider: string; addressMode: string; check: string; path: string; checkAddressMode: string; newPort?: { label: string; destination: number } };
 
 export function BuilderQuickAddDialog({ form, onClose, onSave }: {
   form: QuickAddForm;
@@ -24,9 +24,11 @@ export function BuilderQuickAddDialog({ form, onClose, onSave }: {
   const [source, setSource] = useState(form.kind === 'volume' ? form.hostVolumes[0] || '' : '');
   const [port, setPort] = useState(form.kind === 'service' ? form.ports[0] || '' : '');
   const [provider, setProvider] = useState('nomad');
+  const [addressMode, setAddressMode] = useState('');
   const [addPort, setAddPort] = useState(form.kind === 'service' && form.canDeclarePort && form.ports.length === 0);
   const hasServicePort = Boolean(port || addPort);
   const [check, setCheck] = useState('');
+  const [checkAddressMode, setCheckAddressMode] = useState('');
   const title = form.kind === 'port' ? tr('声明并绑定端口', 'Declare and Bind Port')
     : form.kind === 'volume' ? tr('挂载持久卷', 'Mount Persistent Volume')
     : tr('注册服务', 'Register Service');
@@ -74,7 +76,17 @@ export function BuilderQuickAddDialog({ form, onClose, onSave }: {
       return;
     }
     const newPort = addPort ? { label, destination: Number(text('portDestination')) } : undefined;
-    onSave({ kind: 'service', name, port: newPort?.label || port, provider, check: hasServicePort ? check : '', path, newPort });
+    onSave({
+      kind: 'service',
+      name,
+      port: newPort?.label || port,
+      provider,
+      addressMode,
+      check: hasServicePort ? check : '',
+      path,
+      checkAddressMode: hasServicePort && check ? checkAddressMode : '',
+      newPort,
+    });
   };
 
   return (
@@ -121,10 +133,20 @@ export function BuilderQuickAddDialog({ form, onClose, onSave }: {
         {form.kind === 'service' && (
           <>
             <Input label={tr('服务名称', 'Service Name')} name="label" defaultValue={form.name} required />
-            <Select label={tr('注册到', 'Register With')} value={provider} onChange={(e) => setProvider(e.target.value)}>
-              <option value="nomad">Nomad</option>
-              <option value="consul">Consul</option>
-            </Select>
+            <div className="grid grid-cols-2 gap-3">
+              <Select label={tr('注册到', 'Register With')} value={provider} onChange={(e) => setProvider(e.target.value)}>
+                <option value="nomad">Nomad</option>
+                <option value="consul">Consul</option>
+              </Select>
+              <Select label={tr('地址模式 (address_mode)', 'Address Mode')} value={addressMode} onChange={(e) => setAddressMode(e.target.value)}>
+                <option value="">{tr('默认 (auto)', 'Default (auto)')}</option>
+                <option value="auto">auto</option>
+                <option value="host">host</option>
+                <option value="driver">driver</option>
+                <option value="alloc">alloc</option>
+                <option value="alloc_ipv6">alloc_ipv6</option>
+              </Select>
+            </div>
             <Select label={tr('任务组端口', 'Group Port')} value={port} onChange={(e) => setPort(e.target.value)}>
               <option value="">{tr('暂不选择端口', 'No Port Selected')}</option>
               {form.ports.map((label) => <option key={label} value={label}>{label}</option>)}
@@ -149,6 +171,15 @@ export function BuilderQuickAddDialog({ form, onClose, onSave }: {
               </Select>
             )}
             {hasServicePort && check === 'http' && <Input label={tr('HTTP 路径', 'HTTP Path')} name="path" defaultValue="/" required />}
+            {hasServicePort && check && (
+              <Select label={tr('检查地址模式 (address_mode)', 'Check Address Mode')} value={checkAddressMode} onChange={(e) => setCheckAddressMode(e.target.value)}>
+                <option value="">{tr('默认 (host)', 'Default (host)')}</option>
+                <option value="host">host</option>
+                <option value="driver">driver</option>
+                <option value="alloc">alloc</option>
+                <option value="alloc_ipv6">alloc_ipv6</option>
+              </Select>
+            )}
           </>
         )}
         <div className="flex justify-end gap-2">

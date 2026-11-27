@@ -69,6 +69,8 @@ import {
   addTaskEnvRow,
   addTaskTemplateBlock,
   addTaskVolumeMount,
+  declareAndBindTaskPort,
+  declareAndMountTaskVolume,
   findChildBlock,
   findJobPath,
   getAttrExpr,
@@ -105,9 +107,10 @@ import {
   type VaultRoleOption,
 } from '../lib/vaultHelpers';
 import { useToast } from './Toast';
-import { Badge, Button, ErrorAlert, Input, Select, Switch } from './UI';
+import { Badge, Button, ErrorAlert, Input, Modal, SectionTabs, Select, Switch } from './UI';
 import { CodeEditor } from './CodeEditor';
 import { HostVolumeCreateModal } from './HostVolumeCreateModal';
+import { BuilderQuickAddDialog, type QuickAddForm, type QuickAddValue } from './BuilderQuickAddDialog';
 
 interface BuilderOptions {
   namespaces: string[];
@@ -403,13 +406,17 @@ function StringListEditor({
   );
 }
 
+type FormSection = 'base' | 'network' | 'storage' | 'secrets' | 'advanced';
+
 function SectionBox({
+  hidden,
   icon,
   title,
   description,
   actions,
   children,
 }: {
+  hidden?: boolean;
   icon?: React.ReactNode;
   title: React.ReactNode;
   description?: string;
@@ -417,7 +424,7 @@ function SectionBox({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200/90 bg-white dark:border-slate-800 dark:bg-slate-900/80">
+    <div hidden={hidden} className="rounded-xl border border-slate-200/90 bg-white dark:border-slate-800 dark:bg-slate-900/80">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
         <div className="flex items-center gap-2 min-w-0">
           {icon && <span className="text-indigo-500 dark:text-indigo-400 shrink-0">{icon}</span>}
@@ -442,9 +449,11 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
   const [document, setDocument] = useState<HCLDocument | null>(null);
   const [schema, setSchema] = useState<BuilderSchema | null>(null);
   const [viewMode, setViewMode] = useState<'form' | 'tree'>('form');
-  const [showPreview, setShowPreview] = useState<boolean>(() =>
-    typeof window !== 'undefined' ? window.innerWidth >= 1280 : false,
-  );
+  const [showPreview, setShowPreview] = useState(false);
+  const [widePreview, setWidePreview] = useState(() => window.matchMedia('(min-width: 1440px)').matches);
+  const [groupSection, setGroupSection] = useState<FormSection>('base');
+  const [taskSection, setTaskSection] = useState<FormSection>('base');
+  const [quickAdd, setQuickAdd] = useState<{ form: QuickAddForm; path: NodePath; groupPath: NodePath; bindTaskPath?: NodePath } | null>(null);
   const [selected, setSelected] = useState<NodePath>([]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [diagnostics, setDiagnostics] = useState<BuilderDiagnostic[]>([]);
@@ -485,6 +494,14 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
   const lastClusterRef = useRef<string>(clusterId);
   const docRef = useRef<HCLDocument | null>(null);
   const formPanelRef = useRef<HTMLDivElement>(null);
+  const treePanelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const query = window.matchMedia('(min-width: 1440px)');
+    const update = () => setWidePreview(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
   const requestRef = useRef(0);
   const mountedRef = useRef(true);
   const callbacks = useRef({ onSourceChange, onValidityChange });
@@ -594,6 +611,9 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
     setLiveHcl(source);
     setUndo([]);
     setRedo([]);
+    setGroupSection('base');
+    setTaskSection('base');
+    setQuickAdd(null);
     setError('');
     callbacks.current.onValidityChange(false);
     void apiPost<{ document: HCLDocument; schema: BuilderSchema }>(`/api/v1/nomad/${clusterId}/job-ops/hcl-tree`, {
@@ -640,11 +660,12 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
   }, [JSON.stringify(selected)]);
 
   const commit = (next: HCLDocument, path = selected) => {
-    if (readOnly || !docRef.current) return;
+    const previous = docRef.current;
+    if (readOnly || !previous || previous === next) return;
     requestRef.current++;
     callbacks.current.onValidityChange(false);
     setRendering(true);
-    setUndo((history) => [...history.slice(-29), docRef.current!]);
+    setUndo((history) => [...history.slice(-29), previous]);
     setRedo([]);
     docRef.current = next;
     setDocument(next);
@@ -653,21 +674,26 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
   const navigateHistory = (back: boolean) => {
     const history = back ? undo : redo;
-    if (!history.length || !docRef.current || readOnly) return;
+    const previous = docRef.current;
+    if (!history.length || !previous || readOnly) return;
     const next = history[history.length - 1];
     if (back) {
       setUndo(history.slice(0, -1));
-      setRedo((items) => [...items, docRef.current!]);
+      setRedo((items) => [...items, previous]);
     } else {
       setRedo(history.slice(0, -1));
-      setUndo((items) => [...items, docRef.current!]);
+      setUndo((items) => [...items, previous]);
     }
     requestRef.current++;
     callbacks.current.onValidityChange(false);
     setRendering(true);
+    const currentNode = nodeAt(previous, selected);
+    const restoredNode = nodeAt(next, selected);
     docRef.current = next;
     setDocument(next);
-    setSelected(pickInitialSelection(next));
+    const sameNode = currentNode && restoredNode && currentNode.name === restoredNode.name
+      && JSON.stringify(currentNode.labels) === JSON.stringify(restoredNode.labels);
+    setSelected(sameNode ? selected : pickInitialSelection(next));
   };
 
   // Resolve current selection context for Form mode vs Tree mode
@@ -693,7 +719,9 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
     setViewMode('tree');
   };
 
-  const selectInForm = (path: NodePath) => {
+  const selectInForm = (path: NodePath, section?: FormSection) => {
+    if (section && nodeAt(document, path)?.name === 'group') setGroupSection(section);
+    if (section && nodeAt(document, path)?.name === 'task') setTaskSection(section);
     setSelected(path);
     setViewMode('form');
     window.requestAnimationFrame(() => {
@@ -723,6 +751,110 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
   };
 
   const formTarget = resolveFormTarget();
+  const renderFormSections = (kind: 'group' | 'task') => {
+    const options: Array<{ id: FormSection; label: string }> = [
+      { id: 'base', label: tr('基础', 'Basics') },
+      { id: 'network', label: tr('网络与服务', 'Networking & Services') },
+      { id: 'storage', label: tr('存储', 'Storage') },
+      ...(kind === 'task' ? [{ id: 'secrets' as const, label: tr('环境与密钥', 'Environment & Secrets') }] : []),
+      { id: 'advanced', label: tr('高级设置', 'Advanced') },
+    ];
+    return (
+      <SectionTabs
+        variant="underline"
+        tabs={options}
+        active={kind === 'group' ? groupSection : taskSection}
+        onChange={(id) => {
+          const section = options.find((option) => option.id === id)?.id;
+          if (section) (kind === 'group' ? setGroupSection : setTaskSection)(section);
+        }}
+      />
+    );
+  };
+
+  const copyPreviewButton = (
+    <Button
+      size="sm"
+      variant="ghost"
+      onClick={() =>
+        void copyText(liveHcl)
+          .then(() => toast.success(tr('已复制实时 HCL', 'Live HCL copied')))
+          .catch((ex) => toast.error(ex.message))
+      }
+    >
+      <Copy className="h-3.5 w-3.5" />
+      <span>{tr('复制', 'Copy')}</span>
+    </Button>
+  );
+
+  const openServiceForm = (path: NodePath, groupPath: NodePath, name: string) => {
+    const tasks = listChildBlocks(document, groupPath, 'task');
+    const candidate = samePath(path, groupPath) ? (tasks.length === 1 ? tasks[0].path : undefined) : path;
+    const ports = listGroupPorts(document, groupPath).map((port) => port.label);
+    let bindTaskPath: NodePath | undefined;
+    if (candidate && parseLiteralString(getAttrExpr(document, candidate, 'driver')) === 'docker' && !ports.length) {
+      const config = findChildBlock(document, candidate, 'config');
+      const expression = getAttrNode(config?.node.body, 'ports')?.expression;
+      if (expression === undefined || parseLiteralStringList(expression) !== undefined) bindTaskPath = candidate;
+    }
+    setQuickAdd({ form: { kind: 'service', name, ports, canDeclarePort: Boolean(bindTaskPath) }, path, groupPath, bindTaskPath });
+  };
+
+  const saveQuickAdd = (value: QuickAddValue) => {
+    if (!quickAdd || readOnly || !docRef.current) return;
+    const { path, groupPath, bindTaskPath } = quickAdd;
+    const current = docRef.current;
+    let next: HCLDocument;
+    if (value.kind === 'port') {
+      next = declareAndBindTaskPort(current, groupPath, path, value.label, value.destination);
+    } else if (value.kind === 'volume') {
+      next = value.source
+        ? declareAndMountTaskVolume(current, groupPath, path, value, value.destination)
+        : addTaskVolumeMount(current, path, { volume: value.name, destination: value.destination, readOnly: value.readOnly });
+    } else {
+      let draft = current;
+      if (value.newPort && bindTaskPath) {
+        draft = declareAndBindTaskPort(current, groupPath, bindTaskPath, value.newPort.label, value.newPort.destination);
+        if (draft === current) {
+          setError(tr('无法声明并绑定服务端口。请检查任务组端口配置。', 'Could not declare and bind the service port. Check the group port configuration.'));
+          setQuickAdd(null);
+          return;
+        }
+      }
+      const serviceIndex = bodyAt(draft, path).nodes.length;
+      next = addGroupService(draft, path, value);
+      if (value.check) next = addServiceCheck(next, [...path, serviceIndex], { type: value.check, path: value.path });
+    }
+    setQuickAdd(null);
+    if (next === current) {
+      setError(tr('无法应用。请检查任务组中的名称冲突或 HCL 表达式。', 'Could not apply. Check for name conflicts or HCL expressions in the group.'));
+      return;
+    }
+    commit(next, path);
+  };
+
+  const revealDiagnostic = (issue: BuilderDiagnostic) => {
+    let path = issue.path || [];
+    while (path.length && !nodeAt(document, path)) path = path.slice(0, -1);
+    const field = nodeAt(document, path)?.name;
+    for (let depth = path.length - 1; depth > 0; depth--) {
+      const owner = path.slice(0, depth);
+      if (nodeAt(document, owner)?.name !== 'task') continue;
+      const block = nodeAt(document, path.slice(0, depth + 1))?.name;
+      if (block === 'config' && (field === 'image' || issue.message.endsWith(' image'))) {
+        selectInForm(owner, 'base');
+        window.requestAnimationFrame(() => formPanelRef.current?.querySelector<HTMLElement>('[data-builder-field="image"]')?.focus());
+        return;
+      }
+      break;
+    }
+    jumpToTreePath(path);
+    window.requestAnimationFrame(() => {
+      const inspector = treePanelRef.current;
+      const element = inspector?.querySelector<HTMLElement>('input:not([disabled]), textarea:not([disabled]), select:not([disabled])');
+      (element || inspector)?.focus();
+    });
+  };
   const topLevelExtras = document.nodes
     .map((n, i) => ({ n, path: [i] as NodePath }))
     .filter(({ n }) => !(n.kind === 'block' && n.name === 'job'));
@@ -1256,7 +1388,9 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           )}
         </div>
 
-        <SectionBox icon={<Server className="h-4 w-4" />} title={tr('任务组名称与副本数', 'Group Name & Count')}>
+        {renderFormSections('group')}
+
+        <SectionBox hidden={groupSection !== 'base'} icon={<Server className="h-4 w-4" />} title={tr('任务组名称与副本数', 'Group Name & Count')}>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 items-end">
             <Input
               label={tr('任务组名称 (group)', 'Group Name (group)')}
@@ -1321,6 +1455,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         </SectionBox>
 
         <SectionBox
+          hidden={groupSection !== 'network'}
           icon={<Network className="h-4 w-4" />}
           title={tr(`网络与端口映射 (${ports.length})`, `Networking & Ports (${ports.length})`)}
           description={tr('在这里声明端口标签，随后在 Task 中一键勾选即可暴露给 Docker 容器', 'Declare port labels here, then select them in each Task to expose container ports')}
@@ -1422,6 +1557,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         </SectionBox>
 
         <SectionBox
+          hidden={groupSection !== 'base'}
           icon={<Container className="h-4 w-4" />}
           title={tr(`组内任务 (${tasks.length})`, `Tasks (${tasks.length})`)}
           description={tr('点击任务卡片进入容器镜像、资源配额、环境变量与 Vault 密钥配置', 'Click a task card to configure image, resources, env vars, and Vault secrets')}
@@ -1475,6 +1611,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         </SectionBox>
 
         <SectionBox
+          hidden={groupSection !== 'storage'}
           icon={<HardDrive className="h-4 w-4" />}
           title={tr('临时存储盘与持久化卷', 'Ephemeral Disk & Volumes')}
           description={tr('临时盘随 Allocation 保留本地数据；宿主机/CSI 卷可用于跨调度持久化', 'Ephemeral disk stays per Allocation; host/CSI volumes persist across allocations')}
@@ -1689,6 +1826,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         </SectionBox>
 
         <SectionBox
+          hidden={groupSection !== 'network'}
           icon={<Shield className="h-4 w-4" />}
           title={tr(`服务发现与健康检查 (service · ${services.length})`, `Service Discovery & Health Checks (service · ${services.length})`)}
           description={tr('推荐在任务组级注册服务（Nomad 原生服务发现或 Consul），支持标签与 HTTP / TCP 探活', 'Register group-level services (Nomad or Consul) with tags and HTTP/TCP checks')}
@@ -1696,14 +1834,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             !readOnly && (
               <Button
                 size="sm"
-                onClick={() =>
-                  commit(
-                    addGroupService(document, gPath, {
-                      name: grpName || 'my-service',
-                      port: ports[0]?.label,
-                    }),
-                  )
-                }
+                onClick={() => openServiceForm(gPath, gPath, grpName || 'my-service')}
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>{tr('注册服务', 'Register Service')}</span>
@@ -1715,6 +1846,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         </SectionBox>
 
         <SectionBox
+          hidden={groupSection !== 'advanced'}
           icon={<RefreshCw className="h-4 w-4" />}
           title={tr('故障重启策略 (restart)', 'Restart Policy (restart)')}
           description={tr('任务意外退出时在同一节点上的自动重启策略', 'Automatic task restart policy on the same node after unexpected exit')}
@@ -1763,7 +1895,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           )}
         </SectionBox>
 
-        {unhandled.length > 0 && (
+        {groupSection === 'advanced' && unhandled.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3.5 py-2.5 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">
             <span>{tr('已无损保留其他任务组块：', 'Preserved extra group blocks:')}</span>
             {unhandled.map((blk) => (
@@ -1948,7 +2080,10 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
     const cfgBlk = findChildBlock(document, tPath, 'config');
     const cfgBody = cfgBlk?.node.body;
     const dockerImage = parseLiteralString(getAttrNode(cfgBody, 'image')?.expression) || '';
-    const dockerPorts = parseLiteralStringList(getAttrNode(cfgBody, 'ports')?.expression) || [];
+    const dockerPortExpression = getAttrNode(cfgBody, 'ports')?.expression;
+    const dockerPortList = parseLiteralStringList(dockerPortExpression);
+    const dockerPorts = dockerPortList || [];
+    const editableDockerPorts = dockerPortExpression === undefined || dockerPortList !== undefined;
     const dockerVolumes = parseLiteralStringList(getAttrNode(cfgBody, 'volumes')?.expression) || [];
     const dockerEntrypoint = parseLiteralStringList(getAttrNode(cfgBody, 'entrypoint')?.expression) || [];
     const dockerCommand = parseLiteralString(getAttrNode(cfgBody, 'command')?.expression) || '';
@@ -2032,8 +2167,10 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           )}
         </div>
 
+        {renderFormSections('task')}
+
         {/* 1. Identity & Driver */}
-        <SectionBox icon={<Container className="h-4 w-4" />} title={tr('任务标识与运行环境', 'Task Identity & Driver')}>
+        <SectionBox hidden={taskSection !== 'base'} icon={<Container className="h-4 w-4" />} title={tr('任务标识与运行环境', 'Task Identity & Driver')}>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Input
               label={tr('任务名称 (task)', 'Task Name (task)')}
@@ -2081,6 +2218,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               <div className="space-y-1.5">
                 <Input
                   label={tr('Docker 镜像 (image)', 'Docker Image (image)')}
+                  data-builder-field="image"
                   disabled={readOnly}
                   value={dockerImage}
                   placeholder={tr('例如 nginx:alpine 或 postgres:17-bookworm', 'e.g. nginx:alpine or postgres:17-bookworm')}
@@ -2105,141 +2243,6 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 )}
               </div>
 
-              {/* 1-click Group port binding */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-slate-700 dark:text-slate-300">{tr('暴露端口绑定 (config.ports)', 'Port Mapping (config.ports)')}</span>
-                  <button
-                    type="button"
-                    onClick={() => selectInForm(gPath)}
-                    className="text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-                  >
-                    {tr('管理任务组端口', 'Manage Group Ports')}
-                  </button>
-                </div>
-                {groupPorts.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-[11px] text-slate-400 dark:border-slate-800">
-                    {tr('所属任务组暂未声明端口。点击右侧「管理任务组端口」添加后即可在此一键勾选。', 'No ports declared in parent group yet. Click "Manage Group Ports" to declare ports first.')}
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {groupPorts.map((p) => {
-                      const bound = dockerPorts.includes(p.label);
-                      return (
-                        <button
-                          key={p.path.join('.')}
-                          type="button"
-                          disabled={readOnly}
-                          onClick={() => commit(toggleTaskDockerPort(document, tPath, p.label))}
-                          className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-xs transition ${
-                            bound
-                              ? 'border-indigo-500 bg-indigo-50 text-indigo-700 font-semibold dark:bg-indigo-500/20 dark:text-indigo-200'
-                              : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
-                          }`}
-                        >
-                          {bound && <Check className="h-3 w-3" />}
-                          <span>{p.label}</span>
-                          {(p.staticPort || p.toPort) && (
-                            <span className="text-[10px] opacity-75">
-                              ({p.staticPort || tr('动态', 'dynamic')}→{p.toPort || p.staticPort || tr('自动', 'auto')})
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <StringListEditor
-                label={tr('容器目录挂载 (volumes)', 'Container Bind Mounts (volumes)')}
-                hint={tr('如 local/pgdata:/var/lib/postgresql/data', 'e.g. local/pgdata:/var/lib/postgresql/data')}
-                placeholder="local/data:/var/lib/data"
-                items={dockerVolumes}
-                disabled={readOnly}
-                onChange={(next) =>
-                  commit(
-                    setTaskConfigAttr(
-                      document,
-                      tPath,
-                      'volumes',
-                      next.length > 0 ? JSON.stringify(next) : null,
-                    ),
-                  )
-                }
-              />
-
-              <div className="border-t border-slate-100 pt-2 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowDockerAdv((v) => !v)}
-                  className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-indigo-600 dark:text-slate-400"
-                >
-                  {showDockerAdv ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                  <span>
-                    {tr('容器启动命令与高级选项（entrypoint / command / args / force_pull', 'Container Command & Advanced Options (entrypoint / command / args / force_pull')}
-                    {dockerEntrypoint.length || dockerCommand || dockerArgs.length || dockerForcePull || dockerPrivileged
-                      ? tr(' · 已配置', ' · Configured')
-                      : ''}
-                    {tr('）', ')')}
-                  </span>
-                </button>
-                {showDockerAdv && (
-                  <div className="mt-3 space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 dark:border-slate-800 dark:bg-slate-950/30">
-                    <StringListEditor
-                      label={tr('入口点 (entrypoint)', 'Entrypoint (entrypoint)')}
-                      placeholder="/bin/sh"
-                      items={dockerEntrypoint}
-                      disabled={readOnly}
-                      onChange={(next) =>
-                        commit(setTaskConfigAttr(document, tPath, 'entrypoint', next.length ? JSON.stringify(next) : null))
-                      }
-                    />
-                    <Input
-                      label={tr('覆盖命令 (command，可选)', 'Command override (command, optional)')}
-                      disabled={readOnly}
-                      value={dockerCommand}
-                      placeholder={tr('留空则使用镜像默认', 'Leave blank for image default')}
-                      onChange={(e) =>
-                        commit(setTaskConfigAttr(document, tPath, 'command', e.target.value ? JSON.stringify(e.target.value) : null))
-                      }
-                    />
-                    <StringListEditor
-                      label={tr('启动参数 (args)', 'Arguments (args)')}
-                      placeholder="--port 8080"
-                      items={dockerArgs}
-                      disabled={readOnly}
-                      onChange={(next) =>
-                        commit(setTaskConfigAttr(document, tPath, 'args', next.length ? JSON.stringify(next) : null))
-                      }
-                    />
-                    <div className="flex flex-wrap gap-4 pt-1">
-                      <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          disabled={readOnly}
-                          checked={dockerForcePull}
-                          onChange={(e) =>
-                            commit(setTaskConfigAttr(document, tPath, 'force_pull', e.target.checked ? 'true' : null))
-                          }
-                        />
-                        <span>{tr('每次强制拉取镜像 (force_pull)', 'Always pull image (force_pull)')}</span>
-                      </label>
-                      <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          disabled={readOnly}
-                          checked={dockerPrivileged}
-                          onChange={(e) =>
-                            commit(setTaskConfigAttr(document, tPath, 'privileged', e.target.checked ? 'true' : null))
-                          }
-                        />
-                        <span>{tr('特权容器模式 (privileged)', 'Privileged mode (privileged)')}</span>
-                      </label>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           ) : driver === 'exec' || driver === 'raw_exec' ? (
             <div className="space-y-3 border-t border-slate-100 pt-3 dark:border-slate-800">
@@ -2272,8 +2275,165 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           )}
         </SectionBox>
 
-        {/* 2. Environment Variables */}
+        {/* Task Resources */}
         <SectionBox
+          hidden={taskSection !== 'base'}
+          icon={<Cpu className="h-4 w-4" />}
+          title={tr('计算资源配额 (resources)', 'Compute Resources (resources)')}
+          description={tr('Nomad 会依据配额自动寻找剩余算力足够的 Client 节点', 'Nomad schedules tasks onto Client nodes matching these resource limits')}
+        >
+          {!readOnly && (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {RESOURCE_PRESETS.map((p) => {
+                const active = cpu === p.cpu && mem === p.memory;
+                return (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => commit(setTaskResources(document, tPath, { cpu: p.cpu, memory: p.memory }))}
+                    className={`rounded-xl border px-3 py-2 text-left transition ${
+                      active
+                        ? 'border-indigo-500 bg-indigo-50/70 ring-1 ring-indigo-500/20 dark:border-indigo-400 dark:bg-indigo-500/15'
+                        : 'border-slate-200 bg-slate-50/50 hover:border-indigo-300 dark:border-slate-800 dark:bg-slate-950/30'
+                    }`}
+                  >
+                    <div className="font-semibold text-slate-900 dark:text-slate-100">{isEn ? p.labelEn : p.label}</div>
+                    <div className="mt-0.5 font-mono text-[10px] text-slate-500 dark:text-slate-400">{p.hint}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 items-end">
+            <Input
+              label={tr('CPU 配额 (MHz)', 'CPU (MHz)')}
+              type="number"
+              min={20}
+              step={50}
+              disabled={readOnly}
+              value={cpu !== undefined ? String(cpu) : ''}
+              placeholder="100"
+              onChange={(e) => commit(setTaskResources(document, tPath, { cpu: e.target.value ? Number(e.target.value) : null }))}
+            />
+            <Input
+              label={tr('内存配额 (MiB)', 'Memory (MiB)')}
+              type="number"
+              min={16}
+              step={32}
+              disabled={readOnly}
+              value={mem !== undefined ? String(mem) : ''}
+              placeholder="128"
+              onChange={(e) => commit(setTaskResources(document, tPath, { memory: e.target.value ? Number(e.target.value) : null }))}
+            />
+            <Input
+              label={tr('突发内存上限 (MiB)', 'Max Memory (MiB)')}
+              type="number"
+              min={16}
+              step={64}
+              disabled={readOnly}
+              value={memMax !== undefined ? String(memMax) : ''}
+              placeholder={tr('可选', 'Optional')}
+              onChange={(e) =>
+                commit(setTaskResources(document, tPath, { memoryMax: e.target.value ? Number(e.target.value) : null }))
+              }
+            />
+          </div>
+        </SectionBox>
+
+        {/* 2. Environment Variables */}
+        {driver === 'docker' && (
+          <SectionBox
+            hidden={taskSection !== 'network'}
+            icon={<Network className="h-4 w-4" />}
+            title={tr('容器端口', 'Container Ports')}
+            actions={!readOnly && editableDockerPorts && (
+              <Button size="sm" onClick={() => {
+                const labels = groupPorts.map((port) => port.label);
+                let label = 'http';
+                let suffix = 2;
+                while (labels.includes(label)) label = `http${suffix++}`;
+                setQuickAdd({ form: { kind: 'port', label, labels }, path: tPath, groupPath: gPath });
+              }}>
+                <Plus className="h-3.5 w-3.5" />
+                {tr('声明并绑定端口', 'Declare and Bind Port')}
+              </Button>
+            )}
+          >
+            {/* 1-click Group port binding */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-300">{tr('暴露端口绑定 (config.ports)', 'Port Mapping (config.ports)')}</span>
+                <button
+                  type="button"
+                  onClick={() => selectInForm(gPath, 'network')}
+                  className="text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  {tr('管理任务组端口', 'Manage Group Ports')}
+                </button>
+              </div>
+              {!editableDockerPorts ? (
+                <p className="text-xs text-slate-500">{tr('端口列表使用 HCL 表达式，可在高级结构树中编辑。', 'The port list uses an HCL expression. Edit it in AST Tree.')}</p>
+              ) : groupPorts.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-[11px] text-slate-400 dark:border-slate-800">
+                  {tr('所属任务组暂未声明端口。', 'No ports have been declared in this group.')}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {groupPorts.map((p) => {
+                    const bound = dockerPorts.includes(p.label);
+                    return (
+                      <button
+                        key={p.path.join('.')}
+                        type="button"
+                        disabled={readOnly || !editableDockerPorts}
+                        aria-pressed={bound}
+                        onClick={() => commit(toggleTaskDockerPort(document, tPath, p.label))}
+                        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-xs transition ${
+                          bound
+                            ? 'border-indigo-500 bg-indigo-50 text-indigo-700 font-semibold dark:bg-indigo-500/20 dark:text-indigo-200'
+                            : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                        }`}
+                      >
+                        {bound && <Check className="h-3 w-3" />}
+                        <span>{p.label}</span>
+                        {(p.staticPort || p.toPort) && (
+                          <span className="text-[10px] opacity-75">
+                            ({p.staticPort || tr('动态', 'dynamic')}→{p.toPort || p.staticPort || tr('自动', 'auto')})
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </SectionBox>
+        )}
+
+        {driver === 'docker' && (
+          <SectionBox hidden={taskSection !== 'storage'} icon={<HardDrive className="h-4 w-4" />} title={tr('容器目录挂载', 'Container Bind Mounts')}>
+            <StringListEditor
+              label={tr('容器目录挂载 (volumes)', 'Container Bind Mounts (volumes)')}
+              hint={tr('如 local/pgdata:/var/lib/postgresql/data', 'e.g. local/pgdata:/var/lib/postgresql/data')}
+              placeholder="local/data:/var/lib/data"
+              items={dockerVolumes}
+              disabled={readOnly}
+              onChange={(next) =>
+                commit(
+                  setTaskConfigAttr(
+                    document,
+                    tPath,
+                    'volumes',
+                    next.length > 0 ? JSON.stringify(next) : null,
+                  ),
+                )
+              }
+            />
+          </SectionBox>
+        )}
+
+        <SectionBox
+          hidden={taskSection !== 'secrets'}
           icon={<Code2 className="h-4 w-4" />}
           title={tr(`环境变量 (env · ${envState.rows.length})`, `Environment Variables (env · ${envState.rows.length})`)}
           description={tr('注入普通明文配置；密码与密钥建议通过下方 Vault 模板动态注入', 'Inject non-sensitive config; use Vault templates below for secrets')}
@@ -2338,6 +2498,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         {/* 4. Vault Secret & Templates */}
         <SectionBox
+          hidden={taskSection !== 'secrets'}
           icon={<KeyRound className="h-4 w-4" />}
           title={tr(`Vault 密钥与渲染模板 (template · ${templates.length})`, `Vault Secrets & Templates (template · ${templates.length})`)}
           description={tr('绑定 Nomad-Vault 联动 Role 并渲染 0600 密码文件或动态环境变量，避免明文密码', 'Bind a Nomad-Vault role to render 0600 secret files or dynamic env vars')}
@@ -2638,23 +2799,30 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         {/* 4. Volume Mounts (always visible so users can easily discover and attach group volumes) */}
         <SectionBox
+          hidden={taskSection !== 'storage'}
           icon={<Database className="h-4 w-4" />}
           title={tr(`持久化卷挂载 (volume_mount · ${volumeMounts.length})`, `Volume Mounts (volume_mount · ${volumeMounts.length})`)}
           description={tr('将任务组中声明的 volume（host / csi）挂载到容器指定目录', 'Mount group-declared volumes (host / csi) into the task container')}
           actions={
             <div className="flex flex-wrap items-center gap-1.5">
-              <Button size="sm" variant="ghost" onClick={() => selectInForm(gPath)}>
-                {tr('管理任务组 volume', 'Manage Group Volumes')}
+              <Button size="sm" variant="ghost" onClick={() => selectInForm(gPath, 'storage')}>
+                {tr('管理任务组卷', 'Manage Group Volumes')}
               </Button>
               {!readOnly && (
                 <Button
                   size="sm"
-                  onClick={() =>
-                    commit(addTaskVolumeMount(document, tPath, { volume: groupVolumes[0]?.label || 'data' }))
-                  }
+                  onClick={() => setQuickAdd({
+                    form: {
+                      kind: 'volume',
+                      volumes: groupVolumes.map((volume) => volume.label),
+                      hostVolumes: Object.keys(options.host_volumes || {}),
+                    },
+                    path: tPath,
+                    groupPath: gPath,
+                  })}
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  <span>{tr('挂载卷', 'Mount Volume')}</span>
+                  <span>{groupVolumes.length > 0 ? tr('挂载卷', 'Mount Volume') : tr('声明并挂载卷', 'Declare and Mount Volume')}</span>
                 </Button>
               )}
             </div>
@@ -2664,7 +2832,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             <div className="text-[11px] text-slate-400">
               {groupVolumes.length > 0
                 ? tr(`所属任务组已声明 ${groupVolumes.length} 个卷（${groupVolumes.map((v) => v.label).join(', ')}），点击右上角「挂载卷」即可挂载进容器。`, `Parent group declares ${groupVolumes.length} volume(s) (${groupVolumes.map((v) => v.label).join(', ')}). Click "Mount Volume" to attach.`)
-                : tr('暂未挂载持久化卷。可先在任务组声明 volume（host / csi），或直接点击「挂载卷」填写卷名与容器路径。', 'No volume mounts yet. Declare a volume in the Group or click "Mount Volume" above.')}
+                : tr('暂未挂载持久卷。可选择已有的 Host Volume 或 CSI 卷并填写容器挂载路径。', 'Select an existing Host Volume or CSI volume and enter the container mount path.')}
             </div>
           ) : (
             <div className="space-y-2">
@@ -2743,96 +2911,110 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
 
         {/* 5. Task-level Service registration */}
         <SectionBox
+          hidden={taskSection !== 'network'}
           icon={<Shield className="h-4 w-4" />}
           title={tr(`任务级服务注册 (service · ${taskServices.length})`, `Task Services (service · ${taskServices.length})`)}
           description={tr('通常推荐在任务组中注册服务；如需绑定单个 Task 生命周期，也可直接在此配置', 'Prefer registering services at Group level; configure here to tie to a single Task')}
           actions={
-            !readOnly && (
-              <Button
-                size="sm"
-                onClick={() =>
-                  commit(
-                    addGroupService(document, tPath, {
-                      name: taskName || 'my-service',
-                      port: groupPorts[0]?.label,
-                    }),
-                  )
-                }
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>{tr('注册服务', 'Register Service')}</span>
+            <>
+              <Button size="sm" variant="ghost" onClick={() => selectInForm(gPath, 'network')}>
+                {tr('管理任务组服务', 'Manage Group Services')}
               </Button>
-            )
+              {!readOnly && (
+                <Button
+                  size="sm"
+                  onClick={() => openServiceForm(tPath, gPath, taskName || 'my-service')}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>{tr('注册任务级服务', 'Register Task Service')}</span>
+                </Button>
+              )}
+            </>
           }
         >
           {renderServiceCards(taskServices, groupPorts, tr('未配置任务级 service 块。', 'No task-level service blocks configured.'))}
         </SectionBox>
 
-        {/* 6. Resources (placed at bottom of Task form) */}
-        <SectionBox
-          icon={<Cpu className="h-4 w-4" />}
-          title={tr('计算资源配额 (resources)', 'Compute Resources (resources)')}
-          description={tr('Nomad 会依据配额自动寻找剩余算力足够的 Client 节点', 'Nomad schedules tasks onto Client nodes matching these resource limits')}
-        >
-          {!readOnly && (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {RESOURCE_PRESETS.map((p) => {
-                const active = cpu === p.cpu && mem === p.memory;
-                return (
-                  <button
-                    key={p.label}
-                    type="button"
-                    onClick={() => commit(setTaskResources(document, tPath, { cpu: p.cpu, memory: p.memory }))}
-                    className={`rounded-xl border px-3 py-2 text-left transition ${
-                      active
-                        ? 'border-indigo-500 bg-indigo-50/70 ring-1 ring-indigo-500/20 dark:border-indigo-400 dark:bg-indigo-500/15'
-                        : 'border-slate-200 bg-slate-50/50 hover:border-indigo-300 dark:border-slate-800 dark:bg-slate-950/30'
-                    }`}
-                  >
-                    <div className="font-semibold text-slate-900 dark:text-slate-100">{isEn ? p.labelEn : p.label}</div>
-                    <div className="mt-0.5 font-mono text-[10px] text-slate-500 dark:text-slate-400">{p.hint}</div>
-                  </button>
-                );
-              })}
+        {driver === 'docker' && (
+          <SectionBox hidden={taskSection !== 'advanced'} icon={<SlidersHorizontal className="h-4 w-4" />} title={tr('容器高级选项', 'Advanced Container Options')}>
+            <div className="border-t border-slate-100 pt-2 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowDockerAdv((v) => !v)}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-indigo-600 dark:text-slate-400"
+              >
+                {showDockerAdv ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                <span>
+                  {tr('容器启动命令与高级选项（entrypoint / command / args / force_pull', 'Container Command & Advanced Options (entrypoint / command / args / force_pull')}
+                  {dockerEntrypoint.length || dockerCommand || dockerArgs.length || dockerForcePull || dockerPrivileged
+                    ? tr(' · 已配置', ' · Configured')
+                    : ''}
+                  {tr('）', ')')}
+                </span>
+              </button>
+              {showDockerAdv && (
+                <div className="mt-3 space-y-3 rounded-xl border border-slate-200/80 bg-slate-50/50 p-3 dark:border-slate-800 dark:bg-slate-950/30">
+                  <StringListEditor
+                    label={tr('入口点 (entrypoint)', 'Entrypoint (entrypoint)')}
+                    placeholder="/bin/sh"
+                    items={dockerEntrypoint}
+                    disabled={readOnly}
+                    onChange={(next) =>
+                      commit(setTaskConfigAttr(document, tPath, 'entrypoint', next.length ? JSON.stringify(next) : null))
+                    }
+                  />
+                  <Input
+                    label={tr('覆盖命令 (command，可选)', 'Command override (command, optional)')}
+                    disabled={readOnly}
+                    value={dockerCommand}
+                    placeholder={tr('留空则使用镜像默认', 'Leave blank for image default')}
+                    onChange={(e) =>
+                      commit(setTaskConfigAttr(document, tPath, 'command', e.target.value ? JSON.stringify(e.target.value) : null))
+                    }
+                  />
+                  <StringListEditor
+                    label={tr('启动参数 (args)', 'Arguments (args)')}
+                    placeholder="--port 8080"
+                    items={dockerArgs}
+                    disabled={readOnly}
+                    onChange={(next) =>
+                      commit(setTaskConfigAttr(document, tPath, 'args', next.length ? JSON.stringify(next) : null))
+                    }
+                  />
+                  <div className="flex flex-wrap gap-4 pt-1">
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        disabled={readOnly}
+                        checked={dockerForcePull}
+                        onChange={(e) =>
+                          commit(setTaskConfigAttr(document, tPath, 'force_pull', e.target.checked ? 'true' : null))
+                        }
+                      />
+                      <span>{tr('每次强制拉取镜像 (force_pull)', 'Always pull image (force_pull)')}</span>
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        disabled={readOnly}
+                        checked={dockerPrivileged}
+                        onChange={(e) =>
+                          commit(setTaskConfigAttr(document, tPath, 'privileged', e.target.checked ? 'true' : null))
+                        }
+                      />
+                      <span>{tr('特权容器模式 (privileged)', 'Privileged mode (privileged)')}</span>
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 items-end">
-            <Input
-              label={tr('CPU 配额 (MHz)', 'CPU (MHz)')}
-              type="number"
-              min={20}
-              step={50}
-              disabled={readOnly}
-              value={cpu !== undefined ? String(cpu) : ''}
-              placeholder="100"
-              onChange={(e) => commit(setTaskResources(document, tPath, { cpu: e.target.value ? Number(e.target.value) : null }))}
-            />
-            <Input
-              label={tr('内存配额 (MiB)', 'Memory (MiB)')}
-              type="number"
-              min={16}
-              step={32}
-              disabled={readOnly}
-              value={mem !== undefined ? String(mem) : ''}
-              placeholder="128"
-              onChange={(e) => commit(setTaskResources(document, tPath, { memory: e.target.value ? Number(e.target.value) : null }))}
-            />
-            <Input
-              label={tr('突发内存上限 (MiB)', 'Max Memory (MiB)')}
-              type="number"
-              min={16}
-              step={64}
-              disabled={readOnly}
-              value={memMax !== undefined ? String(memMax) : ''}
-              placeholder={tr('可选', 'Optional')}
-              onChange={(e) =>
-                commit(setTaskResources(document, tPath, { memoryMax: e.target.value ? Number(e.target.value) : null }))
-              }
-            />
-          </div>
-        </SectionBox>
+          </SectionBox>
+        )}
+        {taskSection === 'advanced' && driver !== 'docker' && !unhandled.length && (
+          <p className="text-xs text-slate-500">{tr('这个任务的驱动没有额外的表单设置。', 'This task driver has no additional form settings.')}</p>
+        )}
 
-        {unhandled.length > 0 && (
+        {taskSection === 'advanced' && unhandled.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3.5 py-2.5 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">
             <span>{tr('已无损保留其他任务块：', 'Preserved extra task blocks:')}</span>
             {unhandled.map((blk) => (
@@ -3066,7 +3248,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             {outline(document, [])}
           </div>
         </div>
-        <div className="max-h-[640px] space-y-4 overflow-auto rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <div ref={treePanelRef} tabIndex={-1} className="max-h-[640px] space-y-4 overflow-auto rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2 dark:border-slate-800">
             <div className="min-w-0">
               <div className="flex flex-wrap gap-1 text-[11px] text-slate-500">
@@ -3323,7 +3505,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
             }`}
           >
             <span className={`h-1.5 w-1.5 rounded-full bg-current ${rendering ? 'animate-pulse' : ''}`} />
-            {rendering ? tr('同步 HCL 中…', 'Syncing HCL...') : hasErrors ? tr(`待完善 (${diagnostics.length})`, `Incomplete (${diagnostics.length})`) : tr('结构校验通过', 'Valid HCL')}
+            {rendering ? tr('同步 HCL 中…', 'Syncing HCL...') : hasErrors ? tr(`待完善 (${diagnostics.length})`, `Incomplete (${diagnostics.length})`) : tr('HCL 结构通过', 'HCL Structure Valid')}
           </span>
         </div>
 
@@ -3359,11 +3541,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               key={i}
               type="button"
               className="block w-full text-left hover:underline"
-              onClick={() => {
-                let path = issue.path || [];
-                while (path.length && !nodeAt(document, path)) path = path.slice(0, -1);
-                setSelected(path);
-              }}
+              onClick={() => revealDiagnostic(issue)}
             >
               • {issue.message}
             </button>
@@ -3372,7 +3550,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
       )}
 
       {/* Main Canvas + Optional Sticky Live HCL Split Pane */}
-      <div className={`grid grid-cols-1 gap-4 items-start ${showPreview ? 'xl:grid-cols-[minmax(0,1fr)_328px] 2xl:grid-cols-[minmax(0,1fr)_400px]' : ''}`}>
+      <div className={`grid gap-4 items-start ${showPreview && widePreview ? 'grid-cols-[minmax(0,1fr)_minmax(300px,30%)]' : 'grid-cols-1'}`}>
         <div className="min-w-0">
           {viewMode === 'tree' ? (
             renderTreeWorkspace()
@@ -3385,9 +3563,9 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
               </Button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[208px_minmax(0,1fr)] items-start">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[172px_minmax(0,1fr)] items-start">
               {/* Left: Visual Blueprint Navigator */}
-              <div className="rounded-xl border border-slate-200/90 bg-slate-50/60 p-3 space-y-2.5 dark:border-slate-800 dark:bg-slate-950/50 lg:sticky lg:top-4">
+              <div className="rounded-xl border border-slate-200/90 bg-slate-50/60 p-3 space-y-2.5 dark:border-slate-800 dark:bg-slate-950/50 lg:sticky lg:top-20">
                 <div className="flex items-center justify-between px-1">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                     {tr('任务结构蓝图', 'Job Structure')}
@@ -3585,8 +3763,8 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
         </div>
 
         {/* Sticky Live HCL Preview Pane */}
-        {showPreview && (
-          <div className="rounded-xl border border-slate-200/90 bg-white dark:border-slate-800 dark:bg-slate-900 xl:sticky xl:top-4 overflow-hidden">
+        {showPreview && widePreview && (
+          <div className="sticky top-20 min-w-0 overflow-hidden rounded-xl border border-slate-200/90 bg-white dark:border-slate-800 dark:bg-slate-900">
             <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3.5 py-2.5 dark:border-slate-800">
               <div className="flex items-center gap-1.5 min-w-0">
                 <Code2 className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
@@ -3595,18 +3773,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                   {tr(`${liveHcl.split('\n').length} 行`, `${liveHcl.split('\n').length} lines`)}
                 </span>
               </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() =>
-                  void copyText(liveHcl)
-                    .then(() => toast.success(tr('已复制实时 HCL', 'Live HCL copied')))
-                    .catch((ex) => toast.error(ex.message))
-                }
-              >
-                <Copy className="h-3.5 w-3.5" />
-                <span>{tr('复制', 'Copy')}</span>
-              </Button>
+              {copyPreviewButton}
             </div>
             <div className="p-2.5">
               <CodeEditor value={liveHcl} onChange={() => {}} readOnly height="580px" />
@@ -3617,6 +3784,19 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
           </div>
         )}
       </div>
+
+      <Modal
+        open={showPreview && !widePreview}
+        title={tr('实时 HCL 源码', 'Live HCL Source')}
+        onClose={() => setShowPreview(false)}
+        size="lg"
+        placement="right"
+        footer={copyPreviewButton}
+      >
+        <CodeEditor value={liveHcl} onChange={() => {}} readOnly height="calc(100dvh - 184px)" />
+      </Modal>
+
+      {quickAdd && <BuilderQuickAddDialog form={quickAdd.form} onClose={() => setQuickAdd(null)} onSave={saveQuickAdd} />}
 
       <HostVolumeCreateModal
         open={Boolean(createHostVol)}

@@ -398,6 +398,22 @@ export function toggleTaskDockerPort(doc: HCLDocument, taskPath: NodePath, portL
   });
 }
 
+export function declareAndBindTaskPort(
+  doc: HCLDocument,
+  groupPath: NodePath,
+  taskPath: NodePath,
+  label: string,
+  toPort: number,
+): HCLDocument {
+  const config = findChildBlock(doc, taskPath, 'config');
+  const expression = getAttrNode(config?.node.body, 'ports')?.expression;
+  const bindings = parseLiteralStringList(expression);
+  if (expression !== undefined && bindings === undefined) return doc;
+  if (listGroupPorts(doc, groupPath).some((port) => port.label === label)) return doc;
+  const next = addGroupPort(doc, groupPath, { label, toPort });
+  return bindings?.includes(label) ? next : toggleTaskDockerPort(next, taskPath, label);
+}
+
 export function setTaskResources(
   doc: HCLDocument,
   taskPath: NodePath,
@@ -844,6 +860,27 @@ export function addTaskVolumeMount(
         trailing: '\n',
       },
     });
+  });
+}
+
+export function declareAndMountTaskVolume(
+  doc: HCLDocument,
+  groupPath: NodePath,
+  taskPath: NodePath,
+  declaration: { name: string; type: 'host' | 'csi'; source: string; readOnly: boolean },
+  destination: string,
+): HCLDocument {
+  if (listChildBlocks(doc, groupPath, 'volume').some((volume) => volume.label === declaration.name)) return doc;
+  let next = addGroupVolume(doc, groupPath, declaration);
+  if (declaration.type === 'csi') {
+    const volumePath = [...groupPath, bodyAt(next, groupPath).nodes.length - 1];
+    next = setAttrExpr(next, volumePath, 'attachment_mode', '"file-system"');
+    next = setAttrExpr(next, volumePath, 'access_mode', declaration.readOnly ? '"single-node-reader-only"' : '"single-node-writer"');
+  }
+  return addTaskVolumeMount(next, taskPath, {
+    volume: declaration.name,
+    destination,
+    readOnly: declaration.readOnly,
   });
 }
 

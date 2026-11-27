@@ -10,6 +10,8 @@ import {
   addServiceCheck,
   addTaskEnvRow,
   addTaskTemplateBlock,
+  declareAndBindTaskPort,
+  declareAndMountTaskVolume,
   findJobPath,
   getAttrExpr,
   listChildBlocks,
@@ -17,6 +19,7 @@ import {
   listTaskEnvRows,
   listUnhandledBlocks,
   parseLiteralStringList,
+  setAttrExpr,
   setGroupEphemeralDisk,
   setJobPeriodic,
   setJobUpdateStrategy,
@@ -155,4 +158,42 @@ test('optional Job/Group features and unhandled block detection work cleanly', (
   const extra = listUnhandledBlocks(doc, gp, new Set(['task', 'network', 'ephemeral_disk']));
   assert.equal(extra.length, 1);
   assert.equal(extra[0].name, 'service');
+});
+
+test('declaring and binding a port preserves existing bindings and leaves expressions untouched', () => {
+  const { document, path: groupPath } = addReadyGroup(baseDoc(), [0]);
+  const taskPath = listChildBlocks(document, groupPath, 'task')[0].path;
+  const configPath = listChildBlocks(document, taskPath, 'config')[0].path;
+  const original = setAttrExpr(document, configPath, 'ports', '["existing"]');
+  const next = declareAndBindTaskPort(original, groupPath, taskPath, 'web', 8080);
+
+  assert.deepEqual(parseLiteralStringList(getAttrExpr(next, configPath, 'ports')), ['existing', 'web']);
+  assert.equal(listGroupPorts(next, groupPath)[0].toPort, '8080');
+  assert.equal(listGroupPorts(original, groupPath).length, 0);
+  assert.equal(declareAndBindTaskPort(next, groupPath, taskPath, 'web', 80), next);
+
+  const dynamic = setAttrExpr(original, configPath, 'ports', 'var.docker_ports');
+  assert.equal(declareAndBindTaskPort(dynamic, groupPath, taskPath, 'web', 80), dynamic);
+});
+
+test('declaring and mounting a volume uses the selected declaration and preserves existing volumes', () => {
+  const { document, path: groupPath } = addReadyGroup(baseDoc(), [0]);
+  const taskPath = listChildBlocks(document, groupPath, 'task')[0].path;
+  const next = declareAndMountTaskVolume(document, groupPath, taskPath, {
+    name: 'shared', type: 'csi', source: 'data-volume', readOnly: true,
+  }, '/data');
+  const [volume] = listChildBlocks(next, groupPath, 'volume');
+  const [mount] = listChildBlocks(next, taskPath, 'volume_mount');
+  assert.equal(volume.label, 'shared');
+  assert.equal(getAttrExpr(next, volume.path, 'source'), '"data-volume"');
+  assert.equal(getAttrExpr(next, volume.path, 'attachment_mode'), '"file-system"');
+  assert.equal(getAttrExpr(next, volume.path, 'access_mode'), '"single-node-reader-only"');
+  assert.equal(getAttrExpr(next, mount.path, 'volume'), '"shared"');
+  assert.equal(getAttrExpr(next, mount.path, 'destination'), '"/data"');
+  assert.equal(getAttrExpr(next, mount.path, 'read_only'), 'true');
+  assert.equal(listChildBlocks(document, groupPath, 'volume').length, 0);
+  assert.equal(listChildBlocks(document, taskPath, 'volume_mount').length, 0);
+  assert.equal(declareAndMountTaskVolume(next, groupPath, taskPath, {
+    name: 'shared', type: 'host', source: 'other', readOnly: false,
+  }, '/other'), next);
 });

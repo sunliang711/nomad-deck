@@ -1085,7 +1085,7 @@ export function JobCenterPage() {
 
             {/* 3-Step Validate -> Plan -> Apply Action Bar */}
             {isAdmin && (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/50">
+              <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-white px-3.5 py-2.5 shadow-sm dark:border-slate-800 dark:bg-slate-950">
                 <div className="flex flex-wrap items-center gap-2">
                   <input
                     placeholder={tr('输入名称保存为模板…', 'Template name...')}
@@ -1112,6 +1112,7 @@ export function JobCenterPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  {plan?.plan_id && <Badge tone="blue">{tr('计划已生成', 'Plan Generated')}</Badge>}
                   <Button
                     size="sm"
                     disabled={needsDeployment || modeBusy || (editMode === 'visual' && !visualReady)}

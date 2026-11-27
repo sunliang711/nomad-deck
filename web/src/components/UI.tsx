@@ -1014,6 +1014,7 @@ export function Modal({
   busy = false,
   dismissible = true,
   backdropClassName = '',
+  placement = 'center',
   footer,
 }: {
   open: boolean;
@@ -1025,6 +1026,7 @@ export function Modal({
   busy?: boolean;
   dismissible?: boolean;
   backdropClassName?: string;
+  placement?: 'center' | 'right';
   footer?: React.ReactNode;
 }) {
   if (!open) return null;
@@ -1037,6 +1039,7 @@ export function Modal({
       busy={busy}
       dismissible={dismissible}
       backdropClassName={backdropClassName}
+      placement={placement}
       footer={footer}
     >
       {children}
@@ -1052,6 +1055,7 @@ function ModalDialog({
   busy,
   dismissible,
   backdropClassName,
+  placement,
   footer,
 }: {
   title: React.ReactNode;
@@ -1061,6 +1065,7 @@ function ModalDialog({
   busy: boolean;
   dismissible: boolean;
   backdropClassName: string;
+  placement: 'center' | 'right';
   footer?: React.ReactNode;
 }) {
   const { tr } = useI18n();
@@ -1120,7 +1125,7 @@ function ModalDialog({
 
   return createPortal(
     <div
-      className={`modal-backdrop ${backdropClassName}`.trim()}
+      className={`modal-backdrop ${placement === 'right' ? 'justify-end p-0' : ''} ${backdropClassName}`.trim()}
       onClick={(e) => {
         if (e.target === e.currentTarget && !busy && dismissible) onClose();
       }}
@@ -1132,7 +1137,7 @@ function ModalDialog({
         aria-label={typeof title === 'string' ? title : tr('对话窗口', 'Dialog')}
         aria-busy={busy}
         tabIndex={-1}
-        className={`modal-container ${maxW} max-h-[calc(100dvh-40px)] flex flex-col overflow-hidden border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900`}
+        className={`modal-container ${maxW} ${placement === 'right' ? 'h-dvh rounded-none sm:rounded-l-2xl' : 'max-h-[calc(100dvh-40px)]'} flex flex-col overflow-hidden border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900`}
       >
         <div className="flex items-center justify-between gap-3 border-b border-slate-200/80 px-6 py-4 shrink-0 dark:border-slate-800">
           <h3 className="font-semibold text-base text-slate-900 dark:text-slate-100 truncate">{title}</h3>

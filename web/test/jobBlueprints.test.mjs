@@ -10,6 +10,9 @@ test('STARTER_SAMPLES include all expected built-in blueprints with unique ids a
     'docker',
     'caddy',
     'traefik',
+    'nginx-gateway',
+    'openresty-gateway',
+    'acme-cert-sync',
     'postgres',
     'mysql',
     'redis',
@@ -34,4 +37,11 @@ test('STARTER_SAMPLES include all expected built-in blueprints with unique ids a
 
   const rocketmq = STARTER_SAMPLES.find((s) => s.id === 'rocketmq');
   assert.ok(rocketmq?.hcl.includes('${NOMAD_ADDR_namesrv}'), 'rocketmq broker must reference NOMAD_ADDR_namesrv');
+
+  const nginxGw = STARTER_SAMPLES.find((s) => s.id === 'nginx-gateway');
+  assert.ok(nginxGw?.hcl.includes('nginx:alpine') && nginxGw?.hcl.includes('SIGHUP'), 'nginx-gateway must use nginx:alpine and SIGHUP');
+  const openrestyGw = STARTER_SAMPLES.find((s) => s.id === 'openresty-gateway');
+  assert.ok(openrestyGw?.hcl.includes('openresty/openresty:alpine') && openrestyGw?.hcl.includes('ban-check.lua'), 'openresty-gateway must include Lua WAF');
+  const acmeSync = STARTER_SAMPLES.find((s) => s.id === 'acme-cert-sync');
+  assert.ok(acmeSync?.hcl.includes('periodic') && acmeSync?.hcl.includes('acme.sh'), 'acme-cert-sync must be a periodic acme.sh job');
 });

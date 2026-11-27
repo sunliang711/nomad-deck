@@ -483,6 +483,7 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
   const [vaultRoles, setVaultRoles] = useState<VaultRoleOption[]>([]);
   const [vaultIntegrations, setVaultIntegrations] = useState<VaultIntegrationOption[]>([]);
   const [createHostVol, setCreateHostVol] = useState<{ name: string; readOnly: boolean } | null>(null);
+  const [traefikTagDraft, setTraefikTagDraft] = useState<{ key: string; host: string; tls: boolean } | null>(null);
   const [vaultHelper, setVaultHelper] = useState({
     role: '',
     secretPath: 'secret/apps/demo',
@@ -2029,19 +2030,91 @@ export const VisualJobBuilder = forwardRef<VisualJobBuilderHandle, Props>(functi
                 )}
               </div>
 
-              <Input
-                label={tr('服务标签 (tags，逗号分隔，可选)', 'Tags (comma-separated, optional)')}
-                disabled={readOnly}
-                value={tags.join(', ')}
-                placeholder={tr('例如 prod, traefik.enable=true', 'e.g. prod, traefik.enable=true')}
-                onChange={(e) => {
-                  const next = e.target.value
-                    .split(',')
-                    .map((item) => item.trim())
-                    .filter(Boolean);
-                  commit(setAttrExpr(document, svc.path, 'tags', next.length > 0 ? JSON.stringify(next) : null));
-                }}
-              />
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                    {tr('服务标签 (tags，逗号分隔，可选)', 'Tags (comma-separated, optional)')}
+                  </label>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const key = svc.path.join('.');
+                        const routerName = (svcName || 'app').replace(/[^A-Za-z0-9_-]/g, '-');
+                        const existingHost = tags
+                          .map((t) => t.match(/^traefik\.http\.routers\.[^.]+\.rule=Host\(`([^`]+)`\)$/)?.[1])
+                          .find(Boolean) || `${routerName}.example.com`;
+                        setTraefikTagDraft((prev) => (prev?.key === key ? null : { key, host: existingHost, tls: true }));
+                      }}
+                      className="text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      {tr('生成 Traefik 子域名标签', 'Add Traefik Route Tags')}
+                    </button>
+                  )}
+                </div>
+                <input
+                  aria-label={tr('服务标签', 'Service tags')}
+                  disabled={readOnly}
+                  value={tags.join(', ')}
+                  placeholder={tr('例如 prod, traefik.enable=true', 'e.g. prod, traefik.enable=true')}
+                  onChange={(e) => {
+                    const next = e.target.value
+                      .split(',')
+                      .map((item) => item.trim())
+                      .filter(Boolean);
+                    commit(setAttrExpr(document, svc.path, 'tags', next.length > 0 ? JSON.stringify(next) : null));
+                  }}
+                  className="w-full rounded-lg border border-[#dce3ee] bg-white px-2.5 py-1.5 font-mono text-xs dark:border-slate-700 dark:bg-slate-900"
+                />
+                {!readOnly && traefikTagDraft?.key === svc.path.join('.') && (
+                  <div className="flex flex-wrap items-end gap-2 rounded-lg border border-indigo-200 bg-indigo-50/50 p-2.5 dark:border-indigo-500/30 dark:bg-indigo-950/25">
+                    <div className="flex-1 min-w-[200px]">
+                      <Input
+                        label={tr('访问子域名 (Host)', 'Subdomain (Host)')}
+                        placeholder="app.lan.example.com"
+                        value={traefikTagDraft.host}
+                        onChange={(e) => setTraefikTagDraft({ ...traefikTagDraft, host: e.target.value })}
+                      />
+                    </div>
+                    <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-700 dark:text-slate-200 pb-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={traefikTagDraft.tls}
+                        onChange={(e) => setTraefikTagDraft({ ...traefikTagDraft, tls: e.target.checked })}
+                      />
+                      <span>{tr('启用 HTTPS (alidns)', 'HTTPS (alidns)')}</span>
+                    </label>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => {
+                        const host = traefikTagDraft.host.trim();
+                        if (!host) return;
+                        const routerName = (svcName || 'app').replace(/[^A-Za-z0-9_-]/g, '-');
+                        const prefix = `traefik.http.routers.${routerName}.`;
+                        const kept = tags.filter(
+                          (t) =>
+                            t !== 'traefik.enable=true' &&
+                            t !== 'traefik.enable=false' &&
+                            !t.startsWith(prefix),
+                        );
+                        const generated = [
+                          'traefik.enable=true',
+                          `${prefix}rule=Host(\`${host}\`)`,
+                          ...(traefikTagDraft.tls
+                            ? [`${prefix}entrypoints=websecure`, `${prefix}tls.certresolver=alidns`]
+                            : [`${prefix}entrypoints=web`]),
+                        ];
+                        const nextTags = [...kept, ...generated];
+                        commit(setAttrExpr(document, svc.path, 'tags', JSON.stringify(nextTags)));
+                        setTraefikTagDraft(null);
+                      }}
+                    >
+                      {tr('写入标签', 'Apply Tags')}
+                    </Button>
+                  </div>
+                )}
+              </div>
 
               <div className="space-y-1.5 border-t border-slate-200/70 pt-2 dark:border-slate-800">
                 <div className="flex items-center justify-between">

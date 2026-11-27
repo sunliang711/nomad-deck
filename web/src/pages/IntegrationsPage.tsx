@@ -137,6 +137,7 @@ export function IntegrationsPage() {
     role_name: '',
     policy_mode: 'explicit',
     secret_paths: '',
+    custom_policy_hcl: '',
     bound_namespace: 'default',
     token_period: '1h',
   });
@@ -372,6 +373,7 @@ export function IntegrationsPage() {
       role_name: '',
       policy_mode: 'explicit',
       secret_paths: `${defaultMount}/apps/app`,
+      custom_policy_hcl: '',
       bound_namespace: nomadNamespaces[0] || 'default',
       token_period: '1h',
     });
@@ -384,6 +386,7 @@ export function IntegrationsPage() {
       role_name: r.role_name || '',
       policy_mode: r.policy_mode || 'explicit',
       secret_paths: (r.secret_paths || []).join(', '),
+      custom_policy_hcl: r.custom_policy_hcl || '',
       bound_namespace: r.bound_claims?.nomad_namespace || 'default',
       token_period: r.token_period || '1h',
     });
@@ -414,7 +417,11 @@ export function IntegrationsPage() {
         token_period: roleForm.token_period.trim(),
       };
       if (editingRole?.policy_name) payload.policy_name = editingRole.policy_name;
-      if (editingRole?.custom_policy_hcl) payload.custom_policy_hcl = editingRole.custom_policy_hcl;
+      if (roleForm.custom_policy_hcl.trim()) {
+        payload.custom_policy_hcl = roleForm.custom_policy_hcl.trim();
+      } else {
+        payload.custom_policy_hcl = '';
+      }
 
       if (editingRole) {
         await apiPut(`/api/v1/integrations/${selected.id}/roles/${editingRole.id}`, payload);
@@ -972,8 +979,11 @@ export function IntegrationsPage() {
                     <div className="flex flex-wrap items-center gap-2 min-w-0">
                       <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">{r.role_name}</span>
                       <StatusBadge value={r.status} />
+                      {r.custom_policy_hcl && <Badge tone="blue">{tr('自定义 Policy', 'Custom Policy')}</Badge>}
                       <span className="text-slate-500 break-all">
-                        {r.policy_mode === 'explicit' ? tr('指定固定路径', 'Explicit Paths') : tr('按任务自动隔离', 'Templated Per-Job')} · {(r.secret_paths || []).join(', ') || tr('默认挂载', 'Default Mount')} · Namespace: {r.bound_claims?.nomad_namespace || 'default'} · {tr('周期', 'Period')}: {r.token_period || '1h'}
+                        {r.custom_policy_hcl
+                          ? tr('自定义 Vault Policy HCL', 'Custom Vault Policy HCL')
+                          : `${r.policy_mode === 'explicit' ? tr('指定固定路径', 'Explicit Paths') : tr('按任务自动隔离', 'Templated Per-Job')} · ${(r.secret_paths || []).join(', ') || tr('默认挂载', 'Default Mount')}`} · Namespace: {r.bound_claims?.nomad_namespace || 'default'} · {tr('周期', 'Period')}: {r.token_period || '1h'}
                       </span>
                     </div>
                     {isAdmin && (
@@ -1426,7 +1436,7 @@ export function IntegrationsPage() {
                   ? tr('填写 Vault KV v2 挂载名（如 secret），多个用逗号分隔。', 'Vault KV v2 mount name (e.g. secret), comma-separated.')
                   : tr('格式「挂载名/密钥路径」，多个用逗号分隔（不要写 data/）。注意：路径按精确匹配生效，不会自动包含子路径（如填 secret/apps 只能读 apps 本身，读不到 secret/apps/app）；需读子路径请写全路径，或末尾加 /* 放行整目录（如 secret/apps/*）。', 'Format: "<mount>/<path>", comma-separated (omit data/). Exact paths do not cover nested keys; use /* at the end (e.g. secret/apps/*) to allow a directory.')
               }
-              required={roleForm.policy_mode === 'explicit' && !editingRole?.custom_policy_hcl}
+              required={roleForm.policy_mode === 'explicit' && !roleForm.custom_policy_hcl.trim()}
               value={roleForm.secret_paths}
               onChange={(e) => setRoleForm({ ...roleForm, secret_paths: e.target.value })}
             />
@@ -1565,15 +1575,57 @@ export function IntegrationsPage() {
             </div>
           )}
 
-          <details className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 dark:border-slate-800 dark:bg-slate-950/40">
-            <summary className="cursor-pointer font-medium text-slate-700 dark:text-slate-200">{tr('高级选项（Token 续期周期）', 'Advanced Options (Token Renewal Period)')}</summary>
-            <div className="mt-2">
+          <details open={Boolean(roleForm.custom_policy_hcl.trim())} className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 dark:border-slate-800 dark:bg-slate-950/40">
+            <summary className="cursor-pointer font-medium text-slate-700 dark:text-slate-200">{tr('高级选项（Token 续期周期 / 自定义 Policy HCL）', 'Advanced Options (Token Period / Custom Policy HCL)')}</summary>
+            <div className="mt-2.5 space-y-3">
               <Input
                 label={tr('Token 续期周期', 'Token Period')}
                 hint={tr('Nomad 客户端自动向 Vault 续期令牌的时间间隔，默认 1h。', 'Renewal interval for Vault tokens managed by Nomad Client, default 1h.')}
                 value={roleForm.token_period}
                 onChange={(e) => setRoleForm({ ...roleForm, token_period: e.target.value })}
               />
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="font-medium text-slate-700 dark:text-slate-200">
+                    {tr('自定义 Policy HCL（可选，填写后将覆盖上方自动生成的只读规则）', 'Custom Policy HCL (optional; overrides generated read-only rules)')}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const mount = vaultMounts[0] || 'secret';
+                      setRoleForm({
+                        ...roleForm,
+                        policy_mode: 'explicit',
+                        secret_paths: `${mount}/certs/dns`,
+                        custom_policy_hcl: [
+                          `path "${mount}/data/certs/dns" {`,
+                          '  capabilities = ["read"]',
+                          '}',
+                          '',
+                          `path "${mount}/data/certs/tls" {`,
+                          '  capabilities = ["create", "update", "read"]',
+                          '}',
+                          '',
+                          `path "${mount}/metadata/certs/*" {`,
+                          '  capabilities = ["read", "list"]',
+                          '}',
+                        ].join('\n'),
+                      });
+                    }}
+                    className="text-indigo-600 hover:underline dark:text-indigo-400"
+                  >
+                    {tr('填入 acme-cert-sync 读写证书策略', 'Fill acme-cert-sync cert R/W policy')}
+                  </button>
+                </div>
+                <textarea
+                  rows={6}
+                  spellCheck={false}
+                  placeholder={tr('留空按上方密钥路径自动生成只读 Policy；如需写权限（如 acme-cert-sync 推送证书），可在此填写 Vault Policy HCL。', 'Leave blank to generate read-only Policy from paths above; provide custom Vault Policy HCL when write access is needed.')}
+                  value={roleForm.custom_policy_hcl}
+                  onChange={(e) => setRoleForm({ ...roleForm, custom_policy_hcl: e.target.value })}
+                  className="w-full rounded-lg border border-[#dce3ee] bg-white p-2 font-mono text-[11px] leading-relaxed text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+              </div>
             </div>
           </details>
 

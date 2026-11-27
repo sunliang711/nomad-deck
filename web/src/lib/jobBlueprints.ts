@@ -58,8 +58,8 @@ export const STARTER_SAMPLES: JobBlueprint[] = [
     labelEn: 'Caddy Reverse Proxy',
     tags: ['Docker', '网关'],
     tagsEn: ['Docker', 'Gateway'],
-    desc: '轻量级 Web 服务器与自动 HTTPS 反向代理，内置 Caddyfile 模板并暴露 80 / 443 端口',
-    descEn: 'Lightweight web server & automatic HTTPS reverse proxy with built-in Caddyfile template and ports 80/443',
+    desc: '轻量级 Web 服务器与自动 HTTPS 反向代理，内置 nomadService 动态发现示例并暴露 80 / 443 端口',
+    descEn: 'Lightweight web server & automatic HTTPS reverse proxy with nomadService upstream example and ports 80/443',
     hcl: `job "caddy" {
   datacenters = ["dc1"]
   type        = "service"
@@ -77,6 +77,7 @@ export const STARTER_SAMPLES: JobBlueprint[] = [
       }
     }
 
+    # 生产环境建议将 local/caddy-data 替换为 Host Volume 持久化证书，防止重调度丢失 ACME 凭据。
     ephemeral_disk {
       size   = 256
       sticky = true
@@ -110,7 +111,10 @@ export const STARTER_SAMPLES: JobBlueprint[] = [
         destination = "local/Caddyfile"
         change_mode = "restart"
         data        = <<EOT
-# 将 :80 替换为你的域名即可自动签发 HTTPS 证书，例如 example.com { reverse_proxy 10.0.0.10:8080 }
+# 用真实域名替换 :80 即可自动签发 HTTPS；反向代理可用 nomadService 自动发现后端地址：
+# app.example.com {
+#   reverse_proxy {{ range nomadService "app" }}{{ .Address }}:{{ .Port }}{{ end }}
+# }
 :80 {
   respond "NomadDeck Caddy ready" 200
 }
@@ -132,8 +136,8 @@ EOT
     labelEn: 'Traefik Service Gateway',
     tags: ['Docker', '网关'],
     tagsEn: ['Docker', 'Gateway'],
-    desc: '云原生边缘路由与反向代理网关，含 80 业务入口、8080 管理面板与动态路由模板',
-    descEn: 'Cloud-native edge router & reverse proxy with port 80 entrypoint, port 8080 dashboard, and dynamic routes',
+    desc: '云原生边缘网关，含 80 / 443 入口、8080 面板、Nomad 服务发现与 ACME DNS-01 (alidns) 自动 HTTPS 模板',
+    descEn: 'Cloud-native edge router with 80/443 entrypoints, 8080 dashboard, Nomad provider, and ACME DNS-01 (alidns) template',
     hcl: `job "traefik" {
   datacenters = ["dc1"]
   type        = "service"
@@ -145,10 +149,20 @@ EOT
         static = 80
         to     = 80
       }
+      port "websecure" {
+        static = 443
+        to     = 443
+      }
       port "admin" {
         static = 8080
         to     = 8080
       }
+    }
+
+    # 生产环境建议将 local/acme 替换为 Host Volume 持久化 acme.json，避免重启重复签发触及限流。
+    ephemeral_disk {
+      size   = 256
+      sticky = true
     }
 
     service {
@@ -169,12 +183,32 @@ EOT
       driver = "docker"
       config {
         image   = "traefik:v3.2"
-        ports   = ["web", "admin"]
+        ports   = ["web", "websecure", "admin"]
         volumes = [
           "local/traefik.yml:/etc/traefik/traefik.yml",
           "local/dynamic.yml:/etc/traefik/dynamic.yml",
+          "local/acme:/acme",
         ]
       }
+
+      # 如需从 Vault 注入 Nomad 只读 Token 与阿里云 DNS AK/SK，创建 traefik Role 后取消下方注释：
+      # vault {
+      #   role = "traefik"
+      #   env  = false
+      # }
+      #
+      # template {
+      #   destination = "secrets/traefik.env"
+      #   env         = true
+      #   change_mode = "restart"
+      #   data        = <<EOT
+      # {{ with secret "secret/data/apps/traefik" }}
+      # NOMAD_TOKEN={{ .Data.data.nomad_token | toJSON }}
+      # ALICLOUD_ACCESS_KEY={{ .Data.data.ali_key | toJSON }}
+      # ALICLOUD_SECRET_KEY={{ .Data.data.ali_secret | toJSON }}
+      # {{ end }}
+      # EOT
+      # }
 
       template {
         destination = "local/traefik.yml"
@@ -183,6 +217,14 @@ EOT
 entryPoints:
   web:
     address: ":80"
+    # 开启全站 HTTP 自动跳转 HTTPS 时取消下方注释：
+    # http:
+    #   redirections:
+    #     entryPoint:
+    #       to: websecure
+    #       scheme: https
+  websecure:
+    address: ":443"
   traefik:
     address: ":8080"
 
@@ -197,10 +239,23 @@ providers:
   file:
     filename: /etc/traefik/dynamic.yml
     watch: true
-  # 若需自动发现 Nomad 服务，可启用以下配置并填写 Nomad API 地址：
+  # 开启 Nomad 服务自动发现（配合可视化编排中的 Traefik 路由标签与只读 NOMAD_TOKEN）：
   # nomad:
+  #   exposedByDefault: false
   #   endpoint:
-  #     address: "http://127.0.0.1:4646"
+  #     address: "https://127.0.0.1:4646"
+  #     tls:
+  #       insecureSkipVerify: true
+
+# 开启阿里云 DNS-01 自动申请通配符证书（需注入 ALICLOUD_ACCESS_KEY / ALICLOUD_SECRET_KEY）：
+# certificatesResolvers:
+#   alidns:
+#     acme:
+#       email: "admin@example.com"
+#       storage: /acme/acme.json
+#       dnsChallenge:
+#         provider: alidns
+#         delayBeforeCheck: 15
 EOT
       }
 
@@ -216,6 +271,521 @@ EOT
 
       resources {
         cpu    = 150
+        memory = 128
+      }
+    }
+  }
+}
+`,
+  },
+  {
+    id: 'nginx-gateway',
+    label: 'Nginx 网关 + Vault 证书',
+    labelEn: 'Nginx Gateway + Vault Certs',
+    tags: ['Docker', '网关', 'Vault'],
+    tagsEn: ['Docker', 'Gateway', 'Vault'],
+    desc: '标准 Nginx 反向代理网关，支持 nomadService 动态上游与 Vault 证书 SIGHUP 无缝热加载（无需 Lua 时的轻量首选）',
+    descEn: 'Standard Nginx reverse proxy with nomadService dynamic upstreams and Vault cert SIGHUP hot-reload (lightweight alternative to OpenResty)',
+    hcl: `job "nginx-gateway" {
+  datacenters = ["dc1"]
+  type        = "service"
+
+  group "gateway" {
+    count = 1
+    network {
+      port "http" {
+        static = 80
+        to     = 80
+      }
+      port "https" {
+        static = 443
+        to     = 443
+      }
+    }
+
+    service {
+      name     = "nginx-gateway"
+      port     = "http"
+      provider = "nomad"
+      check {
+        name     = "http-health"
+        type     = "http"
+        path     = "/healthz"
+        interval = "15s"
+        timeout  = "3s"
+      }
+    }
+
+    task "nginx" {
+      driver = "docker"
+      config {
+        image   = "nginx:alpine"
+        ports   = ["http", "https"]
+        volumes = [
+          "local/nginx.conf:/etc/nginx/nginx.conf:ro",
+        ]
+      }
+
+      # 搭配 acme-cert-sync 使用 HTTPS：先创建 nginx-gateway Role 读取 secret/certs/tls，再取消下方注释并启用 443 server 块。
+      # vault {
+      #   role = "nginx-gateway"
+      #   env  = false
+      # }
+      #
+      # template {
+      #   destination   = "secrets/cert.pem"
+      #   perms         = "0640"
+      #   change_mode   = "signal"
+      #   change_signal = "SIGHUP"
+      #   data          = <<EOT
+      # {{ with secret "secret/data/certs/tls" }}{{ .Data.data.fullchain }}{{ end }}
+      # EOT
+      # }
+      #
+      # template {
+      #   destination   = "secrets/cert.key"
+      #   perms         = "0600"
+      #   change_mode   = "signal"
+      #   change_signal = "SIGHUP"
+      #   data          = <<EOT
+      # {{ with secret "secret/data/certs/tls" }}{{ .Data.data.privkey }}{{ end }}
+      # EOT
+      # }
+
+      template {
+        destination   = "local/nginx.conf"
+        change_mode   = "signal"
+        change_signal = "SIGHUP"
+        data          = <<EOT
+events {
+  worker_connections 1024;
+}
+
+http {
+  include       /etc/nginx/mime.types;
+  default_type  application/octet-stream;
+  server_tokens off;
+  sendfile      on;
+  client_max_body_size 100M;
+
+  map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ""      close;
+  }
+
+  # 通过 nomadService 自动发现后端（按需将 "app" 替换为你的服务名）：
+  # upstream app_backend {
+  #   server 127.0.0.1:9 down;
+  #   {{- range nomadService "app" }}
+  #   server {{ .Address }}:{{ .Port }};
+  #   {{- end }}
+  #   keepalive 16;
+  # }
+
+  server {
+    listen 80;
+    server_name _;
+
+    location = /healthz {
+      access_log off;
+      return 200 "ok\n";
+    }
+
+    # 开启 Vault 证书后可改为 301 跳转 HTTPS：
+    # location / { return 301 https://$host$request_uri; }
+    location / {
+      return 200 "NomadDeck Nginx Gateway ready\n";
+    }
+  }
+
+  # 启用 Vault 证书热加载后取消下方注释：
+  # server {
+  #   listen 443 ssl http2;
+  #   server_name app.example.com;
+  #
+  #   ssl_certificate     /secrets/cert.pem;
+  #   ssl_certificate_key /secrets/cert.key;
+  #   ssl_protocols       TLSv1.2 TLSv1.3;
+  #   ssl_session_cache   shared:SSL:10m;
+  #
+  #   location / {
+  #     proxy_pass http://app_backend;
+  #     proxy_http_version 1.1;
+  #     proxy_set_header Host $host;
+  #     proxy_set_header X-Real-IP $remote_addr;
+  #     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  #     proxy_set_header X-Forwarded-Proto https;
+  #     proxy_set_header Upgrade $http_upgrade;
+  #     proxy_set_header Connection $connection_upgrade;
+  #   }
+  # }
+}
+EOT
+      }
+
+      resources {
+        cpu    = 100
+        memory = 64
+      }
+    }
+  }
+}
+`,
+  },
+  {
+    id: 'openresty-gateway',
+    label: 'OpenResty 网关 + Lua WAF',
+    labelEn: 'OpenResty Gateway + Lua WAF',
+    tags: ['Docker', '网关', 'OpenResty', 'Vault'],
+    tagsEn: ['Docker', 'Gateway', 'OpenResty', 'Vault'],
+    desc: '基于 openresty/openresty:alpine，内置 nomadService 动态上游、Lua 敏感路径封禁与 Vault 证书 SIGHUP 热加载',
+    descEn: 'OpenResty gateway with nomadService dynamic upstreams, Lua sensitive-path WAF protection, and Vault cert SIGHUP hot-reload',
+    hcl: `job "openresty-gateway" {
+  datacenters = ["dc1"]
+  type        = "service"
+
+  group "gateway" {
+    count = 1
+    network {
+      port "http" {
+        static = 80
+        to     = 80
+      }
+      port "https" {
+        static = 443
+        to     = 443
+      }
+    }
+
+    service {
+      name     = "openresty-gateway"
+      port     = "http"
+      provider = "nomad"
+      check {
+        name     = "http-health"
+        type     = "http"
+        path     = "/healthz"
+        interval = "15s"
+        timeout  = "3s"
+      }
+    }
+
+    task "openresty" {
+      driver = "docker"
+      config {
+        image   = "openresty/openresty:alpine"
+        ports   = ["http", "https"]
+        volumes = [
+          "local/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro",
+          "local/ban-rules.conf:/usr/local/openresty/nginx/conf/ban-rules.conf:ro",
+          "local/ban-check.lua:/usr/local/openresty/nginx/conf/ban-check.lua:ro",
+        ]
+      }
+
+      # 搭配 acme-cert-sync 使用 HTTPS：先创建 openresty-gateway Role 读取 secret/certs/tls，再取消下方注释并启用 443 server 块。
+      # vault {
+      #   role = "openresty-gateway"
+      #   env  = false
+      # }
+      #
+      # template {
+      #   destination   = "secrets/cert.pem"
+      #   perms         = "0640"
+      #   change_mode   = "signal"
+      #   change_signal = "SIGHUP"
+      #   data          = <<EOT
+      # {{ with secret "secret/data/certs/tls" }}{{ .Data.data.fullchain }}{{ end }}
+      # EOT
+      # }
+      #
+      # template {
+      #   destination   = "secrets/cert.key"
+      #   perms         = "0600"
+      #   change_mode   = "signal"
+      #   change_signal = "SIGHUP"
+      #   data          = <<EOT
+      # {{ with secret "secret/data/certs/tls" }}{{ .Data.data.privkey }}{{ end }}
+      # EOT
+      # }
+
+      template {
+        destination   = "local/ban-rules.conf"
+        change_mode   = "signal"
+        change_signal = "SIGHUP"
+        data          = <<EOT
+lua_shared_dict waf_probe_counter 10m;
+lua_shared_dict waf_ban_ip 10m;
+
+map $uri $sensitive_probe_path {
+  default "";
+  ~*^/\\.env(?:$|[./]) env;
+  ~*^/\\.git/config$ git-config;
+  ~*^/wp-admin(?:/|$) wp-admin;
+  ~*^/wp-login\\.php$ wp-login;
+  ~*^/phpmyadmin(?:/|$) phpmyadmin;
+}
+EOT
+      }
+
+      template {
+        destination   = "local/ban-check.lua"
+        change_mode   = "signal"
+        change_signal = "SIGHUP"
+        data          = <<EOT
+local ip = ngx.var.remote_addr or ""
+if ip == "" or ip == "127.0.0.1" then
+  return
+end
+local ban = ngx.shared.waf_ban_ip
+if ban and ban:get(ip) then
+  return ngx.exit(444)
+end
+local hit = ngx.var.sensitive_probe_path
+if hit and hit ~= "" then
+  local counter = ngx.shared.waf_probe_counter
+  if counter then
+    local n = counter:incr(ip, 1, 0, 600)
+    if n and n >= 2 and ban then
+      ban:set(ip, hit, 3600)
+      ngx.log(ngx.WARN, "WAF banned ", ip, " probe=", hit)
+    end
+  end
+  return ngx.exit(444)
+end
+EOT
+      }
+
+      template {
+        destination   = "local/nginx.conf"
+        change_mode   = "signal"
+        change_signal = "SIGHUP"
+        data          = <<EOT
+events {
+  worker_connections 1024;
+}
+
+http {
+  include       mime.types;
+  default_type  application/octet-stream;
+  server_tokens off;
+  sendfile      on;
+  client_max_body_size 100M;
+
+  include /usr/local/openresty/nginx/conf/ban-rules.conf;
+
+  map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ""      close;
+  }
+
+  # 通过 nomadService 自动发现后端（按需将 "app" 替换为你的服务名）：
+  # upstream app_backend {
+  #   server 127.0.0.1:9 down;
+  #   {{- range nomadService "app" }}
+  #   server {{ .Address }}:{{ .Port }};
+  #   {{- end }}
+  #   keepalive 16;
+  # }
+
+  server {
+    listen 80;
+    server_name _;
+
+    server_rewrite_by_lua_file /usr/local/openresty/nginx/conf/ban-check.lua;
+
+    location = /healthz {
+      access_log off;
+      return 200 "ok\n";
+    }
+
+    location / {
+      return 200 "NomadDeck OpenResty Gateway ready\n";
+    }
+  }
+
+  # 启用 Vault 证书热加载后取消下方注释：
+  # server {
+  #   listen 443 ssl http2;
+  #   server_name app.example.com;
+  #
+  #   ssl_certificate     /secrets/cert.pem;
+  #   ssl_certificate_key /secrets/cert.key;
+  #   ssl_protocols       TLSv1.2 TLSv1.3;
+  #   ssl_session_cache   shared:SSL:10m;
+  #
+  #   server_rewrite_by_lua_file /usr/local/openresty/nginx/conf/ban-check.lua;
+  #
+  #   location / {
+  #     proxy_pass http://app_backend;
+  #     proxy_http_version 1.1;
+  #     proxy_set_header Host $host;
+  #     proxy_set_header X-Real-IP $remote_addr;
+  #     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  #     proxy_set_header X-Forwarded-Proto https;
+  #     proxy_set_header Upgrade $http_upgrade;
+  #     proxy_set_header Connection $connection_upgrade;
+  #   }
+  # }
+}
+EOT
+      }
+
+      resources {
+        cpu    = 120
+        memory = 96
+      }
+    }
+  }
+}
+`,
+  },
+  {
+    id: 'acme-cert-sync',
+    label: 'ACME 证书自动续期 (Vault 同步)',
+    labelEn: 'ACME Cert Renewal (Vault Sync)',
+    tags: ['Docker', '证书', 'Vault', '定时任务'],
+    tagsEn: ['Docker', 'TLS', 'Vault', 'Periodic'],
+    desc: '需先创建 acme-cert-sync Role（读取 secret/certs/dns 并写入 secret/certs/tls），定时续期通配符证书并推送 Vault KV 触发网关 SIGHUP 热加载',
+    descEn: 'Requires acme-cert-sync Role (read secret/certs/dns & write secret/certs/tls); renews wildcard certs on schedule and pushes to Vault KV for gateway SIGHUP reload',
+    hcl: `job "acme-cert-sync" {
+  datacenters = ["dc1"]
+  type        = "batch"
+
+  periodic {
+    crons            = ["0 2 * * *"]
+    prohibit_overlap = true
+    time_zone        = "Asia/Shanghai"
+  }
+
+  group "acme" {
+    count = 1
+
+    # 建议将 /acme.sh 挂载到 Host Volume（如 acme_state），避免每次重调度重新向 CA 申请证书。
+    ephemeral_disk {
+      size   = 128
+      sticky = true
+    }
+
+    task "renew" {
+      driver = "docker"
+      config {
+        image      = "neilpang/acme.sh:latest"
+        entrypoint = ["/bin/sh"]
+        args       = ["/local/sync.sh"]
+        volumes    = ["local/acme-home:/acme.sh"]
+      }
+
+      vault {
+        role = "acme-cert-sync"
+        env  = true
+      }
+
+      template {
+        destination = "secrets/acme.env"
+        env         = true
+        change_mode = "noop"
+        data        = <<EOT
+{{ with secret "secret/data/certs/dns" }}
+DOMAIN={{ .Data.data.domain | toJSON }}
+ALT_DOMAINS={{ or .Data.data.alt_domains "" | toJSON }}
+DNS_PROVIDER={{ or .Data.data.dns_provider "dns_ali" | toJSON }}
+ACME_CA={{ or .Data.data.acme_ca "letsencrypt" | toJSON }}
+ACME_EMAIL={{ or .Data.data.acme_email "" | toJSON }}
+VAULT_ADDR={{ .Data.data.vault_addr | toJSON }}
+VAULT_KV_PATH={{ or .Data.data.vault_kv_path "secret/data/certs/tls" | toJSON }}
+VAULT_SKIP_VERIFY={{ or .Data.data.vault_skip_verify "false" | toJSON }}
+Ali_Key={{ or .Data.data.ali_key "" | toJSON }}
+Ali_Secret={{ or .Data.data.ali_secret "" | toJSON }}
+{{ end }}
+EOT
+      }
+
+      # 若 Vault 使用自建 CA，请将 vault_cacert 存入 secret/data/certs/dns，下方自动写入并校验。
+      template {
+        destination = "secrets/vault-ca.crt"
+        perms       = "0644"
+        change_mode = "noop"
+        data        = <<EOT
+{{ with secret "secret/data/certs/dns" }}{{ or .Data.data.vault_cacert "" }}{{ end }}
+EOT
+      }
+
+      template {
+        destination = "local/sync.sh"
+        perms       = "0755"
+        change_mode = "noop"
+        data        = <<EOT
+#!/bin/sh
+set -eu
+
+command -v curl >/dev/null 2>&1 || apk add --no-cache curl >/dev/null
+
+if [ -z "$DOMAIN" ] || [ -z "$VAULT_ADDR" ]; then
+  echo "missing DOMAIN or VAULT_ADDR in secret/data/certs/dns" >&2
+  exit 1
+fi
+
+export HOME=/acme.sh
+CERT_DIR="/acme.sh/$DOMAIN""_ecc"
+OUT_DIR="/acme.sh/out/$DOMAIN"
+mkdir -p "$OUT_DIR"
+
+ISSUED=0
+if [ -f "$CERT_DIR/$DOMAIN.cer" ]; then
+  acme.sh --renew -d "$DOMAIN" --ecc --home /acme.sh || ISSUED=$?
+  # acme.sh 返回码 2 表示证书尚未到期无需续期
+  if [ "$ISSUED" -ne 0 ] && [ "$ISSUED" -ne 2 ]; then
+    exit "$ISSUED"
+  fi
+else
+  ARGS="--issue -d $DOMAIN --dns $DNS_PROVIDER --server $ACME_CA --home /acme.sh"
+  if [ -n "$ALT_DOMAINS" ]; then
+    for d in $(echo "$ALT_DOMAINS" | tr ',' ' '); do
+      ARGS="$ARGS -d $d"
+    done
+  fi
+  if [ -n "$ACME_EMAIL" ]; then
+    acme.sh --register-account -m "$ACME_EMAIL" --server "$ACME_CA" --home /acme.sh || true
+  fi
+  # shellcheck disable=SC2086
+  acme.sh $ARGS
+fi
+
+acme.sh --install-cert -d "$DOMAIN" --ecc --home /acme.sh \\
+  --fullchain-file "$OUT_DIR/fullchain.pem" \\
+  --key-file "$OUT_DIR/privkey.pem"
+
+esc_pem() {
+  awk '{printf "%s\\\\n", $0}' "$1" | sed 's/"/\\\\"/g'
+}
+
+FULLCHAIN_JSON="$(esc_pem "$OUT_DIR/fullchain.pem")"
+PRIVKEY_JSON="$(esc_pem "$OUT_DIR/privkey.pem")"
+
+CURL_TLS=""
+if [ "$VAULT_SKIP_VERIFY" = "true" ]; then
+  CURL_TLS="-k"
+elif [ -s /secrets/vault-ca.crt ]; then
+  CURL_TLS="--cacert /secrets/vault-ca.crt"
+fi
+
+BASE_URL=$(printf '%s' "$VAULT_ADDR" | sed 's:/*$::')
+KV_PATH=$(printf '%s' "$VAULT_KV_PATH" | sed 's:^/*::')
+
+# shellcheck disable=SC2086
+curl -fsS $CURL_TLS \\
+  -X POST \\
+  -H "X-Vault-Token: $VAULT_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d "{\\"data\\":{\\"domain\\":\\"$DOMAIN\\",\\"fullchain\\":\\"$FULLCHAIN_JSON\\",\\"privkey\\":\\"$PRIVKEY_JSON\\"}}" \\
+  "$BASE_URL/v1/$KV_PATH" >/dev/null
+
+echo "Synced certificate for $DOMAIN to $VAULT_KV_PATH"
+EOT
+      }
+
+      resources {
+        cpu    = 100
         memory = 128
       }
     }

@@ -41,17 +41,23 @@ const defaultSafeKeepTarget = {
 };
 
 const PLAN_PRESETS: Record<string, string> = {
+  every_minute: '* * * * *',
+  every_5_minutes: '*/5 * * * *',
+  every_10_minutes: '*/10 * * * *',
   hourly: '0 * * * *',
-  daily: '0 4 * * *',
-  weekly: '0 5 * * 1',
-  monthly: '0 4 1 * *',
+  daily: '0 0 * * *',
+  weekly: '0 0 * * 1',
+  monthly: '0 0 1 * *',
 };
 
 const SCHEDULE_OPTIONS = [
+  { value: 'every_minute', label: '每分钟 (* * * * *)' },
+  { value: 'every_5_minutes', label: '每五分钟 (*/5 * * * *)' },
+  { value: 'every_10_minutes', label: '每10分钟 (*/10 * * * *)' },
   { value: 'hourly', label: '每小时 (0 * * * *)' },
-  { value: 'daily', label: '每天 (0 4 * * *)' },
-  { value: 'weekly', label: '每周 (0 5 * * 1)' },
-  { value: 'monthly', label: '每月 (0 4 1 * *)' },
+  { value: 'daily', label: '每天 (0点 · 0 0 * * *)' },
+  { value: 'weekly', label: '每周 (周一0点 · 0 0 * * 1)' },
+  { value: 'monthly', label: '每月 (1号0点 · 0 0 1 * *)' },
   { value: 'cron', label: '自定义' },
 ];
 
@@ -141,7 +147,7 @@ export function CronPage() {
   const [form, setForm] = useState({
     name: '',
     schedule_type: 'daily',
-    cron_expr: '0 4 * * *',
+    cron_expr: PLAN_PRESETS.daily,
     timezone: 'Asia/Singapore',
     timeout_seconds: 600,
     overlap_policy: 'skip_if_running',
@@ -304,7 +310,7 @@ export function CronPage() {
     const next = {
       name: '',
       schedule_type: 'daily',
-      cron_expr: '0 4 * * *',
+      cron_expr: PLAN_PRESETS.daily,
       timezone: 'Asia/Singapore',
       timeout_seconds: 600,
       overlap_policy: 'skip_if_running',
@@ -331,7 +337,7 @@ export function CronPage() {
     const next = {
       name: j.name || '',
       schedule_type: st,
-      cron_expr: PLAN_PRESETS[st] || j.cron_expr || '0 4 * * *',
+      cron_expr: PLAN_PRESETS[st] || j.cron_expr || PLAN_PRESETS.daily,
       timezone: tz,
       timeout_seconds: Number(j.timeout_seconds || 600),
       overlap_policy: j.overlap_policy || 'skip_if_running',

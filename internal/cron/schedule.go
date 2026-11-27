@@ -39,13 +39,19 @@ func (r SchedulePreviewRequest) expr() string {
 // InferScheduleType returns the matching preset type or "cron".
 func InferScheduleType(expr string) string {
 	switch strings.TrimSpace(expr) {
+	case "* * * * *":
+		return "every_minute"
+	case "*/5 * * * *":
+		return "every_5_minutes"
+	case "*/10 * * * *":
+		return "every_10_minutes"
 	case "0 * * * *":
 		return "hourly"
-	case "0 4 * * *":
+	case "0 0 * * *":
 		return "daily"
-	case "0 5 * * 1":
+	case "0 0 * * 1":
 		return "weekly"
-	case "0 4 1 * *":
+	case "0 0 1 * *":
 		return "monthly"
 	default:
 		return "cron"
@@ -79,6 +85,12 @@ func ValidateSchedule(scheduleType, expression, timezone string) (robfig.Schedul
 	}
 	validShape := false
 	switch kind {
+	case "every_minute":
+		validShape = strings.Join(fields, " ") == "* * * * *"
+	case "every_5_minutes":
+		validShape = strings.Join(fields, " ") == "*/5 * * * *"
+	case "every_10_minutes":
+		validShape = strings.Join(fields, " ") == "*/10 * * * *"
 	case "hourly":
 		validShape = strings.Join(fields[1:], " ") == "* * * *" && isCronNumber(fields[0])
 	case "daily":
@@ -90,7 +102,7 @@ func ValidateSchedule(scheduleType, expression, timezone string) (robfig.Schedul
 	case "cron":
 		validShape = true
 	default:
-		return nil, "", nil, fmt.Errorf("无效的计划类型 %q（可选 hourly、daily、weekly、monthly、cron）", kind)
+		return nil, "", nil, fmt.Errorf("无效的计划类型 %q（可选 every_minute、every_5_minutes、every_10_minutes、hourly、daily、weekly、monthly、cron）", kind)
 	}
 	if !validShape {
 		return nil, "", nil, errors.New("执行规则与所选时间粒度不匹配，请重新配置")

@@ -443,11 +443,36 @@ func TestSchedulePresetsTimeoutAndPagination(t *testing.T) {
 	}); err == nil {
 		t.Fatal("expected daily schedule_type to reject hourly expression")
 	}
+	if _, err := s.Update(ctx, admin, j.ID, JobInput{
+		ScheduleType: "every_5_minutes",
+		CronExpr:     "* * * * *",
+	}); err == nil {
+		t.Fatal("expected every_5_minutes schedule_type to reject every-minute expression")
+	}
+	for _, tc := range []struct {
+		kind string
+		expr string
+	}{
+		{"every_minute", "* * * * *"},
+		{"every_5_minutes", "*/5 * * * *"},
+		{"every_10_minutes", "*/10 * * * *"},
+		{"hourly", "0 * * * *"},
+		{"daily", "0 0 * * *"},
+		{"weekly", "0 0 * * 1"},
+		{"monthly", "0 0 1 * *"},
+	} {
+		if got := InferScheduleType(tc.expr); got != tc.kind {
+			t.Fatalf("InferScheduleType(%q) = %q, want %q", tc.expr, got, tc.kind)
+		}
+		if _, kind, _, err := ValidateSchedule(tc.kind, tc.expr, "Asia/Singapore"); err != nil || kind != tc.kind {
+			t.Fatalf("ValidateSchedule(%q, %q) = kind=%q err=%v", tc.kind, tc.expr, kind, err)
+		}
+	}
 	tz := "Asia/Singapore"
 	timeout := 1
 	updated, err := s.Update(ctx, admin, j.ID, JobInput{
 		ScheduleType:   "daily",
-		CronExpr:       "0 4 * * *",
+		CronExpr:       "0 0 * * *",
 		Timezone:       &tz,
 		TimeoutSeconds: &timeout,
 		Config:         json.RawMessage(`{"retention":"7d"}`),

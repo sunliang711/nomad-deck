@@ -418,11 +418,7 @@ export function IntegrationsPage() {
     }
     setRoleForm((prev) => ({
       ...prev,
-      ...(presetId === 'acme-cert-sync'
-        ? { policy_mode: 'explicit', secret_paths: suggestedSecretPaths || prev.secret_paths }
-        : !prev.secret_paths.trim() && suggestedSecretPaths
-          ? { secret_paths: suggestedSecretPaths }
-          : {}),
+      ...(!prev.secret_paths.trim() && suggestedSecretPaths ? { secret_paths: suggestedSecretPaths } : {}),
       custom_policy_hcl: hcl,
     }));
   };
@@ -1662,7 +1658,6 @@ export function IntegrationsPage() {
                       { id: 'single-rw', label: tr('单路径读写', 'Single Key R/W') },
                       { id: 'dir-rw', label: tr('目录通配读写', 'Directory R/W') },
                       { id: 'shared-read-app-rw', label: tr('读公共 + 写私有', 'Read Shared + Write App') },
-                      { id: 'acme-cert-sync', label: tr('acme-cert-sync 证书读写', 'acme-cert-sync Cert R/W') },
                     ] as Array<{ id: CustomPolicyPresetId; label: string }>
                   ).map((preset) => (
                     <button
@@ -1678,7 +1673,7 @@ export function IntegrationsPage() {
                 <textarea
                   rows={7}
                   spellCheck={false}
-                  placeholder={tr('留空按上方密钥路径自动生成只读 Policy；如需写权限（如回写配置、acme-cert-sync 推送证书），可点击上方模板快速填入后再微调。', 'Leave blank to generate read-only Policy from paths above; pick a preset above or write custom Vault Policy HCL when write access is needed.')}
+                  placeholder={tr('留空按上方密钥路径自动生成只读 Policy；如需写权限（如回写配置、推送证书），可点击上方模板快速填入后再微调。', 'Leave blank to generate read-only Policy from paths above; pick a preset above or write custom Vault Policy HCL when write access is needed.')}
                   value={roleForm.custom_policy_hcl}
                   onChange={(e) => setRoleForm({ ...roleForm, custom_policy_hcl: e.target.value })}
                   className="w-full rounded-lg border border-[#dce3ee] bg-white p-2 font-mono text-[11px] leading-relaxed text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"

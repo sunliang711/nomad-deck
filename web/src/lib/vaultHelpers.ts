@@ -177,8 +177,7 @@ export type CustomPolicyPresetId =
   | 'from-paths'
   | 'single-rw'
   | 'dir-rw'
-  | 'shared-read-app-rw'
-  | 'acme-cert-sync';
+  | 'shared-read-app-rw';
 
 export interface CustomPolicyPresetResult {
   hcl: string;
@@ -278,24 +277,6 @@ export function buildCustomPolicyPreset(
           renderKVPolicyBlocks(mount, `${defaultAppPath}/*`, ['create', 'update', 'read', 'delete'], ['read', 'list', 'delete']),
         ].join('\n\n'),
         suggestedSecretPaths: `${mount}/shared/*, ${mount}/${defaultAppPath}/*`,
-      };
-    }
-    case 'acme-cert-sync': {
-      return {
-        hcl: [
-          `path "${mount}/data/certs/dns" {`,
-          '  capabilities = ["read"]',
-          '}',
-          '',
-          `path "${mount}/data/certs/tls" {`,
-          '  capabilities = ["create", "update", "read"]',
-          '}',
-          '',
-          `path "${mount}/metadata/certs/*" {`,
-          '  capabilities = ["read", "list"]',
-          '}',
-        ].join('\n'),
-        suggestedSecretPaths: `${mount}/certs/dns`,
       };
     }
   }

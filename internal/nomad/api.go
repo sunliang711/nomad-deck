@@ -546,8 +546,9 @@ type Drain struct {
 
 // Drivers maps driver names to their fingerprinted health.
 type Drivers map[string]struct {
-	Detected bool `json:"Detected"`
-	Healthy  bool `json:"Healthy"`
+	Detected   bool              `json:"Detected"`
+	Healthy    bool              `json:"Healthy"`
+	Attributes map[string]string `json:"Attributes"`
 }
 
 // Nodes lists the client nodes.
@@ -559,16 +560,17 @@ func (c *Client) Nodes(ctx context.Context) ([]NodeStub, error) {
 
 // NodeDetail is the subset of a node the control plane reads.
 type NodeDetail struct {
-	ID                    string         `json:"ID"`
-	Name                  string         `json:"Name"`
-	Datacenter            string         `json:"Datacenter"`
-	NodePool              string         `json:"NodePool"`
-	Status                string         `json:"Status"`
-	SchedulingEligibility string         `json:"SchedulingEligibility"`
-	DrainStrategy         *struct{}      `json:"DrainStrategy"`
-	LastDrain             *Drain         `json:"LastDrain"`
-	Drivers               Drivers        `json:"Drivers"`
-	HostVolumes           map[string]any `json:"HostVolumes"`
+	ID                    string            `json:"ID"`
+	Name                  string            `json:"Name"`
+	Datacenter            string            `json:"Datacenter"`
+	NodePool              string            `json:"NodePool"`
+	Status                string            `json:"Status"`
+	SchedulingEligibility string            `json:"SchedulingEligibility"`
+	DrainStrategy         *struct{}         `json:"DrainStrategy"`
+	LastDrain             *Drain            `json:"LastDrain"`
+	Drivers               Drivers           `json:"Drivers"`
+	Attributes            map[string]string `json:"Attributes"`
+	HostVolumes           map[string]any    `json:"HostVolumes"`
 }
 
 // Node reads one node.

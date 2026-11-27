@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"nomad-deck/internal/db"
@@ -111,8 +113,53 @@ func (s *Service) PreflightJob(ctx context.Context, clusterID string, j Job) []s
 	return s.Preflight(ctx, c, clusterID, j)
 }
 
+func (s *Service) vaultInspectJob(ctx context.Context, clusterID string, j Job) (JobValidationReport, []VaultIntegrationRef) {
+	if s == nil || s.VaultInspector == nil || j == nil {
+		return JobValidationReport{}, nil
+	}
+	igs, checkKV := s.VaultInspector(ctx, clusterID)
+	nomadACL := false
+	if s.DB != nil {
+		if cl, err := db.GetCluster(ctx, s.DB.Reader, clusterID); err == nil && cl != nil && cl.AdminTokenEncrypted != "" {
+			nomadACL = true
+		}
+	}
+	return AnalyzeJobRequirements(j, igs, str(j["Namespace"]), checkKV, nomadACL), igs
+}
+
+// InspectJobWarnings returns advisory warnings for Vault/Traefik pairing and
+// privileged host static ports (e.g. 80/443).
+func (s *Service) InspectJobWarnings(ctx context.Context, clusterID string, j Job) []string {
+	if j == nil {
+		return nil
+	}
+	rep, _ := s.vaultInspectJob(ctx, clusterID, j)
+	out := append([]string(nil), rep.Warnings...)
+	seen := map[string]bool{}
+	for _, w := range out {
+		seen[w] = true
+	}
+	for _, g := range parseGroupRequirements(j) {
+		var webPorts []string
+		for _, p := range g.staticPorts {
+			if p == 80 || p == 443 {
+				webPorts = append(webPorts, strconv.Itoa(p))
+			}
+		}
+		if len(webPorts) > 0 {
+			msg := fmt.Sprintf("任务组 %q 映射了宿主机静态端口 %s，请确保目标节点上没有被宿主机进程（如 systemd Nginx / OpenResty / Caddy）或同端口网关占用。", g.name, strings.Join(webPorts, "、"))
+			if !seen[msg] {
+				seen[msg] = true
+				out = append(out, msg)
+			}
+		}
+	}
+	return out
+}
+
 // Preflight inspects cluster namespaces, node pools, eligible Client nodes,
-// task drivers, CNI configuration, and host volumes against the Job definition.
+// task drivers, CNI configuration, host volumes, Docker host mounts, static
+// port collisions, and Vault/template prerequisites against the Job definition.
 func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID string, j Job) []string {
 	if j == nil {
 		return nil
@@ -129,6 +176,12 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 			seen[msg] = true
 			issues = append(issues, msg)
 		}
+	}
+
+	// Run Vault integration, KV mount/secret/key and paired gateway config blockers first.
+	vaultRep, igs := s.vaultInspectJob(ctx, clusterID, j)
+	for _, msg := range vaultRep.Blocking {
+		add("%s", msg)
 	}
 
 	jobNS := orDefault(str(j["Namespace"]), "default")
@@ -211,6 +264,8 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 	groups := parseGroupRequirements(j)
 	needVolumes := false
 	needBridge := false
+	needDockerBinds := false
+	needStaticPorts := false
 	for _, g := range groups {
 		if len(g.hostVolumes) > 0 {
 			needVolumes = true
@@ -218,15 +273,23 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 		if g.needsBridge {
 			needBridge = true
 		}
+		if len(g.dockerHostBinds) > 0 {
+			needDockerBinds = true
+		}
+		if len(g.staticPorts) > 0 {
+			needStaticPorts = true
+		}
 	}
 
 	nodeVolumes := map[string]map[string]bool{}
-	if needVolumes {
+	nodeDetails := map[string]*nomad.NodeDetail{}
+	if needVolumes || needDockerBinds {
 		for _, n := range scoped {
 			nd, nerr := c.Node(ctx, n.ID)
 			if nerr != nil || nd == nil {
 				continue
 			}
+			nodeDetails[n.ID] = nd
 			vols := map[string]bool{}
 			for vname := range nd.HostVolumes {
 				vols[vname] = true
@@ -236,8 +299,10 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 	}
 
 	var cniByNodeID, cniByNodeName map[string]bool
+	dockerVolsByNodeID := map[string]bool{}
+	dockerVolsByNodeName := map[string]bool{}
 	hasManagedMembers := false
-	if needBridge && s.DB != nil {
+	if (needBridge || needDockerBinds) && s.DB != nil {
 		if members, merr := db.ListClusterNodes(ctx, s.DB.Reader, clusterID); merr == nil && len(members) > 0 {
 			hasManagedMembers = true
 			cniByNodeID = map[string]bool{}
@@ -252,12 +317,15 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 				}
 				if mc.ClientNodeID != "" {
 					cniByNodeID[mc.ClientNodeID] = mc.CNI
+					dockerVolsByNodeID[mc.ClientNodeID] = mc.Docker.Volumes
 				}
 				if mc.NodeName != "" {
 					cniByNodeName[mc.NodeName] = mc.CNI
+					dockerVolsByNodeName[mc.NodeName] = mc.Docker.Volumes
 				}
 				if m.NodeName != "" {
 					cniByNodeName[m.NodeName] = mc.CNI
+					dockerVolsByNodeName[m.NodeName] = mc.Docker.Volumes
 				}
 			}
 		}
@@ -274,6 +342,101 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 			return v
 		}
 		return false
+	}
+
+	nodeAllowsDockerVolumes := func(n nomad.NodeStub) bool {
+		if nd := nodeDetails[n.ID]; nd != nil {
+			if drv, ok := nd.Drivers["docker"]; ok && drv.Attributes != nil {
+				if raw, ok := drv.Attributes["driver.docker.volumes.enabled"]; ok {
+					return raw == "true" || raw == "1"
+				}
+			}
+			if nd.Attributes != nil {
+				if raw, ok := nd.Attributes["driver.docker.volumes.enabled"]; ok {
+					return raw == "true" || raw == "1"
+				}
+			}
+		}
+		if hasManagedMembers {
+			if v, ok := dockerVolsByNodeID[n.ID]; ok {
+				return v
+			}
+			if v, ok := dockerVolsByNodeName[n.Name]; ok {
+				return v
+			}
+			return false
+		}
+		return true
+	}
+
+	// Check managed node TLS CA bind-mount files if cluster/integration metadata is available.
+	if needDockerBinds && s.DB != nil {
+		clMeta, _ := db.GetCluster(ctx, s.DB.Reader, clusterID)
+		hasTLSVaultIG := false
+		for _, ig := range igs {
+			if ig.Status == "applied" && ig.NomadSideEnabled && ig.VaultTLSEnabled {
+				hasTLSVaultIG = true
+				break
+			}
+		}
+		for _, g := range groups {
+			for _, bind := range g.dockerHostBinds {
+				switch bind.src {
+				case "/opt/nomad-deck/nomad/etc/nomad.d/tls/vault-ca.crt":
+					if len(igs) > 0 || s.VaultInspector != nil {
+						if !hasTLSVaultIG {
+							add("Task %q 在 docker volumes 挂载了 Vault CA（%s），但当前 Nomad 集群尚未应用带 TLS 的 Nomad-Vault 联动，节点上不存在该文件。", bind.task, bind.src)
+						}
+					}
+				case "/opt/nomad-deck/nomad/etc/nomad.d/tls/ca.pem":
+					if clMeta != nil && !clMeta.TLSEnabled {
+						add("Task %q 在 docker volumes 挂载了 Nomad CA（%s），但当前集群未启用 TLS，节点上不存在该文件。", bind.task, bind.src)
+					}
+				}
+			}
+		}
+	}
+
+	// Query active allocations on scoped nodes when the job claims static host ports.
+	nodeUsedPorts := map[string]map[int]string{}
+	if needStaticPorts {
+		jobID := str(j["ID"])
+		for _, n := range scoped {
+			var allocs []struct {
+				JobID              string `json:"JobID"`
+				Namespace          string `json:"Namespace"`
+				ClientStatus       string `json:"ClientStatus"`
+				DesiredStatus      string `json:"DesiredStatus"`
+				AllocatedResources struct {
+					Shared struct {
+						Ports []struct {
+							Value int `json:"Value"`
+						} `json:"Ports"`
+					} `json:"Shared"`
+				} `json:"AllocatedResources"`
+			}
+			if err := c.Request(ctx, http.MethodGet, "node/"+url.PathEscape(n.ID)+"/allocations", nil, &allocs); err != nil {
+				continue
+			}
+			used := map[int]string{}
+			for _, al := range allocs {
+				if al.ClientStatus != "running" && al.ClientStatus != "pending" {
+					continue
+				}
+				if al.DesiredStatus == "stop" {
+					continue
+				}
+				if orDefault(al.Namespace, "default") == jobNS && al.JobID == jobID {
+					continue
+				}
+				for _, pt := range al.AllocatedResources.Shared.Ports {
+					if pt.Value > 0 && used[pt.Value] == "" {
+						used[pt.Value] = al.JobID
+					}
+				}
+			}
+			nodeUsedPorts[n.ID] = used
+		}
 	}
 
 	for _, g := range groups {
@@ -315,6 +478,52 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 			}
 		}
 
+		if len(g.dockerHostBinds) > 0 {
+			allowFound := false
+			for _, n := range scoped {
+				if nodeAllowsDockerVolumes(n) {
+					allowFound = true
+					break
+				}
+			}
+			if !allowFound {
+				groupMissingSingle = true
+				add("Task %q 在 docker volumes 使用了宿主机路径挂载（%s），但可用 Client 节点均未开启「Docker 允许卷挂载」（请先在「Nomad 集群 → 节点插件/配置」开启 volumes）", g.dockerHostBinds[0].task, g.dockerHostBinds[0].src)
+			}
+		}
+
+		if len(g.staticPorts) > 0 && len(nodeUsedPorts) > 0 {
+			freeNodeFound := false
+			conflicts := map[string]bool{}
+			for _, n := range scoped {
+				used, known := nodeUsedPorts[n.ID]
+				if !known {
+					freeNodeFound = true
+					break
+				}
+				allFree := true
+				for _, p := range g.staticPorts {
+					if owner := used[p]; owner != "" {
+						allFree = false
+						conflicts[fmt.Sprintf("%d（被 %s 占用）", p, owner)] = true
+					}
+				}
+				if allFree {
+					freeNodeFound = true
+					break
+				}
+			}
+			if !freeNodeFound {
+				groupMissingSingle = true
+				list := make([]string, 0, len(conflicts))
+				for c := range conflicts {
+					list = append(list, c)
+				}
+				sort.Strings(list)
+				add("任务组 %q 申请的静态端口在所有可用 Client 节点上均已被占用：%s（请先停止冲突任务或更换端口）", g.name, strings.Join(list, "、"))
+			}
+		}
+
 		for _, vol := range g.hostVolumes {
 			volFound := false
 			for _, n := range scoped {
@@ -335,6 +544,9 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 				if g.needsBridge && !nodeHasCNI(n) {
 					continue
 				}
+				if len(g.dockerHostBinds) > 0 && !nodeAllowsDockerVolumes(n) {
+					continue
+				}
 				driversOK := true
 				for _, dr := range g.drivers {
 					if !n.Drivers[dr.driver].Healthy {
@@ -352,13 +564,28 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 						break
 					}
 				}
-				if volsOK {
-					singleNodeOK = true
-					break
+				if !volsOK {
+					continue
 				}
+				if len(g.staticPorts) > 0 {
+					if used, known := nodeUsedPorts[n.ID]; known {
+						portsOK := true
+						for _, p := range g.staticPorts {
+							if used[p] != "" {
+								portsOK = false
+								break
+							}
+						}
+						if !portsOK {
+							continue
+						}
+					}
+				}
+				singleNodeOK = true
+				break
 			}
 			if !singleNodeOK {
-				add("任务组 %q 所需的驱动、网络或 Host Volume 分布在集群中不同节点上，目标范围内没有单个 Client 节点同时满足全部条件", g.name)
+				add("任务组 %q 所需的驱动、网络、端口或存储卷分布在集群中不同节点上，目标范围内没有单个 Client 节点同时满足全部条件", g.name)
 			}
 		}
 	}
@@ -371,11 +598,18 @@ type taskDriverRef struct {
 	driver string
 }
 
+type dockerBindRef struct {
+	task string
+	src  string
+}
+
 type groupRequirements struct {
-	name        string
-	drivers     []taskDriverRef
-	needsBridge bool
-	hostVolumes []string
+	name            string
+	drivers         []taskDriverRef
+	needsBridge     bool
+	hostVolumes     []string
+	dockerHostBinds []dockerBindRef
+	staticPorts     []int
 }
 
 func parseGroupRequirements(j Job) []groupRequirements {
@@ -386,12 +620,27 @@ func parseGroupRequirements(j Job) []groupRequirements {
 			continue
 		}
 		g := groupRequirements{name: orDefault(str(tg["Name"]), "group")}
+		portSeen := map[int]bool{}
 		for _, netRaw := range list(tg["Networks"]) {
-			if strings.EqualFold(str(obj(netRaw)["Mode"]), "bridge") {
+			netObj := obj(netRaw)
+			if netObj == nil {
+				continue
+			}
+			if strings.EqualFold(str(netObj["Mode"]), "bridge") {
 				g.needsBridge = true
-				break
+			}
+			for _, rpRaw := range list(netObj["ReservedPorts"]) {
+				rp := obj(rpRaw)
+				if rp == nil {
+					continue
+				}
+				if v := int(u64(rp["Value"])); v > 0 && !portSeen[v] {
+					portSeen[v] = true
+					g.staticPorts = append(g.staticPorts, v)
+				}
 			}
 		}
+		sort.Ints(g.staticPorts)
 		if vols := obj(tg["Volumes"]); vols != nil {
 			volSeen := map[string]bool{}
 			for _, vRaw := range vols {
@@ -412,14 +661,27 @@ func parseGroupRequirements(j Job) []groupRequirements {
 			if t == nil {
 				continue
 			}
+			taskName := orDefault(str(t["Name"]), "task")
 			drv := str(t["Driver"])
-			if drv == "" {
-				continue
+			if drv != "" {
+				g.drivers = append(g.drivers, taskDriverRef{
+					task:   taskName,
+					driver: drv,
+				})
 			}
-			g.drivers = append(g.drivers, taskDriverRef{
-				task:   orDefault(str(t["Name"]), "task"),
-				driver: drv,
-			})
+			if drv == "docker" {
+				if cfg := obj(t["Config"]); cfg != nil {
+					for _, vRaw := range list(cfg["volumes"]) {
+						s := strings.TrimSpace(str(vRaw))
+						if parts := strings.Split(s, ":"); len(parts) >= 2 && strings.HasPrefix(parts[0], "/") {
+							g.dockerHostBinds = append(g.dockerHostBinds, dockerBindRef{
+								task: taskName,
+								src:  parts[0],
+							})
+						}
+					}
+				}
+			}
 		}
 		out = append(out, g)
 	}

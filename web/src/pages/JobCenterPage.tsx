@@ -1207,11 +1207,21 @@ export function JobCenterPage() {
                   {tr('任务', 'Job')} <code className="font-mono font-semibold">{plan.job_id}</code> · {tr('命名空间', 'Namespace')}{' '}
                   <code className="font-mono">{plan.namespace}</code>
                 </p>
-                {(plan.warnings || plan.validation_warnings) && (
-                  <p role="alert" className="whitespace-pre-wrap text-amber-700 dark:text-amber-300">
-                    {[plan.validation_warnings, plan.warnings].filter(Boolean).join('\n')}
-                  </p>
-                )}
+                {(plan.warnings || plan.validation_warnings) && (() => {
+                  const lines = Array.from(
+                    new Set(
+                      [plan.validation_warnings, plan.warnings]
+                        .filter(Boolean)
+                        .flatMap((block) => String(block).split('\n').map((s) => s.trim()))
+                        .filter(Boolean),
+                    ),
+                  );
+                  return lines.length > 0 ? (
+                    <p role="alert" className="whitespace-pre-wrap text-amber-700 dark:text-amber-300">
+                      {lines.join('\n')}
+                    </p>
+                  ) : null;
+                })()}
                 {planBlockingReasons.length > 0 && (
                   <div
                     role="alert"

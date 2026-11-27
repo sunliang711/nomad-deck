@@ -493,7 +493,78 @@ func TestExplainFailedTGAllocsAndDriverMessages(t *testing.T) {
 		t.Fatalf("unexpected reasons: %v", reasons)
 	}
 	if msg := driverMissingMessage("t", "raw_exec", false); !strings.Contains(msg, "raw_exec") || !strings.Contains(msg, "节点插件/配置") {
-		t.Fatalf("unexpected raw_exec message: %s", msg)
+		t.Fatalf("expected raw_exec hint, got: %s", msg)
+	}
+}
+
+func TestPreflightDockerBindAndStaticPortConflicts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v1/namespaces":
+			_, _ = w.Write([]byte(`[{"Name":"default"}]`))
+		case r.URL.Path == "/v1/node/pools":
+			_, _ = w.Write([]byte(`[{"Name":"default"}]`))
+		case r.URL.Path == "/v1/nodes":
+			_, _ = w.Write([]byte(`[{"ID":"node-1","Name":"n1","Datacenter":"dc1","NodePool":"default","Status":"ready","SchedulingEligibility":"eligible","Drivers":{"docker":{"Detected":true,"Healthy":true}}}]`))
+		case r.URL.Path == "/v1/node/node-1":
+			_, _ = w.Write([]byte(`{"ID":"node-1","Drivers":{"docker":{"Detected":true,"Healthy":true,"Attributes":{"driver.docker.volumes.enabled":"false"}}}}`))
+		case r.URL.Path == "/v1/node/node-1/allocations":
+			_, _ = w.Write([]byte(`[{"JobID":"caddy","Namespace":"default","ClientStatus":"running","DesiredStatus":"run","AllocatedResources":{"Shared":{"Ports":[{"Value":80},{"Value":443}]}}}]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c, err := nomad.NewClient(srv.URL, "", "", nil, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Service{}
+	ctx := context.Background()
+
+	job := Job{
+		"ID":          "nginx-gateway",
+		"Namespace":   "default",
+		"Datacenters": []any{"dc1"},
+		"TaskGroups": []any{
+			map[string]any{
+				"Name": "gateway",
+				"Networks": []any{
+					map[string]any{
+						"ReservedPorts": []any{
+							map[string]any{"Label": "http", "Value": float64(80)},
+							map[string]any{"Label": "https", "Value": float64(443)},
+						},
+					},
+				},
+				"Tasks": []any{
+					map[string]any{
+						"Name":   "nginx",
+						"Driver": "docker",
+						"Config": map[string]any{
+							"volumes": []any{"/opt/nomad-deck/nomad/etc/nomad.d/tls/vault-ca.crt:/etc/ssl/vault-ca.crt:ro"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	issues := strings.Join(s.Preflight(ctx, c, "c", job), "\n")
+	if !strings.Contains(issues, "Docker 允许卷挂载") {
+		t.Fatalf("expected docker volumes disabled error, got:\n%s", issues)
+	}
+	if !strings.Contains(issues, "80（被 caddy 占用）") {
+		t.Fatalf("expected static port conflict mentioning caddy, got:\n%s", issues)
+	}
+
+	// Updating the same job "caddy" must NOT conflict with its own ports.
+	job["ID"] = "caddy"
+	sameJobIssues := strings.Join(s.Preflight(ctx, c, "c", job), "\n")
+	if strings.Contains(sameJobIssues, "被 caddy 占用") {
+		t.Fatalf("updating caddy should not conflict with itself, got:\n%s", sameJobIssues)
 	}
 }
 

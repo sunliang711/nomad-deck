@@ -374,6 +374,14 @@ func (s *Service) EditSourceOf(ctx context.Context, actor audit.Actor, clusterID
 	return es, nil
 }
 
+func isVaultNotEnabledErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Vault") && strings.Contains(msg, "not enabled")
+}
+
 // ValidateInput parses (HCL) or decodes (JSON) an input and validates it
 // with Nomad without planning.
 func (s *Service) ValidateInput(ctx context.Context, clusterID string, in PlanInput) (Job, string, error) {
@@ -389,6 +397,9 @@ func (s *Service) ValidateInput(ctx context.Context, clusterID string, in PlanIn
 		j["Namespace"] = orDefault(in.Namespace, "default")
 	}
 	warns, err := Validate(ctx, c, j)
+	if err != nil && isVaultNotEnabledErr(err) {
+		return j, "", nil
+	}
 	return j, warns, err
 }
 

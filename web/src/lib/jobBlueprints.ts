@@ -65,7 +65,8 @@ export const STARTER_SAMPLES: JobBlueprint[] = [
   type        = "service"
 
   group "proxy" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "http" {
         static = 80
@@ -143,7 +144,8 @@ EOT
   type        = "service"
 
   group "gateway" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "web" {
         static = 80
@@ -294,7 +296,8 @@ EOT
   type        = "service"
 
   group "gateway" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "http" {
         static = 80
@@ -448,7 +451,8 @@ EOT
   type        = "service"
 
   group "gateway" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "http" {
         static = 80
@@ -1029,7 +1033,8 @@ EOT
   type        = "service"
 
   group "mq" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "amqp" {
         static = 5672
@@ -1105,7 +1110,8 @@ EOT
   type        = "service"
 
   group "rocketmq" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "namesrv" {
         static = 9876
@@ -1215,7 +1221,8 @@ EOT
   type        = "service"
 
   group "monitoring" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "http" {
         static = 9090
@@ -1303,7 +1310,8 @@ EOT
   type        = "service"
 
   group "dashboard" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "http" {
         static = 3000
@@ -1387,7 +1395,8 @@ EOT
   type        = "service"
 
   group "registry" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "http" {
         static = 5000

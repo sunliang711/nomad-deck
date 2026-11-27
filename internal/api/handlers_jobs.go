@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -10,8 +11,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"nomad-deck/internal/db"
+	"nomad-deck/internal/integration"
 	"nomad-deck/internal/jobs"
 	"nomad-deck/internal/jobspec"
+	"nomad-deck/internal/vault"
 )
 
 // jobRef reads the cluster, namespace and job ID of a job route. The job
@@ -255,7 +259,7 @@ func (a *API) jobOp(w http.ResponseWriter, r *http.Request) {
 			a.writeErr(w, r, err)
 			return
 		}
-		warns = appendLintWarnings(warns, jobs.LintVaultIntegration(j, a.vaultIntegrationRefs(ctx, clusterID), in.Namespace))
+		warns = appendLintWarnings(warns, a.Jobs.InspectJobWarnings(ctx, clusterID, j))
 		preflightErrs := a.Jobs.PreflightJob(ctx, clusterID, j)
 		writeJSON(w, http.StatusOK, map[string]any{"job": j, "warnings": warns, "preflight_errors": preflightErrs})
 	case "plan":
@@ -268,7 +272,6 @@ func (a *API) jobOp(w http.ResponseWriter, r *http.Request) {
 			a.writeErr(w, r, err)
 			return
 		}
-		p.ValidationWarns = appendLintWarnings(p.ValidationWarns, jobs.LintVaultIntegration(p.Job, a.vaultIntegrationRefs(ctx, clusterID), p.Namespace))
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, map[string]any{"plan": p})
 	case "apply":
@@ -395,27 +398,53 @@ func appendLintWarnings(existing string, extra []string) string {
 	return existing + "\n" + joined
 }
 
-func (a *API) vaultIntegrationRefs(ctx context.Context, clusterID string) []jobs.VaultIntegrationRef {
-	if a.Integrations == nil {
-		return nil
-	}
-	is, err := a.Integrations.List(ctx)
-	if err != nil {
-		return nil
-	}
-	var refs []jobs.VaultIntegrationRef
-	for _, i := range is {
-		if i.SourceClusterID != clusterID {
-			continue
+// NewVaultInspector builds a callback used by jobs.Service to inspect live
+// Nomad-Vault integrations, Vault KV v2 mounts, and KV secret keys.
+func NewVaultInspector(d *db.DB, ints *integration.Service, vlt *vault.Service) func(ctx context.Context, clusterID string) ([]jobs.VaultIntegrationRef, jobs.KVSecretChecker) {
+	return func(ctx context.Context, clusterID string) ([]jobs.VaultIntegrationRef, jobs.KVSecretChecker) {
+		if ints == nil {
+			return nil, nil
 		}
-		ref := jobs.VaultIntegrationRef{
-			Name:             i.Name,
-			Status:           i.Status,
-			NomadSideEnabled: i.NomadSideEnabled,
+		is, err := ints.List(ctx)
+		if err != nil {
+			return nil, nil
 		}
-		if a.Vault != nil {
-			if vc, err := a.Vault.AdminClient(ctx, i.TargetClusterID); err == nil {
+		clients := map[string]*vault.Client{}
+		clientFor := func(vaultID string) *vault.Client {
+			if c, ok := clients[vaultID]; ok {
+				return c
+			}
+			if vlt == nil || vaultID == "" {
+				clients[vaultID] = nil
+				return nil
+			}
+			c, err := vlt.AdminClient(ctx, vaultID)
+			if err != nil {
+				clients[vaultID] = nil
+				return nil
+			}
+			clients[vaultID] = c
+			return c
+		}
+		var refs []jobs.VaultIntegrationRef
+		for _, i := range is {
+			if i.SourceClusterID != clusterID {
+				continue
+			}
+			ref := jobs.VaultIntegrationRef{
+				Name:             i.Name,
+				Status:           i.Status,
+				NomadSideEnabled: i.NomadSideEnabled,
+				TargetClusterID:  i.TargetClusterID,
+			}
+			if d != nil {
+				if dst, err := db.GetCluster(ctx, d.Reader, i.TargetClusterID); err == nil && dst != nil {
+					ref.VaultTLSEnabled = dst.TLSEnabled
+				}
+			}
+			if vc := clientFor(i.TargetClusterID); vc != nil {
 				if mounts, err := vc.ListMounts(ctx); err == nil {
+					ref.KVMountsQueried = true
 					for p, m := range mounts {
 						if m.Type == "kv" && m.Options["version"] == "2" {
 							ref.KVMounts = append(ref.KVMounts, strings.Trim(p, "/"))
@@ -423,19 +452,40 @@ func (a *API) vaultIntegrationRefs(ctx context.Context, clusterID string) []jobs
 					}
 				}
 			}
+			for _, ro := range i.Roles {
+				ref.Roles = append(ref.Roles, jobs.VaultRoleRef{
+					RoleName:        ro.RoleName,
+					Status:          ro.Status,
+					BoundNamespace:  ro.BoundClaims["nomad_namespace"],
+					PolicyMode:      ro.PolicyMode,
+					SecretPaths:     ro.SecretPaths,
+					CustomPolicyHCL: ro.CustomPolicy,
+				})
+			}
+			refs = append(refs, ref)
 		}
-		for _, ro := range i.Roles {
-			ref.Roles = append(ref.Roles, jobs.VaultRoleRef{
-				RoleName:       ro.RoleName,
-				Status:         ro.Status,
-				BoundNamespace: ro.BoundClaims["nomad_namespace"],
-				PolicyMode:     ro.PolicyMode,
-				SecretPaths:    ro.SecretPaths,
-			})
+		checker := func(vaultClusterID, mount, path string) (map[string]bool, bool, error) {
+			vc := clientFor(vaultClusterID)
+			if vc == nil {
+				return nil, false, fmt.Errorf("vault client unavailable")
+			}
+			sec, err := vc.KVRead(ctx, mount, path, true, 0)
+			if err != nil {
+				if vault.StatusOf(err) == http.StatusNotFound {
+					return nil, false, nil
+				}
+				return nil, false, err
+			}
+			keys := map[string]bool{}
+			if sec != nil {
+				for k := range sec.Data {
+					keys[k] = true
+				}
+			}
+			return keys, true, nil
 		}
-		refs = append(refs, ref)
+		return refs, checker
 	}
-	return refs
 }
 
 func (a *API) builderOptions(w http.ResponseWriter, r *http.Request) {

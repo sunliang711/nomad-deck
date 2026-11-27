@@ -44,4 +44,9 @@ test('STARTER_SAMPLES include all expected built-in blueprints with unique ids a
   assert.ok(openrestyGw?.hcl.includes('openresty/openresty:alpine') && openrestyGw?.hcl.includes('ban-check.lua'), 'openresty-gateway must include Lua WAF');
   const acmeSync = STARTER_SAMPLES.find((s) => s.id === 'acme-cert-sync');
   assert.ok(acmeSync?.hcl.includes('periodic') && acmeSync?.hcl.includes('acme.sh'), 'acme-cert-sync must be a periodic acme.sh job');
+
+  for (const id of ['caddy', 'traefik', 'nginx-gateway', 'openresty-gateway', 'rabbitmq', 'rocketmq', 'prometheus', 'grafana', 'docker_registry']) {
+    const bp = STARTER_SAMPLES.find((s) => s.id === id);
+    assert.ok(bp?.hcl.includes('shutdown_delay'), `${id} with service block must define shutdown_delay`);
+  }
 });

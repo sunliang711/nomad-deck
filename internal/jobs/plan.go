@@ -264,6 +264,13 @@ func (s *Service) Plan(ctx context.Context, caller Caller, clusterID string, in 
 	}
 	warns, err := Validate(ctx, c, j)
 	if err != nil {
+		if isVaultNotEnabledErr(err) {
+			reasons := s.Preflight(ctx, c, clusterID, j)
+			if len(reasons) > 0 {
+				return nil, conflict("vault_not_enabled", "当前 Nomad 集群尚未启用 Nomad-Vault 联动，无法预览调度计划：\n• %s", strings.Join(reasons, "\n• "))
+			}
+			return nil, conflict("vault_not_enabled", "当前 Nomad 集群尚未启用 Nomad-Vault 联动，无法预览调度计划，请先前往「集群联动」创建并应用。")
+		}
 		return nil, err
 	}
 	var pr struct {
@@ -275,7 +282,11 @@ func (s *Service) Plan(ctx context.Context, caller Caller, clusterID string, in 
 	}
 	if err := c.Request(ctx, http.MethodPost, jobPath(id)+"/plan"+q(ns), map[string]any{"Job": j, "Diff": true,
 		"PolicyOverride": in.PolicyOverride}, &pr); err != nil {
-		return nil, nomadErr(err)
+		nerr := nomadErr(err)
+		if isVaultNotEnabledErr(nerr) {
+			return nil, conflict("vault_not_enabled", "当前 Nomad 集群尚未启用 Nomad-Vault 联动，无法预览调度计划，请先前往「集群联动」创建并应用。")
+		}
+		return nil, nerr
 	}
 	if in.EditMode == "" {
 		in.EditMode = map[string]string{"hcl": "hcl", "json": "json"}[in.InputType]
@@ -300,6 +311,10 @@ func (s *Service) Plan(ctx context.Context, caller Caller, clusterID string, in 
 		}
 	}
 
+	extraWarns := s.InspectJobWarnings(ctx, clusterID, j)
+	combinedWarns := mergeUniqueWarningText(warns, strings.Join(extraWarns, "\n"))
+	planOnlyWarns := subtractWarningLines(pr.Warnings, combinedWarns)
+
 	body := canonical(j)
 	rec := &planRecord{ID: randomID(), ClusterID: clusterID, Namespace: ns, JobID: id, JobJSON: body,
 		Hash: planHash(body, clusterID, ns), JobModifyIndex: pr.JobModifyIndex, PolicyOverride: in.PolicyOverride,
@@ -315,12 +330,53 @@ func (s *Service) Plan(ctx context.Context, caller Caller, clusterID string, in 
 	res := &PlanResult{PlanID: rec.ID, PlanHash: rec.Hash, ExpiresAt: rec.ExpiresAt, JobID: id, Namespace: ns,
 		JobModifyIndex: pr.JobModifyIndex, Diff: pr.Diff, Annotations: pr.Annotations, FailedTGAllocs: pr.FailedTGAllocs,
 		PreflightErrors: preflightErrs, SchedulingErrors: schedErrs, CanApply: len(blockingReasons) == 0,
-		Warnings: pr.Warnings, ValidationWarns: warns, Job: j}
+		Warnings: planOnlyWarns, ValidationWarns: combinedWarns, Job: j}
 	if over := s.pendingCountOverride(ctx, clusterID, ns, id); len(over) > 0 {
 		res.CountOverridden = over
 	}
 	s.store().put(rec)
 	return res, nil
+}
+
+func mergeUniqueWarningText(parts ...string) string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range parts {
+		for _, line := range strings.Split(p, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || seen[trimmed] {
+				continue
+			}
+			seen[trimmed] = true
+			out = append(out, trimmed)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func subtractWarningLines(target, existing string) string {
+	if strings.TrimSpace(target) == "" {
+		return ""
+	}
+	if strings.TrimSpace(existing) == "" {
+		return strings.TrimSpace(target)
+	}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(existing, "\n") {
+		if t := strings.TrimSpace(line); t != "" {
+			seen[t] = true
+		}
+	}
+	var out []string
+	for _, line := range strings.Split(target, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	return strings.Join(out, "\n")
 }
 
 // pendingCountOverride reports groups whose live count came from scaling

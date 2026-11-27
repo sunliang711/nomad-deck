@@ -156,7 +156,8 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, erro
 		DataDir: cfg.DataDir, Log: log}
 	integrations := &integration.Service{DB: d, Keys: keys, Audit: rec, Ops: engine, Nomad: nomadSvc, Vault: vaultSvc, Log: log}
 	integrations.Wire()
-	jobSvc := &jobs.Service{DB: d, Keys: keys, Audit: rec, Ops: engine, Nomad: nomadSvc, Log: log}
+	jobSvc := &jobs.Service{DB: d, Keys: keys, Audit: rec, Ops: engine, Nomad: nomadSvc, Log: log,
+		VaultInspector: api.NewVaultInspector(d, integrations, vaultSvc)}
 	jobSvc.Init()
 	wb := &workbench.Service{DB: d, Audit: rec, Nomad: nomadSvc, Log: log}
 	wb.Init()

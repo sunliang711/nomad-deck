@@ -39,6 +39,9 @@ type Service struct {
 	Ops   *ops.Engine
 	Nomad *nomad.Service
 	Log   *slog.Logger
+	// VaultInspector supplies Nomad-Vault integration refs and live KV lookups
+	// for job validation, planning and start preflight checks.
+	VaultInspector func(ctx context.Context, clusterID string) ([]VaultIntegrationRef, KVSecretChecker)
 	// PlanTTL is how long a plan record stays valid (default 15 minutes).
 	PlanTTL time.Duration
 

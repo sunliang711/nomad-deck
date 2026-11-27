@@ -29,12 +29,19 @@ import {
   Modal,
   SectionTabs,
   Select,
-  Sparkline,
   StatusBadge,
   TermLabel,
 } from './UI';
 import { Drawer } from './Drawer';
 import { TerminalModal } from './TerminalModal';
+import { ResourceUtilizationPanel } from './ResourceUtilizationPanel';
+import {
+  AllocCapacity,
+  appendResourceSample,
+  extractAllocCapacity,
+  extractResourceSamples,
+  ResourceSample,
+} from '../lib/allocResourceChart';
 
 export interface JobRuntimeRef {
   id: string;
@@ -82,8 +89,10 @@ export function JobRuntimePanel({
   // Allocation inspection drawer state
   const [selectedAlloc, setSelectedAlloc] = useState<any>(null);
   const [allocStats, setAllocStats] = useState<any>(null);
-  const [cpuHist, setCpuHist] = useState<number[]>([]);
-  const [memHist, setMemHist] = useState<number[]>([]);
+  const [allocCapacity, setAllocCapacity] = useState<AllocCapacity>({ cpuMHz: 0, memMB: 0 });
+  const [cpuHist, setCpuHist] = useState<ResourceSample[]>([]);
+  const [memHist, setMemHist] = useState<ResourceSample[]>([]);
+  const [statsNowTs, setStatsNowTs] = useState<number>(() => Date.now());
   const [fsPath, setFsPath] = useState('');
   const [fsFiles, setFsFiles] = useState<any[]>([]);
   const [fsLoading, setFsLoading] = useState(false);
@@ -98,14 +107,19 @@ export function JobRuntimePanel({
   const jobRequestRef = useRef(0);
   const allocRequestRef = useRef(0);
   const fsRequestRef = useRef(0);
+  const allocCapacityRef = useRef<AllocCapacity>({ cpuMHz: 0, memMB: 0 });
   const jobId = job.id;
   const jobNs = job.namespace || 'default';
 
   const closeAllocDrawer = useCallback(() => {
     ++allocRequestRef.current;
     ++fsRequestRef.current;
+    allocCapacityRef.current = { cpuMHz: 0, memMB: 0 };
     setSelectedAlloc(null);
     setAllocStats(null);
+    setAllocCapacity({ cpuMHz: 0, memMB: 0 });
+    setCpuHist([]);
+    setMemHist([]);
     setAllocLogs('');
     setFsFiles([]);
     setFsPath('');
@@ -216,12 +230,17 @@ export function JobRuntimePanel({
     const request = ++allocRequestRef.current;
     ++fsRequestRef.current;
     const sameAlloc = selectedAlloc?.ID === alloc.ID;
+    const initialCap = extractAllocCapacity(alloc);
+    allocCapacityRef.current = initialCap;
     setAllocTab(initialTab);
     setSelectedAlloc(alloc);
+    setAllocCapacity(initialCap);
     setAllocStats(null);
     setFsFiles([]);
-    setCpuHist([]);
-    setMemHist([]);
+    if (!sameAlloc) {
+      setCpuHist([]);
+      setMemHist([]);
+    }
     setAllocLogs('');
     setLogRevision((r) => r + 1);
     setFsPath('');
@@ -237,14 +256,20 @@ export function JobRuntimePanel({
       ]);
       if (request !== allocRequestRef.current) return;
       const detail = det.allocation || alloc;
+      const cap = extractAllocCapacity(detail);
+      allocCapacityRef.current = cap;
       setSelectedAlloc(detail);
+      setAllocCapacity(cap);
       setLogTask((current) =>
         current && detail.TaskStates?.[current] ? current : Object.keys(detail.TaskStates || {})[0] || '',
       );
       const stats = st.stats || st;
+      const ts = Date.now();
+      const samples = extractResourceSamples(stats, cap, ts);
       setAllocStats(stats);
-      setCpuHist([stats?.ResourceUsage?.CpuStats?.Percent || 0]);
-      setMemHist([(stats?.ResourceUsage?.MemoryStats?.RSS || 0) / (1024 * 1024)]);
+      setStatsNowTs(ts);
+      setCpuHist((p) => (sameAlloc ? appendResourceSample(p, samples.cpu) : [samples.cpu]));
+      setMemHist((p) => (sameAlloc ? appendResourceSample(p, samples.mem) : [samples.mem]));
       setFsFiles(ls.files || ls || []);
     } catch (ex: any) {
       if (request === allocRequestRef.current) setErr(ex?.message || '加载 Allocation 详情失败');
@@ -305,9 +330,12 @@ export function JobRuntimePanel({
         const st = await apiGet(`/api/v1/nomad/${clusterId}/allocs/${selectedAlloc.ID}/stats`);
         if (!active) return;
         const stats = st.stats || st;
+        const ts = Date.now();
+        const samples = extractResourceSamples(stats, allocCapacityRef.current, ts);
         setAllocStats(stats);
-        setCpuHist((p) => [...p.slice(-19), stats?.ResourceUsage?.CpuStats?.Percent || 0]);
-        setMemHist((p) => [...p.slice(-19), (stats?.ResourceUsage?.MemoryStats?.RSS || 0) / (1024 * 1024)]);
+        setStatsNowTs(ts);
+        setCpuHist((p) => appendResourceSample(p, samples.cpu));
+        setMemHist((p) => appendResourceSample(p, samples.mem));
       } catch {
         // Ignore transient polling errors
       }
@@ -1040,11 +1068,13 @@ export function JobRuntimePanel({
 
             {allocTab === 'events' && (
               <div className="space-y-4">
-                <div className="flex flex-wrap gap-4 rounded-xl border border-slate-200 p-3.5 dark:border-slate-800">
-                  <Sparkline values={cpuHist} color="#4f46e5" label={`CPU ${(cpuHist[cpuHist.length - 1] || 0).toFixed(1)}%`} />
-                  <Sparkline values={memHist} max={512} color="#0ea5e9" label={`Mem ${(memHist[memHist.length - 1] || 0).toFixed(1)} MiB`} />
-                  {allocStats && <span className="self-center text-slate-500">每 3 秒自动采集一次资源占用</span>}
-                </div>
+                <ResourceUtilizationPanel
+                  cpuSamples={cpuHist}
+                  memSamples={memHist}
+                  capacity={allocCapacity}
+                  nowTs={statsNowTs}
+                  hasStats={Boolean(allocStats)}
+                />
                 <div className="space-y-2">
                   <div className="font-semibold text-slate-800 dark:text-slate-100">Task 生命周期事件</div>
                   {Object.entries<any>(selectedAlloc.TaskStates || {}).map(([task, state]) => (

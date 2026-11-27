@@ -14,6 +14,7 @@ import (
 	"nomad-deck/internal/audit"
 	"nomad-deck/internal/cluster"
 	"nomad-deck/internal/db"
+	"nomad-deck/internal/netx"
 	"nomad-deck/internal/ops"
 	"nomad-deck/internal/pki"
 	"nomad-deck/internal/release"
@@ -690,7 +691,7 @@ func (s *Service) installNode(ctx context.Context, t *ops.Task, gi *genInput, m 
 		if err != nil {
 			return err
 		}
-		if err := s.installDockerOn(ctx, t, nc, d, arts, artsVersion(arts)); err != nil {
+		if err := s.installDockerOn(ctx, t, nc, d, arts, artsVersion(arts), s.Proxy.UseByDefault(ctx, netx.SettingUseForDockerInstall)); err != nil {
 			return fmt.Errorf("自动安装 Docker 失败：%w", err)
 		}
 	}

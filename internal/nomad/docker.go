@@ -369,45 +369,93 @@ chmod 0755 "$policy_path"
 `
 }
 
+// dockerAptProxySetup generates shell lines that configure an isolated temporary
+// apt proxy file cleaned up on exit when an HTTP/HTTPS proxy URL is provided.
+func dockerAptProxySetup(dir, pkgProxyURL string) string {
+	if pkgProxyURL == "" {
+		return ""
+	}
+	return fmt.Sprintf(`apt_proxy_conf=$(mktemp %s)
+chmod 0600 "$apt_proxy_conf"
+cat > "$apt_proxy_conf" <<'ND_APT_PROXY'
+Acquire::http::Proxy %s;
+Acquire::https::Proxy %s;
+ND_APT_PROXY
+`, sshx.Quote(dir+"/.apt-proxy.XXXXXX"), strconv.Quote(pkgProxyURL), strconv.Quote(pkgProxyURL))
+}
+
 // dockerPrecheckScript checks that installing the staged packages only
 // needs dependencies available from the host's configured repositories.
-func dockerPrecheckScript(format, dir string) string {
+func dockerPrecheckScript(format, dir, pkgProxyURL string) string {
 	if format == "deb" {
+		aptArgs := ""
+		proxySetup := ""
+		if pkgProxyURL != "" {
+			aptArgs = `-c "$apt_proxy_conf" `
+			proxySetup = `apt_proxy_conf=""
+cleanup_apt_proxy() {
+  if [ -n "$apt_proxy_conf" ]; then rm -f -- "$apt_proxy_conf"; fi
+}
+trap cleanup_apt_proxy EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+` + dockerAptProxySetup(dir, pkgProxyURL)
+		}
 		return fmt.Sprintf(`set -e
 cd %s
-sim_out=$(DEBIAN_FRONTEND=noninteractive apt-get install --simulate -y --allow-change-held-packages ./*.deb 2>&1) || { printf '%%s\n' "$sim_out"; echo "依赖预检失败：上面列出的系统依赖无法从已配置的软件源获得"; exit 1; }
+%ssim_out=$(DEBIAN_FRONTEND=noninteractive apt-get %sinstall --simulate -y --allow-change-held-packages ./*.deb 2>&1) || { printf '%%s\n' "$sim_out"; echo "依赖预检失败：上面列出的系统依赖无法从已配置的软件源获得"; exit 1; }
 printf '%%s\n' "$sim_out" | grep -E '^Inst ' | awk '{print $2}' | tr '\n' ' '
-`, sshx.Quote(dir))
+`, sshx.Quote(dir), proxySetup, aptArgs)
+	}
+	envSetup := ""
+	if pkgProxyURL != "" {
+		quoted := sshx.Quote(pkgProxyURL)
+		envSetup = fmt.Sprintf("export http_proxy=%s https_proxy=%s HTTP_PROXY=%s HTTPS_PROXY=%s\n", quoted, quoted, quoted, quoted)
 	}
 	return fmt.Sprintf(`cd %s || exit 1
-out=$(dnf install --assumeno ./*.rpm 2>&1)
+%sout=$(dnf install --assumeno ./*.rpm 2>&1)
 echo "$out" | tail -n 40
 if echo "$out" | grep -Eq 'nothing provides|Problem:|conflicting requests|^Error:'; then
   echo "依赖预检失败：上面列出的系统依赖无法从已配置的软件源获得"; exit 1
 fi
-`, sshx.Quote(dir))
+`, sshx.Quote(dir), envSetup)
 }
 
 // dockerInstallScript installs (or upgrades/downgrades) the staged packages
 // and pins their versions against routine system upgrades.
-func dockerInstallScript(format, dir string, downgrade bool) string {
+func dockerInstallScript(format, dir, pkgProxyURL string, downgrade bool) string {
 	if format == "deb" {
+		aptArgs := ""
+		proxySetup := ""
+		if pkgProxyURL != "" {
+			aptArgs = `-c "$apt_proxy_conf" `
+			proxySetup = dockerAptProxySetup(dir, pkgProxyURL) + `cleanup_install() {
+  if [ -n "${apt_proxy_conf:-}" ]; then rm -f -- "$apt_proxy_conf"; fi
+  restore_policy
+}
+trap cleanup_install EXIT
+`
+		}
 		return fmt.Sprintf(`set -e
 cd %[1]s
-%[3]s
-apt-mark unhold %[2]s >/dev/null 2>&1 || true
-DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades -o Dpkg::Options::=--force-confold ./*.deb
+%[3]s%[4]sapt-mark unhold %[2]s >/dev/null 2>&1 || true
+DEBIAN_FRONTEND=noninteractive apt-get %[5]sinstall -y --allow-downgrades -o Dpkg::Options::=--force-confold ./*.deb
 apt-mark hold %[2]s >/dev/null
 echo "已安装并锁定版本：$(dpkg-query -W -f='${Package}=${Version} ' %[2]s)"
-`, sshx.Quote(dir), pkgNames(), dockerPackagePolicyScript("/usr/sbin/policy-rc.d"))
+`, sshx.Quote(dir), pkgNames(), dockerPackagePolicyScript("/usr/sbin/policy-rc.d"), proxySetup, aptArgs)
 	}
 	verb := "install"
 	if downgrade {
 		verb = "downgrade"
 	}
+	envSetup := ""
+	if pkgProxyURL != "" {
+		quoted := sshx.Quote(pkgProxyURL)
+		envSetup = fmt.Sprintf("export http_proxy=%s https_proxy=%s HTTP_PROXY=%s HTTPS_PROXY=%s\n", quoted, quoted, quoted, quoted)
+	}
 	return fmt.Sprintf(`set -e
 cd %[1]s
-rpm --import %[3]s
+%[6]srpm --import %[3]s
 for f in ./*.rpm; do
   rpm -K "$f" | grep -q 'signatures OK' || { echo "RPM 签名校验失败：$f"; rpm -K "$f"; exit 1; }
 done
@@ -420,7 +468,7 @@ else
   grep -q '^excludepkgs=.*docker-ce' /etc/dnf/dnf.conf || sed -i '/^\[main\]/a excludepkgs=%[5]s' /etc/dnf/dnf.conf
 fi
 echo "已安装并锁定版本：$(rpm -q %[2]s | tr '\n' ' ')"
-`, sshx.Quote(dir), pkgNames(), DockerKeyFile, verb, strings.Join(release.DockerPackages, ","))
+`, sshx.Quote(dir), pkgNames(), DockerKeyFile, verb, strings.Join(release.DockerPackages, ","), envSetup)
 }
 
 // dockerWriteConfigScript validates a staged daemon.json, swaps it in
@@ -576,9 +624,24 @@ func filepathExt(name string) string {
 	return ""
 }
 
+func (s *Service) packageManagerProxyURL(ctx context.Context, useProxy bool) (proxyURL, proxyAddr string) {
+	if !useProxy || s.Proxy == nil {
+		return "", ""
+	}
+	cfg, pass, err := s.Proxy.Load(ctx)
+	if err != nil || cfg == nil || (cfg.Type != "http" && cfg.Type != "https") {
+		return "", ""
+	}
+	return cfg.URL(pass).String(), cfg.Address()
+}
+
 // installDockerPackages runs the dependency precheck and installs the
 // staged packages.
-func (s *Service) installDockerPackages(ctx context.Context, nc *cluster.NodeCtx, format, dir string, downgrade bool) error {
+func (s *Service) installDockerPackages(ctx context.Context, nc *cluster.NodeCtx, format, dir string, downgrade, useProxy bool) error {
+	pkgProxyURL, pkgProxyAddr := s.packageManagerProxyURL(ctx, useProxy)
+	if pkgProxyAddr != "" {
+		nc.Step.Logf("包管理器依赖检查与安装将经系统代理 %s 执行", pkgProxyAddr)
+	}
 	if format == "rpm" {
 		kr, err := s.Releases.Docker(ctx).ArmoredRPMKey()
 		if err != nil {
@@ -590,11 +653,11 @@ func (s *Service) installDockerPackages(ctx context.Context, nc *cluster.NodeCtx
 	}
 	if !downgrade {
 		nc.Step.Logf("依赖预检")
-		if err := nc.Remote(ctx, "docker-precheck", dockerPrecheckScript(format, dir)); err != nil {
+		if err := nc.Remote(ctx, "docker-precheck", dockerPrecheckScript(format, dir, pkgProxyURL)); err != nil {
 			return err
 		}
 	}
-	if err := nc.Remote(ctx, "docker-install", dockerInstallScript(format, dir, downgrade)); err != nil {
+	if err := nc.Remote(ctx, "docker-install", dockerInstallScript(format, dir, pkgProxyURL, downgrade)); err != nil {
 		return err
 	}
 	_, _ = nc.Run(ctx, "rm -rf -- "+sshx.Quote(dir))
@@ -696,7 +759,7 @@ func (s *Service) recordDocker(ctx context.Context, d *dockerHost, mode, version
 }
 
 // installDockerOn performs a fresh managed install on an open host session.
-func (s *Service) installDockerOn(ctx context.Context, t *ops.Task, nc *cluster.NodeCtx, d *dockerHost, arts []*release.Artifact, version string) error {
+func (s *Service) installDockerOn(ctx context.Context, t *ops.Task, nc *cluster.NodeCtx, d *dockerHost, arts []*release.Artifact, version string, useProxy bool) error {
 	target, err := dockerTarget(d.node)
 	if err != nil {
 		return err
@@ -705,7 +768,7 @@ func (s *Service) installDockerOn(ctx context.Context, t *ops.Task, nc *cluster.
 	if err != nil {
 		return err
 	}
-	if err := s.installDockerPackages(ctx, nc, target.Format, dir, false); err != nil {
+	if err := s.installDockerPackages(ctx, nc, target.Format, dir, false, useProxy); err != nil {
 		return err
 	}
 	got, err := s.writeDaemonConfig(ctx, nc, d, "managed", true)
@@ -798,7 +861,7 @@ func (s *Service) InstallDocker(ctx context.Context, actor audit.Actor, nodeID s
 					return err
 				}
 			}
-			err = s.installDockerOn(ctx, t, nc, d, arts, version)
+			err = s.installDockerOn(ctx, t, nc, d, arts, version, hc.UseProxy)
 			return err
 		}})
 	if err != nil {
@@ -1078,7 +1141,7 @@ func (s *Service) upgradeDockerHost(ctx context.Context, t *ops.Task, nodeID str
 	if err != nil {
 		return err
 	}
-	if err = s.installDockerPackages(ctx, nc, target.Format, dir, false); err != nil {
+	if err = s.installDockerPackages(ctx, nc, target.Format, dir, false, hc.UseProxy); err != nil {
 		return err
 	}
 	verify := func() error {
@@ -1127,7 +1190,7 @@ func (s *Service) upgradeDockerHost(ctx context.Context, t *ops.Task, nodeID str
 			nc.Step.Logf("验证失败（%v），按缓存的 %s 安装包回退", verr, cur)
 			pdir, perr := s.stageDocker(ctx, t, nc, prev, cur)
 			if perr == nil {
-				perr = s.installDockerPackages(ctx, nc, target.Format, pdir, true)
+				perr = s.installDockerPackages(ctx, nc, target.Format, pdir, true, hc.UseProxy)
 			}
 			if perr == nil {
 				var out string

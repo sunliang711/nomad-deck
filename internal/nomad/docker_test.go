@@ -301,3 +301,33 @@ func TestBuildDockerPruneScript(t *testing.T) {
 		t.Fatalf("prune script must never prune volumes automatically: %s", script)
 	}
 }
+
+func TestDockerInstallScriptsProxy(t *testing.T) {
+	dir := "/opt/nomad-deck/.staging/op1/docker-29.10.1"
+	proxy := "http://user:nopass@10.2.1.115:9605"
+
+	preDeb := dockerPrecheckScript("deb", dir, proxy)
+	if !strings.Contains(preDeb, `Acquire::http::Proxy "http://user:nopass@10.2.1.115:9605";`) ||
+		!strings.Contains(preDeb, `apt-get -c "$apt_proxy_conf" install --simulate`) ||
+		!strings.Contains(preDeb, `trap cleanup_apt_proxy EXIT`) {
+		t.Fatalf("unexpected proxied deb precheck script:\n%s", preDeb)
+	}
+
+	instDeb := dockerInstallScript("deb", dir, proxy, false)
+	if !strings.Contains(instDeb, `Acquire::https::Proxy "http://user:nopass@10.2.1.115:9605";`) ||
+		!strings.Contains(instDeb, `apt-get -c "$apt_proxy_conf" install -y`) ||
+		!strings.Contains(instDeb, `trap cleanup_install EXIT`) ||
+		!strings.Contains(instDeb, `restore_policy`) {
+		t.Fatalf("unexpected proxied deb install script:\n%s", instDeb)
+	}
+
+	preDirect := dockerPrecheckScript("deb", dir, "")
+	if strings.Contains(preDirect, "Acquire::http::Proxy") || strings.Contains(preDirect, "apt_proxy_conf") {
+		t.Fatalf("direct precheck should not configure apt proxy:\n%s", preDirect)
+	}
+
+	instRPM := dockerInstallScript("rpm", dir, proxy, false)
+	if !strings.Contains(instRPM, "export http_proxy=") || !strings.Contains(instRPM, "HTTPS_PROXY=") {
+		t.Fatalf("unexpected proxied rpm install script:\n%s", instRPM)
+	}
+}

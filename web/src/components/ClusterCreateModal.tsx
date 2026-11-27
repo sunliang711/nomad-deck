@@ -9,6 +9,7 @@ import {
   type ClientPluginDraft,
 } from './NomadConfigModals';
 import { Badge, Button, EmptyState, ErrorAlert, Input, Modal, Select, StatusBadge } from './UI';
+import { isLoopbackAddress } from '../lib/net';
 
 type Member = { node_id: string; role: string; advertise_addr: string };
 
@@ -40,11 +41,13 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
   const isNomad = product === 'nomad';
   const productName = isNomad ? 'Nomad' : 'Vault';
   const servers = isNomad ? members.filter((m) => m.role !== 'client').length : members.length;
+  const loopbackMembers = mode === 'cluster' ? members.filter((m) => isLoopbackAddress(m.advertise_addr)) : [];
   const selectionError = mode === 'single'
     ? members.length !== 1 ? '单机模式请选择 1 台主机。' : ''
     : isNomad
       ? servers < 3 || servers % 2 === 0 ? '请选择至少 3 台且为奇数台的 Server，推荐 3 台或 5 台。' : ''
       : members.length < 3 ? '高可用集群至少需要 3 台主机，推荐 3 台或 5 台。' : '';
+  const memberError = selectionError || (loopbackMembers.length > 0 ? '多节点集群成员的通信地址（advertise_addr）不能使用 127.0.0.1 或 localhost，请填写真实内网 IP。' : '');
 
   useEffect(() => {
     if (!open) return;
@@ -87,7 +90,7 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (submitting.current || selectionError) return;
+    if (submitting.current || memberError) return;
     submitting.current = true;
     setBusy(true);
     setErr('');
@@ -105,10 +108,14 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
             client_defaults: buildClientSettingsPayload(clientDefaults),
           }
         : {};
+      const normalizedMembers = members.map((m) => {
+        const addr = m.advertise_addr.trim();
+        return isNomad ? { ...m, advertise_addr: addr } : { node_id: m.node_id, advertise_addr: addr };
+      });
       const res = await apiPost('/api/v1/clusters', {
         type: product, name: name.trim(), mode, public_api_url: publicURL.trim(),
         ...nomadPayload,
-        nodes: members.map((m) => isNomad ? m : { node_id: m.node_id, advertise_addr: m.advertise_addr }),
+        nodes: normalizedMembers,
       });
       await onCreated(res.cluster.id);
       onClose();
@@ -129,7 +136,7 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
           </span>
           <div className="flex gap-2">
             <Button disabled={busy} onClick={onClose}>取消</Button>
-            <Button type="submit" form={formId} variant="primary" loading={busy} disabled={Boolean(selectionError) || !name.trim()}>
+            <Button type="submit" form={formId} variant="primary" loading={busy} disabled={Boolean(memberError) || !name.trim()}>
               创建并前往部署 <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
@@ -264,19 +271,40 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
                           </label>
                           <StatusBadge value={n.status} />
                         </div>
-                        {picked && isNomad && mode === 'cluster' && (
-                          <div className="mt-3">
-                            <Select
-                              label={`${n.name} 的节点角色`}
-                              value={picked.role}
-                              onChange={(e) =>
-                                setMembers((prev) => prev.map((m) => (m.node_id === n.id ? { ...m, role: e.target.value } : m)))
-                              }
-                            >
-                              <option value="server_client">Server + Client · 调度并运行任务（入门推荐）</option>
-                              <option value="server">Server · 仅负责集群调度</option>
-                              <option value="client">Client · 仅运行工作负载</option>
-                            </Select>
+                        {picked && (
+                          <div className={`mt-3 grid grid-cols-1 gap-2.5 ${isNomad && mode === 'cluster' ? 'sm:grid-cols-2' : ''}`}>
+                            {isNomad && mode === 'cluster' && (
+                              <Select
+                                label={`${n.name} 的节点角色`}
+                                value={picked.role}
+                                onChange={(e) =>
+                                  setMembers((prev) => prev.map((m) => (m.node_id === n.id ? { ...m, role: e.target.value } : m)))
+                                }
+                              >
+                                <option value="server_client">Server + Client · 调度并运行任务（入门推荐）</option>
+                                <option value="server">Server · 仅负责集群调度</option>
+                                <option value="client">Client · 仅运行工作负载</option>
+                              </Select>
+                            )}
+                            <div>
+                              <Input
+                                label="集群通信地址 (advertise_addr)"
+                                required
+                                value={picked.advertise_addr}
+                                placeholder={n.host || '例如 10.0.0.11'}
+                                hint="默认填入主机 SSH 地址，用于节点间通信与证书签发；多节点请填真实内网 IP。"
+                                onChange={(e) =>
+                                  setMembers((prev) =>
+                                    prev.map((m) => (m.node_id === n.id ? { ...m, advertise_addr: e.target.value } : m)),
+                                  )
+                                }
+                              />
+                              {mode === 'cluster' && isLoopbackAddress(picked.advertise_addr) && (
+                                <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">
+                                  多节点集群不可使用回环地址（127.0.0.1 / localhost），请改为真实内网 IP。
+                                </p>
+                              )}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -286,11 +314,11 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
               )}
               <p
                 className={`mt-2.5 text-xs leading-5 ${
-                  selectionError ? 'text-amber-700 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-300'
+                  memberError ? 'text-amber-700 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-300'
                 }`}
                 role="status"
               >
-                {selectionError || `已满足${mode === 'single' ? '单机体验' : '高可用集群'}节点要求。`}
+                {memberError || `已满足${mode === 'single' ? '单机体验' : '高可用集群'}节点要求。`}
               </p>
             </fieldset>
 

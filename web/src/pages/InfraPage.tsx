@@ -845,7 +845,7 @@ export function InfraPage() {
                           {n.is_control_plane_host && (
                             <span className="inline-flex items-center gap-0.5">
                               <Badge tone="amber">控制面同机</Badge>
-                              <InfoTip text="该主机与 NomadDeck 控制面同机：若控制面运行在 Docker 容器中，请勿在本页重装或重启 Docker；组成多节点集群时 advertise_addr 请填写真实内网 IP 而非 127.0.0.1。" />
+                              <InfoTip text="该主机与 NomadDeck 控制面同机：若控制面运行在 Docker 容器中，请勿在本页重装或重启 Docker；组成多节点集群时，请在集群配置中将集群通信地址（advertise_addr）设为真实内网 IP 而非 127.0.0.1。" />
                             </span>
                           )}
                         </div>
@@ -1528,6 +1528,29 @@ export function InfraPage() {
                       <li key={i}>{w}</li>
                     ))}
                   </ul>
+                  {dn.swap_enabled && !swapEncrypted && (
+                    <div className="rounded-lg border border-amber-300/70 bg-white/75 px-3 py-2 text-[11px] leading-5 text-amber-950 dark:border-amber-500/30 dark:bg-slate-950/50 dark:text-amber-100">
+                      <div className="font-semibold">未加密 Swap 处理建议（仅部署 Vault 时涉及，只跑 Nomad 可忽略）：</div>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                        <li>
+                          <b>禁用 Swap（推荐）</b>：在目标主机执行{' '}
+                          <code className="rounded bg-amber-100 px-1 font-mono dark:bg-amber-950/60">sudo swapoff -a</code> 并注释{' '}
+                          <code className="rounded bg-amber-100 px-1 font-mono dark:bg-amber-950/60">/etc/fstab</code> 中的{' '}
+                          <code className="rounded bg-amber-100 px-1 font-mono dark:bg-amber-950/60">swap</code> 行（若有 zram 或{' '}
+                          <code className="rounded bg-amber-100 px-1 font-mono dark:bg-amber-950/60">.swap</code> 服务一并停用），完成后点击右上角「重新探测」。
+                        </li>
+                        <li>
+                          <b>改为加密 Swap</b>：通过{' '}
+                          <code className="rounded bg-amber-100 px-1 font-mono dark:bg-amber-950/60">dm-crypt</code> /{' '}
+                          <code className="rounded bg-amber-100 px-1 font-mono dark:bg-amber-950/60">cryptsetup</code> 挂载为{' '}
+                          <code className="rounded bg-amber-100 px-1 font-mono dark:bg-amber-950/60">/dev/mapper/...</code> 加密设备。
+                        </li>
+                        <li>
+                          <b>测试环境兜底</b>：若暂不关闭，也可在部署或扩容 Vault 时勾选「确认未加密 Swap 风险」后继续。
+                        </li>
+                      </ul>
+                    </div>
+                  )}
                 </div>
               ) : dn.status === 'online' ? (
                 <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/80 px-3.5 py-2.5 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
@@ -1618,7 +1641,12 @@ export function InfraPage() {
                     <dd className="mt-0.5 font-mono text-slate-900 dark:text-slate-100">{dn.selinux_mode || '-'}</dd>
                   </div>
                   <div>
-                    <dt className="text-slate-500">Swap 交换空间</dt>
+                    <dt className="text-slate-500">
+                      <TermLabel
+                        term="Swap 交换空间"
+                        tip="Vault 默认使用 disable_mlock，若启用未加密 Swap，内存中的密钥可能被换出到磁盘；仅部署 Nomad 可忽略。部署 Vault 建议执行 sudo swapoff -a 并注释 /etc/fstab 中的 swap 行，或改用 dm-crypt 加密 Swap。"
+                      />
+                    </dt>
                     <dd className="mt-0.5 text-slate-900 dark:text-slate-100">
                       {dn.status === 'unknown' ? '-' : dn.swap_enabled ? (swapEncrypted ? '已启用（已加密）' : '已启用（未加密）') : '已禁用'}
                     </dd>

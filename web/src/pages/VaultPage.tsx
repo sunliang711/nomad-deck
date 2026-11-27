@@ -39,6 +39,7 @@ import { CodeEditor } from '../components/CodeEditor';
 import { ItemSwitcher } from '../components/ItemSwitcher';
 import { UninstallClusterModal, type UninstallPlan } from '../components/UninstallClusterModal';
 import { ClusterCreateModal } from '../components/ClusterCreateModal';
+import { isLoopbackAddress } from '../lib/net';
 
 function generateRandomSecret(length = 24): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_';
@@ -127,6 +128,7 @@ export function VaultPage() {
   const [upVer, setUpVer] = useState('');
   const [showJoin, setShowJoin] = useState(false);
   const [joinNodeId, setJoinNodeId] = useState('');
+  const [joinAdvertiseAddr, setJoinAdvertiseAddr] = useState('');
   const [confirmSwap, setConfirmSwap] = useState(false);
   const [snapPass, setSnapPass] = useState('');
   const [snapFile, setSnapFile] = useState<File | null>(null);
@@ -575,7 +577,7 @@ export function VaultPage() {
                 }
                 onOpenWebUI={handleOpenWebUI}
                 onUninstall={handleUninstall}
-                onOpenJoin={() => { setJoinNodeId(''); setConfirmSwap(false); setShowJoin(true); }}
+                onOpenJoin={() => { setJoinNodeId(''); setJoinAdvertiseAddr(''); setConfirmSwap(false); setShowJoin(true); }}
                 onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Vault 日志: ${n.name}`)}
                 onCheckGate={(n) =>
                   apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
@@ -1638,7 +1640,10 @@ export function VaultPage() {
             e.preventDefault();
             setJoinBusy(true);
             try {
-              const r = await apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { confirm_swap: confirmSwap });
+              const r = await apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, {
+                confirm_swap: confirmSwap,
+                advertise_addr: joinAdvertiseAddr.trim() || undefined,
+              });
               setShowJoin(false);
               if (r.task?.id) openTask(r.task.id, '扩容 Vault 节点');
             } catch (ex: any) {
@@ -1649,10 +1654,35 @@ export function VaultPage() {
           }}
         >
           <ErrorAlert message={err} onClose={() => setErr('')} />
-          <Select label="待加入主机" required value={joinNodeId} onChange={(e) => setJoinNodeId(e.target.value)}>
+          <Select
+            label="待加入主机"
+            required
+            value={joinNodeId}
+            onChange={(e) => {
+              const id = e.target.value;
+              setJoinNodeId(id);
+              const matched = nodes.find((n) => n.id === id);
+              setJoinAdvertiseAddr(matched?.host || '');
+            }}
+          >
             <option value="">选择主机</option>
             {nodes.filter((n) => !clusterNodes.some((m: any) => m.node_id === n.id)).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.host})</option>)}
           </Select>
+          <div>
+            <Input
+              label="集群通信地址 (advertise_addr)"
+              required
+              placeholder="例如 10.0.0.12"
+              value={joinAdvertiseAddr}
+              onChange={(e) => setJoinAdvertiseAddr(e.target.value)}
+              hint="默认填入主机 SSH 地址；加入多节点集群请填写真实内网 IP（勿填 127.0.0.1）。"
+            />
+            {isLoopbackAddress(joinAdvertiseAddr) && (
+              <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">
+                跨机加入集群不能使用回环地址（127.0.0.1 / localhost），请改为真实内网 IP。
+              </p>
+            )}
+          </div>
           <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
             <span>下载网络：{proxyEnabled ? '通过系统代理' : '直连'}</span>
             <Link to="/settings?tab=proxy" className="text-indigo-600 dark:text-indigo-400 hover:underline">前往下载代理设置</Link>

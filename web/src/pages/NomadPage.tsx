@@ -37,6 +37,7 @@ import { ItemSwitcher } from '../components/ItemSwitcher';
 import { UninstallClusterModal, type UninstallPlan } from '../components/UninstallClusterModal';
 import { ClusterCreateModal } from '../components/ClusterCreateModal';
 import { NomadClusterSettingsModal, NomadNodeConfigModal } from '../components/NomadConfigModals';
+import { isLoopbackAddress } from '../lib/net';
 
 export function NomadPage() {
   const { isAdmin } = useAuth();
@@ -113,6 +114,7 @@ export function NomadPage() {
   const [upVer, setUpVer] = useState('');
   const [showJoin, setShowJoin] = useState(false);
   const [joinNodeId, setJoinNodeId] = useState('');
+  const [joinAdvertiseAddr, setJoinAdvertiseAddr] = useState('');
   const [joinRole, setJoinRole] = useState('server_client');
   const [proxyEnabled, setProxyEnabled] = useState(false);
   const [joinBusy, setJoinBusy] = useState(false);
@@ -413,7 +415,7 @@ export function NomadPage() {
                 onRevealRootToken={handleRevealMgmtToken}
                 onOpenWebUI={handleOpenWebUI}
                 onUninstall={handleUninstall}
-                onOpenJoin={() => { setJoinNodeId(''); setShowJoin(true); }}
+                onOpenJoin={() => { setJoinNodeId(''); setJoinAdvertiseAddr(''); setShowJoin(true); }}
                 onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, `Nomad 日志: ${n.name}`)}
                 onCheckGate={(n) =>
                   apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
@@ -1010,7 +1012,10 @@ export function NomadPage() {
             e.preventDefault();
             setJoinBusy(true);
             try {
-              const r = await apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, { role: joinRole });
+              const r = await apiPost(`/api/v1/clusters/${selectedId}/nodes/${joinNodeId}/join`, {
+                role: joinRole,
+                advertise_addr: joinAdvertiseAddr.trim() || undefined,
+              });
               setShowJoin(false);
               if (r.task?.id) openTask(r.task.id, '扩容 Nomad 节点');
             } catch (ex: any) {
@@ -1021,10 +1026,35 @@ export function NomadPage() {
           }}
         >
           <ErrorAlert message={err} onClose={() => setErr('')} />
-          <Select label="待加入主机" required value={joinNodeId} onChange={(e) => setJoinNodeId(e.target.value)}>
+          <Select
+            label="待加入主机"
+            required
+            value={joinNodeId}
+            onChange={(e) => {
+              const id = e.target.value;
+              setJoinNodeId(id);
+              const matched = nodes.find((n) => n.id === id);
+              setJoinAdvertiseAddr(matched?.host || '');
+            }}
+          >
             <option value="">选择主机</option>
             {nodes.filter((n) => !clusterNodes.some((m: any) => m.node_id === n.id)).map((n) => <option key={n.id} value={n.id}>{n.name} ({n.host})</option>)}
           </Select>
+          <div>
+            <Input
+              label="集群通信地址 (advertise_addr)"
+              required
+              placeholder="例如 10.0.0.12"
+              value={joinAdvertiseAddr}
+              onChange={(e) => setJoinAdvertiseAddr(e.target.value)}
+              hint="默认填入主机 SSH 地址；加入多节点集群请填写真实内网 IP（勿填 127.0.0.1）。"
+            />
+            {isLoopbackAddress(joinAdvertiseAddr) && (
+              <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">
+                跨机加入集群不能使用回环地址（127.0.0.1 / localhost），请改为真实内网 IP。
+              </p>
+            )}
+          </div>
           <Select label="节点角色" value={joinRole} onChange={(e) => setJoinRole(e.target.value)}>
             <option value="server_client">server_client</option>
             <option value="server">server</option>

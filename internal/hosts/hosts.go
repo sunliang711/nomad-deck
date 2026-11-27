@@ -788,10 +788,10 @@ func WarningsForHostWithClones(n *db.Node, p *sshx.ProbeResult, isControlPlaneHo
 		w = append(w, fmt.Sprintf("检测到该主机与「%s」共用相同的 /etc/machine-id（疑似克隆虚拟机），已允许接入；建议按需在目标机执行 sudo rm -f /etc/machine-id /var/lib/dbus/machine-id && sudo systemd-machine-id-setup 重新生成，以免影响 DHCP 或系统日志", strings.Join(clonePeers, "、")))
 	}
 	if isControlPlaneHost {
-		w = append(w, "该主机与 NomadDeck 控制面同机：若控制面以 Docker 容器运行，请勿在本页重启/重装该主机 Docker；加入多节点集群时 advertise_addr 请填写真实内网 IP 而非 127.0.0.1")
+		w = append(w, "该主机与 NomadDeck 控制面同机：若控制面以 Docker 容器运行，请勿在本页重启/重装该主机 Docker；组建多节点集群时，请将该节点的集群通信地址（advertise_addr）填写真实内网 IP 而非 127.0.0.1")
 	}
 	if n != nil && (n.Host == "127.0.0.1" || strings.EqualFold(n.Host, "localhost") || n.Host == "::1") {
-		w = append(w, "当前主机 SSH 地址为回环地址，组建跨机集群时成员 advertise_addr 不应使用回环地址")
+		w = append(w, "当前主机 SSH 地址为回环地址，组建跨机集群时请将该节点的集群通信地址（advertise_addr）设为真实内网 IP")
 	}
 	if !p.SudoReady {
 		w = append(w, "当前用户没有免密 sudo 权限，请在 sudoers 中为该用户配置 NOPASSWD")
@@ -812,7 +812,7 @@ func WarningsForHostWithClones(n *db.Node, p *sshx.ProbeResult, isControlPlaneHo
 		w = append(w, "SELinux 处于 enforcing，部署前需确认相关上下文标签与端口策略")
 	}
 	if p.SwapEnabled && !p.SwapEncrypted {
-		w = append(w, "已启用未加密的 Swap：部署 Vault 前需禁用或改为加密 Swap")
+		w = append(w, "已启用未加密的 Swap（仅部署 Vault 时涉及，只跑 Nomad 可忽略）：部署 Vault 前建议禁用或改为加密 Swap")
 	}
 	if !p.OptWritable {
 		w = append(w, "/opt/nomad-deck 不可写（需要 root 或免密 sudo）")

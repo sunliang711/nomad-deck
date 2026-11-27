@@ -1521,3 +1521,326 @@ func (s *Service) SyncDockerSystemProxy(ctx context.Context, actor audit.Actor) 
 	}
 	return taskIDs, nil
 }
+
+// ---- Runtime inspection & prune ----
+
+// DockerDFRow represents one row from `docker system df --format '{{json .}}'`.
+type DockerDFRow struct {
+	Type        string `json:"type"`
+	TotalCount  string `json:"total_count"`
+	Active      string `json:"active"`
+	Size        string `json:"size"`
+	Reclaimable string `json:"reclaimable"`
+}
+
+// DockerImageItem represents an image reported by `docker images`.
+type DockerImageItem struct {
+	ID         string `json:"id"`
+	Repository string `json:"repository"`
+	Tag        string `json:"tag"`
+	Size       string `json:"size"`
+	Created    string `json:"created"`
+}
+
+// DockerContainerItem represents a container on a host, tagged with Nomad metadata when present.
+type DockerContainerItem struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Image         string `json:"image"`
+	State         string `json:"state"`
+	Status        string `json:"status"`
+	NomadAllocID  string `json:"nomad_alloc_id,omitempty"`
+	NomadJobID    string `json:"nomad_job_id,omitempty"`
+	IsNomadManaged bool  `json:"is_nomad_managed"`
+}
+
+// DockerInspectView is the live runtime inspection snapshot of a host's Docker Engine.
+type DockerInspectView struct {
+	NodeID         string                `json:"node_id"`
+	Mode           string                `json:"mode"`
+	Status         string                `json:"status"`
+	Version        string                `json:"version"`
+	DiskUsage      []DockerDFRow         `json:"disk_usage"`
+	Images         []DockerImageItem     `json:"images"`
+	Containers     []DockerContainerItem `json:"containers"`
+	ActualConfig   string                `json:"actual_config"`
+	ExpectedConfig string                `json:"expected_config"`
+	ConfigPath     string                `json:"config_path"`
+	InspectError   string                `json:"inspect_error,omitempty"`
+}
+
+// DockerPruneInput selects safe, explicit cleanup scopes for a host.
+type DockerPruneInput struct {
+	DanglingImages    bool `json:"dangling_images"`
+	UnusedImages      bool `json:"unused_images"`
+	BuildCache        bool `json:"build_cache"`
+	StoppedContainers bool `json:"stopped_containers"`
+}
+
+func redactConfigCredentials(s string) string {
+	if s == "" {
+		return ""
+	}
+	return audit.RedactString(reURLCreds.ReplaceAllString(s, "${1}***@"))
+}
+
+func (s *Service) expectedDockerConfigText(ctx context.Context, d *dockerHost, mode string) (configPath, text string) {
+	if mode == "absent" {
+		return "", ""
+	}
+	eff := d.effective()
+	proxyURL, extra, err := s.pullProxyURL(ctx, d, eff.PullProxy)
+	if err != nil {
+		proxyURL = ""
+		extra = nil
+	}
+	noProxy := s.noProxyList(ctx, d, extra)
+	if mode == "external" {
+		if proxyURL == "" {
+			return DockerProxyDropIn, ""
+		}
+		return DockerProxyDropIn, redactConfigCredentials(RenderProxyDropIn(proxyURL, noProxy))
+	}
+	body, err := RenderDaemonJSON(eff, proxyURL, noProxy, d.host.DataRoot != "" || d.defaults.DataRoot != "")
+	if err != nil {
+		return DockerDaemonJSON, ""
+	}
+	return DockerDaemonJSON, redactConfigCredentials(string(body))
+}
+
+const dockerInspectScriptPrefix = `
+echo "__ND_DF__"
+docker system df --format '{{json .}}' 2>/dev/null || true
+echo "__ND_IMAGES__"
+docker images --format '{{json .}}' 2>/dev/null || true
+echo "__ND_CONTAINERS__"
+docker ps -a --no-trunc --format '{{.ID}}	{{.Names}}	{{.Image}}	{{.State}}	{{.Status}}	{{.Label "com.hashicorp.nomad.alloc_id"}}	{{.Label "com.hashicorp.nomad.job_id"}}' 2>/dev/null || true
+echo "__ND_ACTUAL__"
+`
+
+func dockerInspectScript(configPath string) string {
+	if configPath == "" {
+		return dockerInspectScriptPrefix
+	}
+	return dockerInspectScriptPrefix + "cat " + sshx.Quote(configPath) + " 2>/dev/null || true\n"
+}
+
+func parseDockerInspectOutput(raw string) ([]DockerDFRow, []DockerImageItem, []DockerContainerItem, string) {
+	df := []DockerDFRow{}
+	images := []DockerImageItem{}
+	containers := []DockerContainerItem{}
+	var actualLines []string
+
+	section := ""
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch trimmed {
+		case "__ND_DF__":
+			section = "df"
+			continue
+		case "__ND_IMAGES__":
+			section = "images"
+			continue
+		case "__ND_CONTAINERS__":
+			section = "containers"
+			continue
+		case "__ND_ACTUAL__":
+			section = "actual"
+			continue
+		}
+		switch section {
+		case "df":
+			if trimmed == "" {
+				continue
+			}
+			var m struct {
+				Type        string `json:"Type"`
+				TotalCount  string `json:"TotalCount"`
+				Active      string `json:"Active"`
+				Size        string `json:"Size"`
+				Reclaimable string `json:"Reclaimable"`
+			}
+			if json.Unmarshal([]byte(trimmed), &m) == nil && m.Type != "" {
+				df = append(df, DockerDFRow{
+					Type:        m.Type,
+					TotalCount:  m.TotalCount,
+					Active:      m.Active,
+					Size:        m.Size,
+					Reclaimable: m.Reclaimable,
+				})
+			}
+		case "images":
+			if trimmed == "" {
+				continue
+			}
+			var m struct {
+				ID           string `json:"ID"`
+				Repository   string `json:"Repository"`
+				Tag          string `json:"Tag"`
+				Size         string `json:"Size"`
+				CreatedSince string `json:"CreatedSince"`
+			}
+			if json.Unmarshal([]byte(trimmed), &m) == nil && m.ID != "" {
+				images = append(images, DockerImageItem{
+					ID:         m.ID,
+					Repository: m.Repository,
+					Tag:        m.Tag,
+					Size:       m.Size,
+					Created:    m.CreatedSince,
+				})
+			}
+		case "containers":
+			if trimmed == "" {
+				continue
+			}
+			parts := strings.Split(line, "\t")
+			if len(parts) < 5 {
+				continue
+			}
+			allocID := ""
+			jobID := ""
+			if len(parts) > 5 {
+				allocID = strings.TrimSpace(parts[5])
+			}
+			if len(parts) > 6 {
+				jobID = strings.TrimSpace(parts[6])
+			}
+			shortID := strings.TrimSpace(parts[0])
+			if len(shortID) > 12 {
+				shortID = shortID[:12]
+			}
+			containers = append(containers, DockerContainerItem{
+				ID:             shortID,
+				Name:           strings.TrimSpace(parts[1]),
+				Image:          strings.TrimSpace(parts[2]),
+				State:          strings.TrimSpace(parts[3]),
+				Status:         strings.TrimSpace(parts[4]),
+				NomadAllocID:   allocID,
+				NomadJobID:     jobID,
+				IsNomadManaged: allocID != "" || jobID != "",
+			})
+		case "actual":
+			actualLines = append(actualLines, line)
+		}
+	}
+	actual := redactConfigCredentials(strings.TrimSpace(strings.Join(actualLines, "\n")))
+	if actual != "" {
+		actual += "\n"
+	}
+	return df, images, containers, actual
+}
+
+// InspectDocker collects live disk usage, images, containers, and daemon config
+// from a host over a single read-only SSH probe.
+func (s *Service) InspectDocker(ctx context.Context, nodeID string) (*DockerInspectView, error) {
+	d, err := s.loadDockerHost(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	cfgPath, expected := s.expectedDockerConfigText(ctx, d, d.node.DockerMode)
+	out := &DockerInspectView{
+		NodeID:         d.node.ID,
+		Mode:           d.node.DockerMode,
+		Status:         d.node.DockerStatus,
+		Version:        d.node.DockerVersion,
+		DiskUsage:      []DockerDFRow{},
+		Images:         []DockerImageItem{},
+		Containers:     []DockerContainerItem{},
+		ExpectedConfig: expected,
+		ConfigPath:     cfgPath,
+	}
+	if d.node.DockerMode == "absent" {
+		return out, nil
+	}
+	_, c, err := s.remote().Connect(ctx, nodeID)
+	if err != nil {
+		out.InspectError = err.Error()
+		return out, nil
+	}
+	r, err := c.Run(ctx, dockerInspectScript(cfgPath), sshx.RunOptions{})
+	if err != nil {
+		out.InspectError = err.Error()
+		if r == nil || len(r.Stdout) == 0 {
+			return out, nil
+		}
+	}
+	if r != nil {
+		out.DiskUsage, out.Images, out.Containers, out.ActualConfig = parseDockerInspectOutput(string(r.Stdout))
+	}
+	return out, nil
+}
+
+func buildDockerPruneScript(in DockerPruneInput) string {
+	var cmds []string
+	cmds = append(cmds, `echo "=== 清理前空间占用 ==="`, `docker system df`)
+	if in.StoppedContainers {
+		cmds = append(cmds, `echo "=== 清理已停止容器 ==="`, `docker container prune -f`)
+	}
+	if in.UnusedImages {
+		cmds = append(cmds, `echo "=== 清理所有未被使用的镜像 ==="`, `docker image prune -a -f`)
+	} else if in.DanglingImages {
+		cmds = append(cmds, `echo "=== 清理悬空镜像 (dangling) ==="`, `docker image prune -f`)
+	}
+	if in.BuildCache {
+		cmds = append(cmds, `echo "=== 清理构建缓存 ==="`, `docker builder prune -f`)
+	}
+	cmds = append(cmds, `echo "=== 清理后空间占用 ==="`, `docker system df`)
+	return "set -e\n" + strings.Join(cmds, "\n") + "\n"
+}
+
+// PruneDocker executes selected non-volume Docker cleanup actions on a host.
+func (s *Service) PruneDocker(ctx context.Context, actor audit.Actor, nodeID string, in DockerPruneInput) (*db.OperationTask, error) {
+	if !in.DanglingImages && !in.UnusedImages && !in.BuildCache && !in.StoppedContainers {
+		return nil, badRequest("请至少选择一项需要清理的资源")
+	}
+	d, err := s.loadDockerHost(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if d.node.DockerMode == "absent" {
+		return nil, conflict("docker_absent", "主机尚未安装 Docker Engine")
+	}
+	script := buildDockerPruneScript(in)
+	task, err := s.Ops.Submit(ctx, ops.Spec{
+		Action:      "docker.prune",
+		TargetType:  "node",
+		TargetID:    nodeID,
+		Locks:       s.dockerLocks(d),
+		TriggeredBy: actor.Name,
+		Params: map[string]any{
+			"dangling_images":    in.DanglingImages,
+			"unused_images":      in.UnusedImages,
+			"build_cache":        in.BuildCache,
+			"stopped_containers": in.StoppedContainers,
+		},
+		Run: func(ctx context.Context, t *ops.Task) error {
+			nc, err := s.dockerRemote().Open(ctx, t, nodeID, "清理 Docker 冗余资源")
+			if err != nil {
+				return err
+			}
+			defer func() { nc.Done(ctx, err) }()
+			out, runErr := nc.Run(ctx, script)
+			if strings.TrimSpace(out) != "" {
+				for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+					nc.Step.Logf("%s", line)
+				}
+			}
+			err = runErr
+			return err
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.Audit.Record(ctx, nil, audit.Event{
+		Actor: actor, Action: "docker.prune", ResourceType: "node", ResourceID: nodeID,
+		ResourceName: d.node.Name, OperationTaskID: task.ID,
+		Summary: map[string]any{
+			"dangling_images":    in.DanglingImages,
+			"unused_images":      in.UnusedImages,
+			"build_cache":        in.BuildCache,
+			"stopped_containers": in.StoppedContainers,
+		},
+	})
+	return task, nil
+}

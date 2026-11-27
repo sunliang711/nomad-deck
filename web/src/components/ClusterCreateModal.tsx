@@ -311,7 +311,7 @@ export function ClusterCreateModal({ open, product, nodes, onClose, onCreated }:
                         )}
                         {picked && isNomad && picked.role !== 'server' && n.docker_mode === 'absent' && (
                           <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
-                            {tr('提示：该节点尚未安装 Docker Engine，建群后可在 Nomad 集群「节点 → 插件/配置」中直接安装。', 'Note: Docker Engine is not installed on this host yet; you can install it under Nomad Cluster → Nodes → Plugins & Config.')}
+                            {tr('提示：该节点尚未安装 Docker Engine，建群后可在「容器运行时」或 Nomad 集群「节点 → 插件/配置」中直接安装。', 'Note: Docker Engine is not installed on this host yet; you can install it under Docker Runtime or Nomad Cluster → Nodes → Plugins & Config.')}
                           </p>
                         )}
                       </div>

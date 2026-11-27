@@ -839,15 +839,20 @@ export function NomadNodeConfigModal({
                   />
                 </span>
               </div>
-              <Button
-                type="button"
-                size="sm"
-                variant={dockerInfo?.mode === 'absent' ? 'primary' : 'secondary'}
-                disabled={busy || dockerLoading}
-                onClick={() => setDockerModalOpen(true)}
-              >
-                {dockerInfo?.mode === 'absent' ? tr('安装 Docker', 'Install Docker') : tr('管理 Docker（版本 / 镜像 / 代理）', 'Manage Docker (Version / Mirrors / Proxy)')}
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link to="/docker" onClick={onClose} className="text-indigo-600 hover:underline dark:text-indigo-400">
+                  {tr('容器运行时中心 →', 'Runtime Console →')}
+                </Link>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={dockerInfo?.mode === 'absent' ? 'primary' : 'secondary'}
+                  disabled={busy || dockerLoading}
+                  onClick={() => setDockerModalOpen(true)}
+                >
+                  {dockerInfo?.mode === 'absent' ? tr('安装 Docker', 'Install Docker') : tr('管理 Docker（版本 / 镜像 / 代理）', 'Manage Docker (Version / Mirrors / Proxy)')}
+                </Button>
+              </div>
             </div>
             {dockerLoading && !dockerInfo ? (
               <div className="text-slate-500">{tr('正在检查节点 Docker 状态…', 'Checking Docker status...')}</div>

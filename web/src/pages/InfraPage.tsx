@@ -642,7 +642,12 @@ export function InfraPage() {
                   </div>
                 </div>
                 <div className="rounded-xl border border-[#e3e8f1] bg-white px-4 py-3 dark:border-slate-800/90 dark:bg-[#0f172a]/95">
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400">{tr('Docker 运行环境', 'Docker Runtime')}</div>
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                    <span>{tr('Docker 运行环境', 'Docker Runtime')}</span>
+                    <Link to="/docker" className="text-indigo-600 hover:underline dark:text-indigo-400">
+                      {tr('管理中心 →', 'Console →')}
+                    </Link>
+                  </div>
                   <div className="mt-1 flex items-baseline gap-1.5">
                     <span className="text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">{dockerReadyCount}</span>
                     <span className="text-xs text-slate-400">{tr(`/ ${nodes.length} 台就绪`, `/ ${nodes.length} ready`)}</span>
@@ -1441,6 +1446,15 @@ export function InfraPage() {
                       <Badge tone={dn.docker_mode === 'absent' ? 'neutral' : 'blue'}>{dockerModeLabelOf(dn.docker_mode, locale)}</Badge>
                       {dn.docker_version && <span className="font-mono text-slate-800 dark:text-slate-200">{dn.docker_version}</span>}
                       {dockerStatusLabelOf(dn.docker_status, locale) && <span className="text-slate-500">{dockerStatusLabelOf(dn.docker_status, locale)}</span>}
+                      {dn.docker_mode && dn.docker_mode !== 'absent' && (
+                        <Link
+                          to={`/docker?tab=inspect&node=${encodeURIComponent(dn.id)}`}
+                          onClick={closeDetailDrawer}
+                          className="text-indigo-600 hover:underline dark:text-indigo-400"
+                        >
+                          {tr('巡检与清理 →', 'Inspect & Prune →')}
+                        </Link>
+                      )}
                     </dd>
                   </div>
                 </dl>

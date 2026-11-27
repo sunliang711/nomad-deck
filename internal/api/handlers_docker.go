@@ -122,3 +122,25 @@ func (a *API) putDockerDefaults(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (a *API) inspectDocker(w http.ResponseWriter, r *http.Request) {
+	v, err := a.Nomad.InspectDocker(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"inspect": v})
+}
+
+func (a *API) pruneDocker(w http.ResponseWriter, r *http.Request) {
+	var in nomad.DockerPruneInput
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	t, err := a.Nomad.PruneDocker(r.Context(), a.actor(r), chi.URLParam(r, "id"), in)
+	if err != nil {
+		a.writeErr(w, r, err)
+		return
+	}
+	taskResponse(w, t)
+}

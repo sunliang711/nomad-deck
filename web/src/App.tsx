@@ -6,6 +6,7 @@ import { Layout } from './components/Layout';
 import { LoadingState } from './components/UI';
 import { LoginPage, SessionExpiredModal } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { DockerPage } from './pages/DockerPage';
 import { InfraPage } from './pages/InfraPage';
 import { NomadPage } from './pages/NomadPage';
 import { VaultPage } from './pages/VaultPage';
@@ -37,6 +38,7 @@ function AppRoutes() {
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/infra" element={<InfraPage />} />
+          <Route path="/docker" element={<DockerPage />} />
           <Route path="/nomad" element={<NomadPage />} />
           <Route path="/vault" element={<VaultPage />} />
           <Route path="/integrations" element={<IntegrationsPage />} />

@@ -241,3 +241,63 @@ func TestPullProxyURLCentralSetting(t *testing.T) {
 		t.Fatalf("expected direct when central switch false, got %q err=%v", got, err)
 	}
 }
+
+func TestParseDockerInspectOutput(t *testing.T) {
+	raw := strings.Join([]string{
+		"__ND_DF__",
+		`{"Type":"Images","TotalCount":"4","Active":"2","Size":"1.2GB","Reclaimable":"450MB (37%)"}`,
+		`{"Type":"Build Cache","TotalCount":"3","Active":"0","Size":"120MB","Reclaimable":"120MB"}`,
+		"__ND_IMAGES__",
+		`{"ID":"sha256:abc123","Repository":"postgres","Tag":"16-alpine","Size":"240MB","CreatedSince":"2 weeks ago"}`,
+		"__ND_CONTAINERS__",
+		"abcdef1234567890\tpostgres-123\tpostgres:16-alpine\trunning\tUp 3 hours\talloc-111\tpostgres",
+		"fedcba0987654321\tnomad-deck\tghcr.io/foo/nomad-deck:v0.6.2\trunning\tUp 2 days\t\t",
+		"__ND_ACTUAL__",
+		`{`,
+		`  "proxies": {`,
+		`    "http-proxy": "http://alice:supersecret@10.0.0.2:3128"`,
+		`  }`,
+		`}`,
+	}, "\n")
+
+	df, images, containers, actual := parseDockerInspectOutput(raw)
+	if len(df) != 2 || df[0].Type != "Images" || df[1].Reclaimable != "120MB" {
+		t.Fatalf("unexpected df: %+v", df)
+	}
+	if len(images) != 1 || images[0].Repository != "postgres" || images[0].Tag != "16-alpine" {
+		t.Fatalf("unexpected images: %+v", images)
+	}
+	if len(containers) != 2 {
+		t.Fatalf("unexpected containers len: %d", len(containers))
+	}
+	if !containers[0].IsNomadManaged || containers[0].NomadJobID != "postgres" {
+		t.Fatalf("expected Nomad container to be marked managed: %+v", containers[0])
+	}
+	if containers[1].IsNomadManaged || containers[1].ID != "fedcba098765" {
+		t.Fatalf("expected standalone container to be marked unmanaged: %+v", containers[1])
+	}
+	if strings.Contains(actual, "supersecret") || !strings.Contains(actual, "http://***@10.0.0.2:3128") {
+		t.Fatalf("expected proxy credentials redacted in actual config: %s", actual)
+	}
+}
+
+func TestBuildDockerPruneScript(t *testing.T) {
+	script := buildDockerPruneScript(DockerPruneInput{
+		DanglingImages:    true,
+		UnusedImages:      true,
+		BuildCache:        true,
+		StoppedContainers: true,
+	})
+	if !strings.Contains(script, "docker container prune -f") {
+		t.Fatalf("missing container prune: %s", script)
+	}
+	if !strings.Contains(script, "docker image prune -a -f") {
+		t.Fatalf("unused_images should run -a -f: %s", script)
+	}
+	if !strings.Contains(script, "docker builder prune -f") {
+		t.Fatalf("missing builder prune: %s", script)
+	}
+	if strings.Contains(script, "volume prune") {
+		t.Fatalf("prune script must never prune volumes automatically: %s", script)
+	}
+}

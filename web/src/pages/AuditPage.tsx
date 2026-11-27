@@ -9,7 +9,8 @@ import { formatActionLabel, formatResourceLabel, getActionLabels } from '../lib/
 
 const ACTION_GROUPS: Array<{ group: string; groupEn: string; actions: string[] }> = [
   { group: '认证与账号', groupEn: 'Auth & Accounts', actions: ['auth.setup', 'auth.login', 'auth.logout', 'auth.password_change', 'auth.session_revoke', 'admin.create', 'admin.role_change', 'admin.reset_password', 'admin.disable', 'admin.enable'] },
-  { group: '主机与 Docker', groupEn: 'Hosts & Docker', actions: ['ssh_key.generate', 'ssh_key.import', 'ssh_key.delete', 'node.create', 'node.update', 'node.delete', 'node.test', 'node.push_key', 'node.reset_fingerprint', 'node.reset_machine_id', 'docker.install', 'docker.upgrade', 'docker.config'] },
+  { group: '主机与密钥', groupEn: 'Hosts & SSH Keys', actions: ['ssh_key.generate', 'ssh_key.import', 'ssh_key.delete', 'node.create', 'node.update', 'node.delete', 'node.test', 'node.push_key', 'node.reset_fingerprint', 'node.reset_machine_id'] },
+  { group: 'Docker 运行时', groupEn: 'Docker Runtime', actions: ['docker.install', 'docker.adopt', 'docker.upgrade', 'docker.cluster_upgrade', 'docker.config', 'docker.defaults', 'docker.proxy_test', 'docker.prune'] },
   { group: '集群与证书', groupEn: 'Clusters & Certs', actions: ['cluster.create', 'cluster.deploy', 'cluster.upgrade', 'cluster.join_node', 'cluster.remove_node', 'cluster.certs_renew', 'cluster.ca_rotate', 'cluster.gossip_rotate', 'cluster.maintenance', 'cluster.uninstall'] },
   { group: 'Vault 与联动', groupEn: 'Vault & Integrations', actions: ['vault.init', 'vault.unseal', 'vault.seal', 'vault.rekey', 'vault.root_token', 'vault.root_token_revoke', 'integration.create', 'integration.apply', 'integration.delete'] },
   { group: 'Job 与定时', groupEn: 'Jobs & Cron', actions: ['nomad.job_apply', 'nomad.job_stop', 'nomad.job_purge', 'cron.create', 'cron.update', 'cron.delete', 'cron.run'] },

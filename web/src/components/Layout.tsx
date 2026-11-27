@@ -8,6 +8,7 @@ import {
   Boxes,
   ChevronRight,
   Clock,
+  Container,
   FileCode2,
   LayoutDashboard,
   Link2,
@@ -34,6 +35,7 @@ import { LocaleToggleButton, ThemeToggleButton } from './UI';
 const navItems = [
   { to: '/', label: '总览仪表盘', labelEn: 'Dashboard', icon: LayoutDashboard, group: 'workspace' },
   { to: '/infra', label: '基础设施', labelEn: 'Infrastructure', icon: Server, group: 'workspace' },
+  { to: '/docker', label: '容器运行时', labelEn: 'Docker Runtime', icon: Container, group: 'workspace' },
   { to: '/nomad', label: 'Nomad 集群', labelEn: 'Nomad Clusters', icon: Boxes, group: 'workspace' },
   { to: '/vault', label: 'Vault 集群', labelEn: 'Vault Clusters', icon: Shield, group: 'workspace' },
   { to: '/integrations', label: '集群联动', labelEn: 'Integrations', icon: Link2, group: 'workspace' },

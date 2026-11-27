@@ -18,7 +18,12 @@ import {
 } from 'lucide-react';
 import { apiDelete, apiGet, apiPost, apiPut } from '../lib/api';
 import { copyText } from '../lib/clipboard';
-import { INTEGRATION_DRAFT_JOB_STORAGE_KEY, parseKVPath } from '../lib/vaultHelpers';
+import {
+  buildCustomPolicyPreset,
+  type CustomPolicyPresetId,
+  INTEGRATION_DRAFT_JOB_STORAGE_KEY,
+  parseKVPath,
+} from '../lib/vaultHelpers';
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
 import { useOpsDrawer } from '../lib/opsDrawer';
@@ -391,6 +396,35 @@ export function IntegrationsPage() {
       token_period: r.token_period || '1h',
     });
     setShowRole(true);
+  };
+
+  const applyCustomPolicyPreset = async (presetId: CustomPolicyPresetId) => {
+    const { hcl, suggestedSecretPaths } = buildCustomPolicyPreset(presetId, {
+      fallbackMount: vaultMounts[0] || 'secret',
+      roleName: roleForm.role_name,
+      secretPaths: roleForm.secret_paths,
+      policyMode: roleForm.policy_mode === 'templated' ? 'templated' : 'explicit',
+    });
+    const current = roleForm.custom_policy_hcl.trim();
+    if (current && current !== hcl.trim()) {
+      const ok = await askConfirm(
+        tr('当前自定义 Policy HCL 已有内容，确认用所选模板替换吗？', 'Custom Policy HCL already has content. Replace it with the selected template?'),
+        {
+          title: tr('替换自定义 Policy', 'Replace Custom Policy'),
+          confirmText: tr('确认替换', 'Replace'),
+        },
+      );
+      if (!ok) return;
+    }
+    setRoleForm((prev) => ({
+      ...prev,
+      ...(presetId === 'acme-cert-sync'
+        ? { policy_mode: 'explicit', secret_paths: suggestedSecretPaths || prev.secret_paths }
+        : !prev.secret_paths.trim() && suggestedSecretPaths
+          ? { secret_paths: suggestedSecretPaths }
+          : {}),
+      custom_policy_hcl: hcl,
+    }));
   };
 
   const saveRole = async (e: React.FormEvent) => {
@@ -1605,47 +1639,56 @@ export function IntegrationsPage() {
                 value={roleForm.token_period}
                 onChange={(e) => setRoleForm({ ...roleForm, token_period: e.target.value })}
               />
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="font-medium text-slate-700 dark:text-slate-200">
                     {tr('自定义 Policy HCL（可选，填写后将覆盖上方自动生成的只读规则）', 'Custom Policy HCL (optional; overrides generated read-only rules)')}
                   </label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const mount = vaultMounts[0] || 'secret';
-                      setRoleForm({
-                        ...roleForm,
-                        policy_mode: 'explicit',
-                        secret_paths: `${mount}/certs/dns`,
-                        custom_policy_hcl: [
-                          `path "${mount}/data/certs/dns" {`,
-                          '  capabilities = ["read"]',
-                          '}',
-                          '',
-                          `path "${mount}/data/certs/tls" {`,
-                          '  capabilities = ["create", "update", "read"]',
-                          '}',
-                          '',
-                          `path "${mount}/metadata/certs/*" {`,
-                          '  capabilities = ["read", "list"]',
-                          '}',
-                        ].join('\n'),
-                      });
-                    }}
-                    className="text-indigo-600 hover:underline dark:text-indigo-400"
-                  >
-                    {tr('填入 acme-cert-sync 读写证书策略', 'Fill acme-cert-sync cert R/W policy')}
-                  </button>
+                  {roleForm.custom_policy_hcl.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => setRoleForm((prev) => ({ ...prev, custom_policy_hcl: '' }))}
+                      className="text-[11px] text-slate-500 hover:text-rose-600 hover:underline dark:text-slate-400 dark:hover:text-rose-400"
+                    >
+                      {tr('清空恢复自动生成', 'Clear & Auto-generate')}
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="text-slate-500 dark:text-slate-400">{tr('常用模板：', 'Presets:')}</span>
+                  {(
+                    [
+                      { id: 'from-paths', label: tr('由上方路径生成', 'From Paths Above') },
+                      { id: 'single-rw', label: tr('单路径读写', 'Single Key R/W') },
+                      { id: 'dir-rw', label: tr('目录通配读写', 'Directory R/W') },
+                      { id: 'shared-read-app-rw', label: tr('读公共 + 写私有', 'Read Shared + Write App') },
+                      { id: 'acme-cert-sync', label: tr('acme-cert-sync 证书读写', 'acme-cert-sync Cert R/W') },
+                    ] as Array<{ id: CustomPolicyPresetId; label: string }>
+                  ).map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => void applyCustomPolicyPreset(preset.id)}
+                      className="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-slate-700 transition hover:border-indigo-400 hover:text-indigo-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-indigo-500 dark:hover:text-indigo-300"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
                 </div>
                 <textarea
-                  rows={6}
+                  rows={7}
                   spellCheck={false}
-                  placeholder={tr('留空按上方密钥路径自动生成只读 Policy；如需写权限（如 acme-cert-sync 推送证书），可在此填写 Vault Policy HCL。', 'Leave blank to generate read-only Policy from paths above; provide custom Vault Policy HCL when write access is needed.')}
+                  placeholder={tr('留空按上方密钥路径自动生成只读 Policy；如需写权限（如回写配置、acme-cert-sync 推送证书），可点击上方模板快速填入后再微调。', 'Leave blank to generate read-only Policy from paths above; pick a preset above or write custom Vault Policy HCL when write access is needed.')}
                   value={roleForm.custom_policy_hcl}
                   onChange={(e) => setRoleForm({ ...roleForm, custom_policy_hcl: e.target.value })}
                   className="w-full rounded-lg border border-[#dce3ee] bg-white p-2 font-mono text-[11px] leading-relaxed text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                 />
+                <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+                  {tr(
+                    <>提示：KV v2 规则需写带 <code className="font-mono">/data/</code> 与 <code className="font-mono">/metadata/</code> 的路径；写入用 <code className="font-mono">["create", "update"]</code>，软删除用 <code className="font-mono">["delete"]</code>，列目录需在 <code className="font-mono">metadata/</code> 上配 <code className="font-mono">["read", "list"]</code>。</>,
+                    <>Tip: KV v2 rules require <code className="font-mono">/data/</code> and <code className="font-mono">/metadata/</code> paths; writes use <code className="font-mono">["create", "update"]</code>, soft deletes use <code className="font-mono">["delete"]</code>, and listing requires <code className="font-mono">["read", "list"]</code> on <code className="font-mono">metadata/</code>.</>,
+                  )}
+                </p>
               </div>
             </div>
           </details>

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseKVPath } from '../src/lib/vaultHelpers.ts';
+import { buildCustomPolicyPreset, parseKVPath } from '../src/lib/vaultHelpers.ts';
 
 describe('parseKVPath', () => {
   it('parses exact secret path without wildcard or trailing slash', () => {
@@ -29,5 +29,50 @@ describe('parseKVPath', () => {
     assert.equal(parsed.hadDataPrefix, true);
     assert.equal(parsed.hasTrailingSlash, false);
     assert.equal(parsed.isWildcard, true);
+  });
+});
+
+describe('buildCustomPolicyPreset', () => {
+  it('converts explicit paths above into read-only data and metadata HCL blocks', () => {
+    const res = buildCustomPolicyPreset('from-paths', {
+      fallbackMount: 'kv',
+      policyMode: 'explicit',
+      secretPaths: 'kv/data/apps/web, kv/shared/*',
+    });
+    assert.match(res.hcl, /path "kv\/data\/apps\/web" \{\s+capabilities = \["read"\]/);
+    assert.match(res.hcl, /path "kv\/metadata\/apps\/web" \{\s+capabilities = \["read", "list"\]/);
+    assert.match(res.hcl, /path "kv\/data\/shared\/\*" \{\s+capabilities = \["read"\]/);
+    assert.match(res.hcl, /path "kv\/metadata\/shared\/\*" \{\s+capabilities = \["read", "list"\]/);
+  });
+
+  it('generates single-path read/write policy reusing exact explicit path and mount', () => {
+    const res = buildCustomPolicyPreset('single-rw', {
+      fallbackMount: 'secret',
+      roleName: 'api',
+      policyMode: 'explicit',
+      secretPaths: 'kv2/apps/api',
+    });
+    assert.match(res.hcl, /path "kv2\/data\/apps\/api" \{\s+capabilities = \["create", "update", "read"\]/);
+    assert.match(res.hcl, /path "kv2\/metadata\/apps\/api" \{\s+capabilities = \["read", "list"\]/);
+  });
+
+  it('generates directory wildcard read/write/delete policy and shared-read-app-rw policy', () => {
+    const dir = buildCustomPolicyPreset('dir-rw', {
+      fallbackMount: 'kv',
+      roleName: 'worker',
+      policyMode: 'explicit',
+      secretPaths: 'kv/services/worker',
+    });
+    assert.match(dir.hcl, /path "kv\/data\/services\/worker\/\*" \{\s+capabilities = \["create", "update", "read", "delete"\]/);
+    assert.match(dir.hcl, /path "kv\/metadata\/services\/worker\/\*" \{\s+capabilities = \["read", "list", "delete"\]/);
+
+    const mixed = buildCustomPolicyPreset('shared-read-app-rw', {
+      fallbackMount: 'kv',
+      roleName: 'worker',
+      policyMode: 'explicit',
+      secretPaths: '',
+    });
+    assert.match(mixed.hcl, /path "kv\/data\/shared\/\*" \{\s+capabilities = \["read"\]/);
+    assert.match(mixed.hcl, /path "kv\/data\/apps\/worker\/\*" \{\s+capabilities = \["create", "update", "read", "delete"\]/);
   });
 });

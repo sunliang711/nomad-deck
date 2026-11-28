@@ -33,10 +33,20 @@ test('STARTER_SAMPLES include all expected built-in blueprints with structured p
     assert.ok(sample.tags.length > 0, `${sample.id} missing tags`);
     assert.ok(sample.requires.length > 0, `${sample.id} must declare structured requires badges`);
     assert.match(sample.hcl, /^job\s+"[^"]+"\s+\{/, `${sample.id} must start with job block`);
+    assert.equal(sample.hcl.includes('job "hello'), false, `${sample.id} should use a meaningful job name instead of hello*`);
     assert.equal(sample.hcl.includes('前置依赖'), false, `${sample.id} should keep prerequisites in structured metadata, not HCL comment walls`);
     assert.equal(sample.hcl.includes('<<EOT'), false, `${sample.id} template blocks should use indented heredoc <<-EOT`);
     assert.ok(!sample.hcl.includes('undefined'), `${sample.id} contains unexpected undefined`);
+    if (sample.requires.some((r) => r.kind === 'port')) {
+      assert.ok(sample.hcl.includes('network {') && sample.hcl.includes('ports'), `${sample.id} declares port requirement and must configure network/ports`);
+    }
   }
+
+  const nginxStarter = STARTER_SAMPLES.find((s) => s.id === 'docker');
+  assert.ok(nginxStarter?.hcl.startsWith('job "nginx"') && nginxStarter.hcl.includes('to     = 80') || nginxStarter?.hcl.includes('to = 80'));
+  assert.ok(nginxStarter?.hcl.includes('ports = ["http"]'));
+  assert.ok(STARTER_SAMPLES.find((s) => s.id === 'raw_exec')?.hcl.startsWith('job "shell-daemon"'));
+  assert.ok(STARTER_SAMPLES.find((s) => s.id === 'batch')?.hcl.startsWith('job "batch-task"'));
 
   // Vault-backed blueprints declare Vault role/KV requirements in structured metadata and HCL.
   for (const id of ['acme-cert-sync', 'postgres', 'mysql', 'redis', 'rabbitmq', 'grafana']) {

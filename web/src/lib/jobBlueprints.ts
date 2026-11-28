@@ -88,21 +88,29 @@ export const STARTER_SAMPLES: JobBlueprint[] = [
     labelEn: 'Nginx Container Service',
     tags: ['Docker', '入门'],
     tagsEn: ['Docker', 'Starter'],
-    desc: '标准 Docker Web 容器示例，无需额外前置配置即可在 Nomad Client 运行',
-    descEn: 'Standard Docker web container example ready to run on any Docker-enabled Nomad Client',
+    desc: '标准 Docker Web 容器示例，默认动态映射 80 端口，无需额外前置配置即可在 Nomad Client 运行',
+    descEn: 'Standard Docker web container example with dynamic port mapping to 80, ready to run on any Docker-enabled Nomad Client',
     requires: [
       { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 80（动态映射）', labelEn: 'Port 80 (dynamic)' },
     ],
-    hcl: `job "hello" {
+    hcl: `job "nginx" {
   datacenters = ["dc1"]
   type        = "service"
 
   group "app" {
     count = 1
-    task "server" {
+    network {
+      port "http" {
+        to = 80
+      }
+    }
+
+    task "nginx" {
       driver = "docker"
       config {
         image = "nginx:alpine"
+        ports = ["http"]
       }
       resources {
         cpu    = 100
@@ -1784,7 +1792,7 @@ EOT
     requires: [
       { kind: 'driver', label: '需开启 raw_exec 驱动', labelEn: 'Requires raw_exec Driver' },
     ],
-    hcl: `job "hello-shell" {
+    hcl: `job "shell-daemon" {
   datacenters = ["dc1"]
   type        = "service"
 
@@ -1794,7 +1802,7 @@ EOT
       driver = "raw_exec"
       config {
         command = "/bin/sh"
-        args    = ["-c", "while true; do echo 'NomadDeck hello at '$(date); sleep 15; done"]
+        args    = ["-c", "while true; do echo 'NomadDeck shell-daemon at '$(date); sleep 15; done"]
       }
       resources {
         cpu    = 50
@@ -1816,7 +1824,7 @@ EOT
     requires: [
       { kind: 'driver', label: '需开启 raw_exec 驱动', labelEn: 'Requires raw_exec Driver' },
     ],
-    hcl: `job "hello-batch" {
+    hcl: `job "batch-task" {
   datacenters = ["dc1"]
   type        = "batch"
 

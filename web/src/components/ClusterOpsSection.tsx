@@ -8,7 +8,7 @@ import { useOpsDrawer } from '../lib/opsDrawer';
 import { isTaskActiveStatus } from '../lib/actionLabels';
 import { useConfirm } from './ConfirmDialog';
 import { useToast } from './Toast';
-import { Badge, Button, Card, ExternalUrlLink, Input, Modal, Select, StatusBadge, TermLabel } from './UI';
+import { Badge, Button, Card, ExternalUrlLink, Input, Modal, SectionTabs, Select, StatusBadge, TermLabel } from './UI';
 
 interface ClusterOpsSectionProps {
   product: 'nomad' | 'vault';
@@ -48,6 +48,10 @@ interface ClusterOpsSectionProps {
   quickActions?: React.ReactNode;
   section?: 'all' | 'status' | 'ops';
   onOpenStatusTab?: () => void;
+  opsSubTab?: 'actions' | 'config';
+  onOpsSubTabChange?: (sub: 'actions' | 'config') => void;
+  clusterSettingsPanel?: React.ReactNode;
+  onOpenConfigTab?: () => void;
 }
 
 export function ClusterOpsSection({
@@ -88,9 +92,16 @@ export function ClusterOpsSection({
   quickActions,
   section = 'all',
   onOpenStatusTab,
+  opsSubTab = 'actions',
+  onOpsSubTabChange,
+  clusterSettingsPanel,
+  onOpenConfigTab,
 }: ClusterOpsSectionProps) {
   const showStatusSection = section === 'all' || section === 'status';
   const showOpsSection = section === 'all' || section === 'ops';
+  const hasClusterConfigTab = Boolean(clusterSettingsPanel);
+  const showOpsConfigView = section === 'ops' && hasClusterConfigTab && opsSubTab === 'config';
+  const openClusterConfig = onOpenConfigTab || onOpenClusterSettings;
   const { locale, tr } = useI18n();
   const askConfirm = useConfirm();
   const toast = useToast();
@@ -276,12 +287,26 @@ export function ClusterOpsSection({
         </div>
       )}
 
-      {section === 'ops' && isNotDeployed && isAdmin && (
+      {section === 'ops' && isAdmin && hasClusterConfigTab && (
+        <SectionTabs
+          variant="underline"
+          tabs={[
+            { id: 'actions', label: tr('运维操作', 'Operations') },
+            { id: 'config', label: tr('集群配置', 'Cluster Config') },
+          ]}
+          active={opsSubTab}
+          onChange={(id) => onOpsSubTabChange?.(id as 'actions' | 'config')}
+        />
+      )}
+
+      {showOpsConfigView && isAdmin && clusterSettingsPanel}
+
+      {section === 'ops' && !showOpsConfigView && isNotDeployed && isAdmin && (
         <Card
           title={tr('集群运维', 'Cluster Operations')}
           actions={
-            onOpenClusterSettings ? (
-              <Button size="sm" disabled={blocked} onClick={onOpenClusterSettings}>
+            openClusterConfig ? (
+              <Button size="sm" disabled={blocked} onClick={openClusterConfig}>
                 <SlidersHorizontal className="h-3.5 w-3.5" />
                 <span>{tr('集群配置', 'Cluster Config')}</span>
               </Button>
@@ -291,8 +316,8 @@ export function ClusterOpsSection({
           <div className="flex flex-wrap items-center justify-between gap-4">
             <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
               {tr(
-                `当前 ${productName} 集群尚未部署。请先前往「集群状态详情」完成首次部署${onOpenClusterSettings ? '，或点击右上角「集群配置」调整部署前参数' : ''}。`,
-                `This ${productName} cluster is not deployed yet. Deploy it from the Cluster Status tab first${onOpenClusterSettings ? ', or adjust pre-deploy parameters via Cluster Config' : ''}.`,
+                `当前 ${productName} 集群尚未部署。请先前往「集群状态详情」完成首次部署${openClusterConfig ? '，或前往「集群配置」调整部署前参数' : ''}。`,
+                `This ${productName} cluster is not deployed yet. Deploy it from the Cluster Status tab first${openClusterConfig ? ', or switch to Cluster Config to adjust pre-deploy parameters' : ''}.`,
               )}
             </p>
             {onOpenStatusTab && (
@@ -310,8 +335,8 @@ export function ClusterOpsSection({
           title={tr('下一步：部署集群服务', 'Next: Deploy Cluster Services')}
           actions={
             <div className="flex flex-wrap items-center gap-2">
-              {onOpenClusterSettings && (
-                <Button size="sm" disabled={blocked} onClick={onOpenClusterSettings}>
+              {openClusterConfig && (
+                <Button size="sm" disabled={blocked} onClick={openClusterConfig}>
                   <SlidersHorizontal className="h-3.5 w-3.5" />
                   <span>{tr('集群配置', 'Cluster Config')}</span>
                 </Button>
@@ -751,12 +776,12 @@ export function ClusterOpsSection({
             </>
           )}
 
-          {showOpsSection && isAdmin && (
+          {showOpsSection && !showOpsConfigView && isAdmin && (
             <Card
               title={tr('集群运维', 'Cluster Operations')}
               actions={
                 <div className="flex flex-wrap items-center gap-2">
-                  {onOpenClusterSettings && (
+                  {!hasClusterConfigTab && onOpenClusterSettings && (
                     <Button size="sm" disabled={blocked} onClick={onOpenClusterSettings}>
                       <SlidersHorizontal className="h-3.5 w-3.5" />
                       <span>{tr('集群配置', 'Cluster Config')}</span>

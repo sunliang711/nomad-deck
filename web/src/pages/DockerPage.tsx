@@ -22,14 +22,13 @@ import { useOpsDrawer } from '../lib/opsDrawer';
 import { useConfirm } from '../components/ConfirmDialog';
 import {
   DockerDaemonConfigFields,
-  DockerManageModal,
+  DockerManagePanel,
   buildDockerConfigPayload,
   dockerConfigDraftFrom,
   dockerModeLabelOf,
   dockerStatusLabelOf,
   emptyDockerConfigDraft,
   type DockerConfigDraft,
-  type DockerManageTarget,
 } from '../components/DockerManageModal';
 import { useToast } from '../components/Toast';
 import {
@@ -48,7 +47,7 @@ import {
   Switch,
 } from '../components/UI';
 
-type DockerTab = 'hosts' | 'inspect' | 'clusters';
+type DockerTab = 'hosts' | 'config' | 'inspect' | 'clusters';
 
 interface InspectDFRow {
   type: string;
@@ -114,17 +113,22 @@ export function DockerPage() {
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const tab = resolveTabParam(searchParams, ['hosts', 'inspect', 'clusters'] as const, 'hosts');
+  const tab = resolveTabParam(
+    searchParams,
+    isAdmin ? (['hosts', 'config', 'inspect', 'clusters'] as const) : (['hosts', 'inspect', 'clusters'] as const),
+    'hosts',
+  );
+  const urlNodeId = searchParams.get('node') || '';
   const [nodes, setNodes] = useState<any[]>([]);
   const [clusters, setClusters] = useState<any[]>([]);
   const [settings, setSettings] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
 
-  // Host matrix filters & modal
+  // Host matrix filters & per-host config selection
   const [hostQuery, setHostQuery] = useState('');
   const [modeFilter, setModeFilter] = useState<'all' | 'managed' | 'external' | 'absent'>('all');
-  const [dockerNode, setDockerNode] = useState<DockerManageTarget | null>(null);
+  const [configNodeId, setConfigNodeId] = useState<string>(() => searchParams.get('node') || '');
   const [syncProxyBusy, setSyncProxyBusy] = useState(false);
 
   // Runtime inspector & prune
@@ -164,6 +168,10 @@ export function DockerPage() {
     () => nodes.find((n) => n.id === inspectNodeId) || null,
     [nodes, inspectNodeId],
   );
+  const selectedConfigNode = useMemo(
+    () => nodes.find((n) => n.id === configNodeId) || null,
+    [nodes, configNodeId],
+  );
 
   const switchTab = (next: DockerTab, extra?: Record<string, string>) => {
     const params = buildTabSearchParams(searchParams, next, 'hosts', { extra });
@@ -187,6 +195,11 @@ export function DockerPage() {
       setClusters(cRes.clusters || []);
       setSettings(nextSettings);
 
+      setConfigNodeId((cur) => {
+        if (cur && nextNodes.some((n: any) => n.id === cur)) return cur;
+        return nextNodes[0]?.id || '';
+      });
+
       setInspectNodeId((cur) => {
         if (cur && nextNodes.some((n: any) => n.id === cur)) return cur;
         const preferred = nextNodes.find((n: any) => n.docker_mode && n.docker_mode !== 'absent');
@@ -209,6 +222,12 @@ export function DockerPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!urlNodeId || !nodes.some((n) => n.id === urlNodeId)) return;
+    setConfigNodeId(urlNodeId);
+    setInspectNodeId(urlNodeId);
+  }, [urlNodeId, nodes]);
 
   // Sync cluster defaults form when selected cluster changes
   useEffect(() => {
@@ -512,6 +531,18 @@ export function DockerPage() {
           <SectionTabs
             tabs={[
               { id: 'hosts', label: tr('宿主机矩阵', 'Host Engines'), badge: nodes.length },
+              ...(isAdmin
+                ? [
+                    {
+                      id: 'config',
+                      label: tr('配置与升级', 'Config & Upgrade'),
+                      tip: tr(
+                        '安装、接管或升级单台宿主机的 Docker Engine，并配置 daemon.json、镜像加速与拉取代理。',
+                        'Install, adopt, or upgrade Docker Engine on a host and configure daemon.json, registry mirrors, and pull proxy.',
+                      ),
+                    },
+                  ]
+                : []),
               {
                 id: 'inspect',
                 label: tr('巡检与清理', 'Inspect & Prune'),
@@ -667,7 +698,10 @@ export function DockerPage() {
                                 <Button
                                   size="sm"
                                   variant={!n.docker_mode || n.docker_mode === 'absent' ? 'primary' : 'secondary'}
-                                  onClick={() => setDockerNode({ id: n.id, name: n.name })}
+                                  onClick={() => {
+                                    setConfigNodeId(n.id);
+                                    switchTab('config', { node: n.id });
+                                  }}
                                 >
                                   <Container className="h-3.5 w-3.5" />
                                   <span>
@@ -684,6 +718,70 @@ export function DockerPage() {
                     </tbody>
                   </table>
                 </div>
+              )}
+            </Card>
+          )}
+
+          {tab === 'config' && isAdmin && (
+            <Card
+              title={tr('宿主机 Docker 安装、配置与升级', 'Host Docker Install, Config & Upgrade')}
+              description={tr('选择单台宿主机安装或升级 Docker Engine、接管外部安装，或配置 daemon.json 镜像加速与拉取代理。', 'Select a host to install or upgrade Docker Engine, adopt an existing engine, or configure daemon.json mirrors and pull proxy.')}
+              actions={
+                nodes.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="w-56">
+                      <Select
+                        size="sm"
+                        aria-label={tr('选择配置主机', 'Select Host to Configure')}
+                        value={configNodeId}
+                        onChange={(e) => {
+                          const nextId = e.target.value;
+                          setConfigNodeId(nextId);
+                          switchTab('config', { node: nextId });
+                        }}
+                      >
+                        {nodes.map((n) => (
+                          <option key={n.id} value={n.id}>
+                            {n.name} ({dockerModeLabelOf(n.docker_mode, locale)})
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                    {selectedConfigNode?.docker_mode && selectedConfigNode.docker_mode !== 'absent' && (
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setInspectNodeId(selectedConfigNode.id);
+                          setInspectData(null);
+                          switchTab('inspect', { node: selectedConfigNode.id });
+                        }}
+                      >
+                        <HardDrive className="h-3.5 w-3.5" />
+                        <span>{tr('巡检与清理', 'Inspect & Prune')}</span>
+                      </Button>
+                    )}
+                  </div>
+                ) : undefined
+              }
+            >
+              {nodes.length === 0 ? (
+                <EmptyState
+                  title={tr('尚未纳管 Linux 主机', 'No Linux Hosts Registered')}
+                  description={tr('请先在「基础设施」中添加并探测 Linux 主机，再回到此处安装或配置 Docker。', 'Add and probe Linux hosts in Infrastructure first, then manage Docker here.')}
+                  action={
+                    <Link
+                      to="/infra"
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
+                    >
+                      <span>{tr('前往基础设施', 'Go to Infrastructure')}</span>
+                    </Link>
+                  }
+                />
+              ) : (
+                <DockerManagePanel
+                  node={selectedConfigNode ? { id: selectedConfigNode.id, name: selectedConfigNode.name } : null}
+                  onTaskSubmitted={load}
+                />
               )}
             </Card>
           )}
@@ -747,7 +845,13 @@ export function DockerPage() {
                     description={tr('安装 Docker Engine 后即可查看空间占用、镜像列表并执行安全清理。', 'Install Docker Engine to inspect disk usage, images, and run safe pruning.')}
                     action={
                       isAdmin && selectedInspectNode ? (
-                        <Button variant="primary" onClick={() => setDockerNode({ id: selectedInspectNode.id, name: selectedInspectNode.name })}>
+                        <Button
+                          variant="primary"
+                          onClick={() => {
+                            setConfigNodeId(selectedInspectNode.id);
+                            switchTab('config', { node: selectedInspectNode.id });
+                          }}
+                        >
                           {tr('安装 Docker', 'Install Docker')}
                         </Button>
                       ) : undefined
@@ -1218,17 +1322,6 @@ export function DockerPage() {
           )}
         </>
       )}
-
-      <DockerManageModal
-        node={dockerNode}
-        onClose={() => setDockerNode(null)}
-        onTaskSubmitted={async () => {
-          await load();
-          if (tab === 'inspect' && inspectNodeId) {
-            void runInspect(inspectNodeId);
-          }
-        }}
-      />
     </div>
   );
 }

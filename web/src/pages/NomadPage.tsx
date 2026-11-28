@@ -39,7 +39,7 @@ import { ClusterOpsSection } from '../components/ClusterOpsSection';
 import { ItemSwitcher } from '../components/ItemSwitcher';
 import { UninstallClusterModal, type UninstallPlan } from '../components/UninstallClusterModal';
 import { ClusterCreateModal } from '../components/ClusterCreateModal';
-import { NomadClusterSettingsModal, NomadNodeConfigModal } from '../components/NomadConfigModals';
+import { NomadClusterSettingsPanel, NomadNodeConfigModal } from '../components/NomadConfigModals';
 import { isLoopbackAddress } from '../lib/net';
 
 export function NomadPage() {
@@ -69,7 +69,24 @@ export function NomadPage() {
   );
   const setTab = useCallback(
     (nextTab: string) => {
-      const next = buildTabSearchParams(searchParams, nextTab, 'status');
+      const next = buildTabSearchParams(searchParams, nextTab, 'status', {
+        deleteKeys: nextTab === 'ops' ? undefined : ['sub'],
+      });
+      if (next.toString() !== searchParams.toString()) {
+        setSearchParams(next);
+      }
+    },
+    [searchParams, setSearchParams],
+  );
+  const opsSubTab: 'actions' | 'config' = searchParams.get('sub') === 'config' ? 'config' : 'actions';
+  const setOpsSubTab = useCallback(
+    (nextSub: 'actions' | 'config') => {
+      const next = buildTabSearchParams(
+        searchParams,
+        'ops',
+        'status',
+        nextSub === 'config' ? { extra: { sub: 'config' } } : { deleteKeys: ['sub'] },
+      );
       if (next.toString() !== searchParams.toString()) {
         setSearchParams(next);
       }
@@ -129,7 +146,6 @@ export function NomadPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [memberRecords, setMemberRecords] = useState<any[]>([]);
-  const [showClusterSettings, setShowClusterSettings] = useState(false);
   const [configMember, setConfigMember] = useState<any>(null);
   const [deployVer, setDeployVer] = useState('latest');
   const [upVer, setUpVer] = useState('');
@@ -236,7 +252,6 @@ export function NomadPage() {
   useEffect(() => {
     setStatus(null);
     setMemberRecords([]);
-    setShowClusterSettings(false);
     setConfigMember(null);
     setUiLoginModal(null);
   }, [selectedId]);
@@ -472,7 +487,6 @@ export function NomadPage() {
                   .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`${force ? '强制移出' : '缩容'}节点: ${n.name}`, `${force ? 'Force Remove' : 'Remove'} Node: ${n.name}`)); })
                   .catch((ex) => setErr(ex.message)),
               nodeConfigs,
-              onOpenClusterSettings: () => setShowClusterSettings(true),
               onConfigureNode: (n: any) => {
                 const full = memberRecords.find((m) => m.node_id === n.node_id) || {
                   ...n,
@@ -494,12 +508,33 @@ export function NomadPage() {
               ),
               onError: setErr,
             };
+            const isNotDeployed =
+              !clusterNodes.some(
+                (n: any) =>
+                  Boolean(n.installed_version) ||
+                  (n.install_state && n.install_state !== 'pending') ||
+                  n.service_status === 'active',
+              ) && cluster.init_state === 'uninitialized';
             return (
               <div className="space-y-4">
                 <ClusterOpsSection
                   {...opsProps}
                   section={tab === 'ops' ? 'ops' : 'status'}
+                  opsSubTab={opsSubTab}
+                  onOpsSubTabChange={setOpsSubTab}
                   onOpenStatusTab={() => setTab('status')}
+                  onOpenConfigTab={() => setOpsSubTab('config')}
+                  clusterSettingsPanel={
+                    <NomadClusterSettingsPanel
+                      cluster={cluster}
+                      isNotDeployed={isNotDeployed}
+                      onSaved={async (taskId) => {
+                        if (taskId) openTask(taskId, tr(`更新集群配置: ${cluster?.name || ''}`, `Update Cluster Config: ${cluster?.name || ''}`));
+                        else toast.success(tr('集群配置已保存', 'Cluster config saved'));
+                        await loadOpsTab();
+                      }}
+                    />
+                  }
                 />
               </div>
             );
@@ -1348,17 +1383,6 @@ export function NomadPage() {
         onSubmitted={(taskId) => {
           if (taskId) openTask(taskId, tr(`卸载 Nomad: ${cluster?.name || ''}`, `Uninstall Nomad: ${cluster?.name || ''}`));
           void loadList();
-        }}
-      />
-
-      <NomadClusterSettingsModal
-        open={showClusterSettings}
-        cluster={cluster || null}
-        onClose={() => setShowClusterSettings(false)}
-        onSaved={async (taskId) => {
-          if (taskId) openTask(taskId, tr(`更新集群配置: ${cluster?.name || ''}`, `Update Cluster Config: ${cluster?.name || ''}`));
-          else toast.success(tr('集群配置已保存', 'Cluster config saved'));
-          await loadOpsTab();
         }}
       />
 

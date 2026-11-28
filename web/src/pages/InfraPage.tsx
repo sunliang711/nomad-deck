@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Activity, AlertTriangle, CheckCircle2, Copy, KeyRound, MoreHorizontal, Plus, RefreshCw, Server as ServerIcon, Trash2 } from 'lucide-react';
 import { apiDelete, apiGet, apiPost, apiPut, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -12,10 +12,8 @@ import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/ConfirmDialog';
 import { Drawer } from '../components/Drawer';
 import {
-  DockerManageModal,
   dockerModeLabelOf,
   dockerStatusLabelOf,
-  type DockerManageTarget,
 } from '../components/DockerManageModal';
 import {
   Badge,
@@ -77,6 +75,7 @@ function setupCommandForKey(k?: { public_key?: string; setup_command?: string } 
 
 export function InfraPage() {
   const { isAdmin } = useAuth();
+  const navigate = useNavigate();
   const { locale, isEn, tr } = useI18n();
   const { openTask } = useOpsDrawer();
   const toast = useToast();
@@ -122,7 +121,6 @@ export function InfraPage() {
   const [resettingMidId, setResettingMidId] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<{ id: string; top: number; right: number } | null>(null);
   const [saveAndTest, setSaveAndTest] = useState(true);
-  const [dockerNode, setDockerNode] = useState<DockerManageTarget | null>(null);
 
   const load = useCallback(async () => {
     setErr('');
@@ -534,7 +532,7 @@ export function InfraPage() {
   };
 
   const openDocker = (n: any) => {
-    setDockerNode({ id: n.id, name: n.name });
+    navigate(`/docker?tab=config&node=${encodeURIComponent(n.id)}`);
   };
 
   const copyText = (text: string, msg: string) => {
@@ -1271,8 +1269,6 @@ export function InfraPage() {
           </Modal>
         );
       })()}
-
-      <DockerManageModal node={dockerNode} onClose={() => setDockerNode(null)} onTaskSubmitted={load} />
 
       <PasswordConfirmModal
         open={Boolean(pwResetNode)}

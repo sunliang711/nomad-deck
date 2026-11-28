@@ -50,5 +50,10 @@ describe('URL tab routing helpers', () => {
 
     const backToList = buildTabSearchParams(toTemplates, 'list', 'list');
     assert.equal(backToList.toString(), 'cluster_id=c1');
+
+    const toOpsConfig = buildTabSearchParams(new URLSearchParams('id=c1'), 'ops', 'status', { extra: { sub: 'config' } });
+    assert.equal(toOpsConfig.toString(), 'id=c1&tab=ops&sub=config');
+    const backToStatus = buildTabSearchParams(toOpsConfig, 'status', 'status', { deleteKeys: ['sub'] });
+    assert.equal(backToStatus.toString(), 'id=c1');
   });
 });

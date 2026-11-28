@@ -202,10 +202,10 @@ func (s *Service) PreflightDetailed(ctx context.Context, c *nomad.Client, cluste
 		checks = append(checks, chk)
 	}
 	nomadClusterLink := "/nomad"
-	nomadOpsLink := "/nomad?tab=ops"
+	nomadConfigLink := "/nomad?tab=ops&sub=config"
 	if clusterID != "" {
 		nomadClusterLink = "/nomad?id=" + url.QueryEscape(clusterID)
-		nomadOpsLink = nomadClusterLink + "&tab=ops"
+		nomadConfigLink = nomadClusterLink + "&tab=ops&sub=config"
 	}
 
 	// Run Vault integration, KV mount/secret/key and paired gateway config blockers first.
@@ -539,9 +539,9 @@ func (s *Service) PreflightDetailed(ctx context.Context, c *nomad.Client, cluste
 							DetailEn: fmt.Sprintf("Task %q mounts Nomad CA (%s), but TLS is not enabled on this Nomad cluster.", bind.task, bind.src),
 							FixAction: &PreflightFixAction{
 								Type:    "link",
-								Path:    nomadOpsLink,
-								Label:   "前往集群运维",
-								LabelEn: "Cluster Ops",
+								Path:    nomadConfigLink,
+								Label:   "查看集群配置",
+								LabelEn: "Cluster Config",
 							},
 						})
 					} else if clMeta != nil && clMeta.TLSEnabled {

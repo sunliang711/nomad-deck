@@ -1497,9 +1497,9 @@ EOT
         detail: '先在「Nomad 集群 → 集群运维 → 集群配置 → 运行指标采集」勾选 prometheus_metrics；若启用了 ACL，在「治理 → ACL Policies」建含 agent { policy = "read" } 的策略并「签发 Client Token」填入 bearer_token；若启用了 TLS，挂载 /opt/nomad-deck/nomad/etc/nomad.d/tls/ca.pem 并配置 scheme: https。',
         detailEn: 'Enable prometheus_metrics under Nomad Cluster -> Cluster Ops -> Cluster Config -> Telemetry. If ACL is enabled, create a Policy with agent { policy = "read" } and issue a Client Token for bearer_token; if TLS is enabled, mount the Nomad CA and set scheme: https.',
         optional: true,
-        linkTo: '/nomad?tab=ops',
-        linkLabel: '前往 Nomad 集群运维',
-        linkLabelEn: 'Open Nomad Cluster Ops',
+        linkTo: '/nomad?tab=ops&sub=config',
+        linkLabel: '前往 Nomad 集群配置',
+        linkLabelEn: 'Open Nomad Cluster Config',
       },
     ],
     hcl: `job "prometheus" {

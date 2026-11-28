@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Code2, Container, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { useConfirm } from './ConfirmDialog';
 import { useToast } from './Toast';
 import { CodeEditor } from './CodeEditor';
-import { DockerManageModal, dockerModeLabelOf, dockerStatusLabelOf } from './DockerManageModal';
-import { Badge, Button, ErrorAlert, Input, Modal, Select, StatusBadge, TermLabel } from './UI';
+import { dockerModeLabelOf, dockerStatusLabelOf } from './DockerManageModal';
+import { Badge, Button, Card, ErrorAlert, Input, Modal, Select, StatusBadge, TermLabel } from './UI';
 
 export interface HostVolumeDraft {
   name: string;
@@ -1026,19 +1026,16 @@ function CustomHCLSection({
   );
 }
 
-export function NomadClusterSettingsModal({
-  open,
+export function NomadClusterSettingsPanel({
   cluster,
-  onClose,
+  isNotDeployed = false,
   onSaved,
 }: {
-  open: boolean;
   cluster: any;
-  onClose: () => void;
-  onSaved: (taskId?: string) => Promise<void>;
+  isNotDeployed?: boolean;
+  onSaved: (taskId?: string) => Promise<void> | void;
 }) {
   const { locale, tr } = useI18n();
-  const toast = useToast();
   const [cniVersions, setCniVersions] = useState<string[]>([]);
   const [cniVersion, setCniVersion] = useState('');
   const [publicURL, setPublicURL] = useState('');
@@ -1058,8 +1055,8 @@ export function NomadClusterSettingsModal({
 
   const isSingleDeployed = cluster?.mode === 'single' && cluster?.init_state === 'initialized';
 
-  useEffect(() => {
-    if (!open || !cluster) return;
+  const resetDraft = useCallback(() => {
+    if (!cluster) return;
     const st = cluster.settings || {};
     const ui = st.ui || {};
     setCniVersion(st.cni_version || '');
@@ -1075,14 +1072,38 @@ export function NomadClusterSettingsModal({
     setCustomHCL(st.custom_hcl || '');
     setConfirmSingle(false);
     setErr('');
+  }, [cluster]);
 
+  useEffect(() => {
+    resetDraft();
+  }, [resetDraft]);
+
+  useEffect(() => {
     void apiGet('/api/v1/releases/cni')
       .then((r) => setCniVersions((r.versions || []) as string[]))
       .catch(() => setCniVersions([]));
     void apiGet('/api/v1/settings')
       .then((r) => setNomadProxyEnabled(Boolean(r.settings?.['proxy.use_for_nomad'] ?? r.settings?.['proxy.use_for_releases'])))
       .catch(() => setNomadProxyEnabled(false));
-  }, [open, cluster]);
+  }, []);
+
+  const st = cluster?.settings || {};
+  const ui = st.ui || {};
+  const initTelemetry = telemetryDraftFromSettings(st);
+  const isDirty = Boolean(
+    cluster &&
+      (cniVersion !== (st.cni_version || '') ||
+        publicURL !== (cluster.public_api_url || '') ||
+        uiEnabled !== !ui.disabled ||
+        uiLabel !== (ui.label || '') ||
+        uiLabelBG !== (ui.label_background || '') ||
+        uiLabelFG !== (ui.label_text_color || '') ||
+        vaultUIURL !== (ui.vault_ui_url || '') ||
+        jobGC !== (st.job_gc_threshold || '') ||
+        execEnabled !== (st.exec_enabled !== false) ||
+        customHCL !== (st.custom_hcl || '') ||
+        JSON.stringify(telemetryDraft) !== JSON.stringify(initTelemetry)),
+  );
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1107,7 +1128,6 @@ export function NomadClusterSettingsModal({
         },
       });
       await onSaved(res?.task?.id);
-      onClose();
     } catch (ex: any) {
       setErr(ex?.message || tr('更新集群配置失败', 'Failed to update cluster settings'));
     } finally {
@@ -1116,9 +1136,25 @@ export function NomadClusterSettingsModal({
   };
 
   return (
-    <Modal open={open} title={tr(`集群配置：${cluster?.name || ''}`, `Cluster Settings: ${cluster?.name || ''}`)} size="lg" busy={busy} onClose={onClose}>
+    <Card
+      title={tr('集群配置', 'Cluster Settings')}
+      description={tr('统一配置 CNI 版本、Public API、原生 UI、运行指标采集与自定义 HCL 片段；保存后自动滚动下发到集群节点。', 'Configure CNI version, Public API, native UI, telemetry, and custom HCL snippets; saving rolls out updates across cluster nodes.')}
+      actions={
+        isDirty ? (
+          <Badge tone="amber">{tr('有未保存修改', 'Unsaved changes')}</Badge>
+        ) : undefined
+      }
+    >
       <form onSubmit={submit} className="space-y-4 text-xs">
         <ErrorAlert message={err} onClose={() => setErr('')} />
+        {isNotDeployed && (
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-3 text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
+            {tr(
+              '当前集群尚未完成首次部署：此处保存的参数会先写入集群草稿配置，回到「集群状态详情」点击部署时将自动生效。',
+              'This cluster is not deployed yet: changes saved here are stored as pre-deploy settings and applied automatically when you deploy from Cluster Status.',
+            )}
+          </div>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Select label={tr('集群 CNI 插件版本', 'Cluster CNI Plugin Version')} value={cniVersion} onChange={(e) => setCniVersion(e.target.value)}>
             <option value="">{tr('未选择', 'Not selected')}</option>
@@ -1183,15 +1219,17 @@ export function NomadClusterSettingsModal({
           </label>
         )}
         <div className="flex justify-end gap-2 pt-2">
-          <Button type="button" disabled={busy} onClick={onClose}>
-            {tr('取消', 'Cancel')}
-          </Button>
+          {isDirty && (
+            <Button type="button" disabled={busy} onClick={resetDraft}>
+              {tr('重置修改', 'Reset')}
+            </Button>
+          )}
           <Button type="submit" variant="primary" loading={busy}>
-            {tr('保存并下发配置', 'Save & Apply Config')}
+            {isNotDeployed ? tr('保存部署前配置', 'Save Pre-Deploy Config') : tr('保存并下发配置', 'Save & Apply Config')}
           </Button>
         </div>
       </form>
-    </Modal>
+    </Card>
   );
 }
 
@@ -1211,6 +1249,7 @@ export function NomadNodeConfigModal({
   onSubmitted: (taskId?: string, title?: string) => Promise<void>;
 }) {
   const { locale, tr } = useI18n();
+  const navigate = useNavigate();
   const toast = useToast();
   const askConfirm = useConfirm();
   const [draft, setDraft] = useState<ClientPluginDraft>(defaultClientPluginDraft);
@@ -1223,7 +1262,6 @@ export function NomadNodeConfigModal({
   const [confirmSingle, setConfirmSingle] = useState(false);
   const [dockerInfo, setDockerInfo] = useState<any>(null);
   const [dockerLoading, setDockerLoading] = useState(false);
-  const [dockerModalOpen, setDockerModalOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -1255,7 +1293,6 @@ export function NomadNodeConfigModal({
     setExtraSANs(Array.isArray(member.config?.extra_sans) ? member.config.extra_sans.join(', ') : '');
     setCustomHCL(member.config?.custom_hcl || '');
     setConfirmSingle(false);
-    setDockerModalOpen(false);
     setDockerInfo(null);
     setErr('');
 
@@ -1341,7 +1378,6 @@ export function NomadNodeConfigModal({
   };
 
   return (
-    <>
     <Modal
       open={open}
       title={
@@ -1369,17 +1405,17 @@ export function NomadNodeConfigModal({
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Link to="/docker" onClick={onClose} className="text-indigo-600 hover:underline dark:text-indigo-400">
-                  {tr('容器运行时中心 →', 'Runtime Console →')}
-                </Link>
                 <Button
                   type="button"
                   size="sm"
                   variant={dockerInfo?.mode === 'absent' ? 'primary' : 'secondary'}
-                  disabled={busy || dockerLoading}
-                  onClick={() => setDockerModalOpen(true)}
+                  disabled={busy || dockerLoading || !member?.node_id}
+                  onClick={() => {
+                    onClose();
+                    navigate(`/docker?tab=config&node=${encodeURIComponent(member.node_id)}`);
+                  }}
                 >
-                  {dockerInfo?.mode === 'absent' ? tr('安装 Docker', 'Install Docker') : tr('管理 Docker（版本 / 镜像 / 代理）', 'Manage Docker (Version / Mirrors / Proxy)')}
+                  {dockerInfo?.mode === 'absent' ? tr('前往安装 Docker', 'Install Docker in Runtime') : tr('前往配置 / 升级 Docker →', 'Configure / Upgrade Docker →')}
                 </Button>
               </div>
             </div>
@@ -1476,16 +1512,5 @@ export function NomadNodeConfigModal({
         </div>
       </form>
     </Modal>
-    <DockerManageModal
-      node={dockerModalOpen && member ? { id: member.node_id, name: member.name } : null}
-      onClose={() => {
-        setDockerModalOpen(false);
-        void refreshDockerInfo();
-      }}
-      onTaskSubmitted={async () => {
-        await refreshDockerInfo();
-      }}
-    />
-    </>
   );
 }

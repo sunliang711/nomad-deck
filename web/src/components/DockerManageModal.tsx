@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut } from '../lib/api';
 import {
@@ -12,7 +12,7 @@ import { useI18n } from '../lib/i18n';
 import { getLocale, trText, type Locale } from '../lib/locale';
 import { useOpsDrawer } from '../lib/opsDrawer';
 import { useToast } from './Toast';
-import { Badge, Button, ErrorAlert, Input, Modal, SecretInput, Select, StatusBadge, TermLabel } from './UI';
+import { Badge, Button, ErrorAlert, Input, SecretInput, Select, StatusBadge, TermLabel } from './UI';
 
 export {
   buildDockerConfigPayload,
@@ -188,13 +188,11 @@ export function dockerStatusLabelOf(status?: string, locale: Locale = getLocale(
   return status || '';
 }
 
-export function DockerManageModal({
+export function DockerManagePanel({
   node,
-  onClose,
   onTaskSubmitted,
 }: {
   node: DockerManageTarget | null;
-  onClose: () => void;
   onTaskSubmitted?: () => Promise<void> | void;
 }) {
   const { tr } = useI18n();
@@ -213,16 +211,19 @@ export function DockerManageModal({
   const [dockerCfg, setDockerCfg] = useState<DockerConfigDraft>(emptyDockerConfigDraft);
   const [proxyTestRes, setProxyTestRes] = useState<DockerProxyTestResult | null>(null);
 
-  useEffect(() => {
-    if (!node) return;
-    let active = true;
-    setDockerInfo(null);
-    setDockerErr('');
-    setProxyTestRes(null);
-    setDockerBusy(true);
-    void Promise.all([apiGet(`/api/v1/nodes/${node.id}/docker`), apiGet('/api/v1/settings')])
-      .then(([res, defaults]) => {
-        if (!active) return;
+  const loadDockerInfo = useCallback(
+    async (isActive?: () => boolean) => {
+      if (!node) return;
+      setDockerInfo(null);
+      setDockerErr('');
+      setProxyTestRes(null);
+      setDockerBusy(true);
+      try {
+        const [res, defaults] = await Promise.all([
+          apiGet(`/api/v1/nodes/${node.id}/docker`),
+          apiGet('/api/v1/settings'),
+        ]);
+        if (isActive && !isActive()) return;
         setDockerVer(res.docker?.host_config?.version || defaults.settings?.['defaults.docker_version'] || '');
         setDockerInstallProxyEnabled(
           Boolean(defaults.settings?.['proxy.use_for_docker_install'] ?? defaults.settings?.['proxy.use_for_releases']),
@@ -235,17 +236,27 @@ export function DockerManageModal({
         setDockerInfo(res.docker);
         const hostCfg = res.docker?.host_config || {};
         setDockerCfg(dockerConfigDraftFrom(hostCfg, Boolean(hostCfg.pull_proxy_password_set)));
-      })
-      .catch((ex: any) => {
-        if (active) setDockerErr(ex?.message || tr('加载 Docker 信息失败', 'Failed to load Docker info'));
-      })
-      .finally(() => {
-        if (active) setDockerBusy(false);
-      });
+      } catch (ex: any) {
+        if (!isActive || isActive()) {
+          setDockerErr(ex?.message || tr('加载 Docker 信息失败', 'Failed to load Docker info'));
+        }
+      } finally {
+        if (!isActive || isActive()) {
+          setDockerBusy(false);
+        }
+      }
+    },
+    [node?.id, tr],
+  );
+
+  useEffect(() => {
+    if (!node) return;
+    let active = true;
+    void loadDockerInfo(() => active);
     return () => {
       active = false;
     };
-  }, [node?.id]);
+  }, [node?.id, loadDockerInfo]);
 
   const runDockerAction = async (action: 'install' | 'upgrade' | 'adopt') => {
     if (!node || dockerBusy) return;
@@ -259,7 +270,6 @@ export function DockerManageModal({
         allow_interruption: dockerAllowInterruption,
       });
       if (res.task?.id) {
-        onClose();
         openTask(
           res.task.id,
           tr(
@@ -287,11 +297,11 @@ export function DockerManageModal({
       });
       const res = await apiPut(`/api/v1/nodes/${node.id}/docker/config`, payload);
       if (res?.task?.id) {
-        onClose();
         openTask(res.task.id, tr(`更新 Docker 配置：${node.name}`, `Update Docker Config: ${node.name}`));
         await onTaskSubmitted?.();
       } else {
         toast.success(tr('已保存节点 Docker 预配置（安装时自动生效）', 'Saved node Docker pre-config (applied on install)'));
+        await loadDockerInfo();
         await onTaskSubmitted?.();
       }
     } catch (ex: any) {
@@ -326,13 +336,22 @@ export function DockerManageModal({
     }
   };
 
+  if (!node) return null;
+
   return (
-    <Modal open={Boolean(node)} title={tr(`Docker 管理：${node?.name || ''}`, `Docker Management: ${node?.name || ''}`)} busy={dockerBusy} onClose={onClose} size="xl">
+    <div className="space-y-4">
       <ErrorAlert message={dockerErr} onClose={() => setDockerErr('')} />
       {!dockerInfo && (
-        <p role="status" className="py-8 text-center text-sm text-slate-500">
-          {dockerBusy ? tr('正在读取 Docker 状态…', 'Loading Docker status...') : tr('无法读取 Docker 信息，请关闭后重试。', 'Unable to load Docker info; close and retry.')}
-        </p>
+        <div className="flex flex-col items-center gap-3 py-8 text-center text-sm text-slate-500">
+          <p role="status">
+            {dockerBusy ? tr('正在读取 Docker 状态…', 'Loading Docker status...') : tr('无法读取 Docker 信息，请重试。', 'Unable to load Docker info; please retry.')}
+          </p>
+          {!dockerBusy && (
+            <Button size="sm" onClick={() => void loadDockerInfo()}>
+              {tr('重新读取', 'Retry')}
+            </Button>
+          )}
+        </div>
       )}
       {dockerInfo && (
         <div className="space-y-4 text-xs">
@@ -495,6 +514,6 @@ export function DockerManageModal({
           </div>
         </div>
       )}
-    </Modal>
+    </div>
   );
 }

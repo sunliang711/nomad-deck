@@ -202,8 +202,10 @@ func (s *Service) PreflightDetailed(ctx context.Context, c *nomad.Client, cluste
 		checks = append(checks, chk)
 	}
 	nomadClusterLink := "/nomad"
+	nomadOpsLink := "/nomad?tab=ops"
 	if clusterID != "" {
 		nomadClusterLink = "/nomad?id=" + url.QueryEscape(clusterID)
+		nomadOpsLink = nomadClusterLink + "&tab=ops"
 	}
 
 	// Run Vault integration, KV mount/secret/key and paired gateway config blockers first.
@@ -537,9 +539,9 @@ func (s *Service) PreflightDetailed(ctx context.Context, c *nomad.Client, cluste
 							DetailEn: fmt.Sprintf("Task %q mounts Nomad CA (%s), but TLS is not enabled on this Nomad cluster.", bind.task, bind.src),
 							FixAction: &PreflightFixAction{
 								Type:    "link",
-								Path:    nomadClusterLink,
-								Label:   "查看集群配置",
-								LabelEn: "Cluster Config",
+								Path:    nomadOpsLink,
+								Label:   "前往集群运维",
+								LabelEn: "Cluster Ops",
 							},
 						})
 					} else if clMeta != nil && clMeta.TLSEnabled {
@@ -675,7 +677,7 @@ func (s *Service) PreflightDetailed(ctx context.Context, c *nomad.Client, cluste
 			}
 			if cniCount == 0 {
 				groupMissingSingle = true
-				msg := add("任务组 %q 使用了 bridge 网络模式，但目标范围内的 Client 节点尚未启用 CNI 插件（请先在「Nomad 集群 → 集群配置」选择 CNI 版本并在「节点插件/配置」启用 CNI）", g.name)
+				msg := add("任务组 %q 使用了 bridge 网络模式，但目标范围内的 Client 节点尚未启用 CNI 插件（请先在「Nomad 集群 → 集群运维 → 集群配置」选择 CNI 版本并在「集群状态详情 → 节点插件/配置」启用 CNI）", g.name)
 				addCheck(PreflightCheck{
 					ID:       "cni",
 					Kind:     "cni",

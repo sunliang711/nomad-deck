@@ -60,7 +60,13 @@ export function NomadPage() {
   const [loadingList, setLoadingList] = useState(true);
   const selectionRef = useRef(selectedId);
   selectionRef.current = selectedId;
-  const tab = resolveTabParam(searchParams, ['status', 'workbench', 'snapshots', 'governance'] as const, 'status');
+  const tab = resolveTabParam(
+    searchParams,
+    isAdmin
+      ? (['status', 'ops', 'workbench', 'snapshots', 'governance'] as const)
+      : (['status', 'workbench', 'snapshots', 'governance'] as const),
+    'status',
+  );
   const setTab = useCallback(
     (nextTab: string) => {
       const next = buildTabSearchParams(searchParams, nextTab, 'status');
@@ -242,9 +248,9 @@ export function NomadPage() {
     setMgmtToken('');
     setRevealedToken(null);
     setUninstallPlan(null);
-    if (selectedId && (tab === 'status' || tab === 'snapshots')) void loadOpsTab();
+    if (selectedId && (tab === 'status' || tab === 'ops' || tab === 'snapshots')) void loadOpsTab();
     if (selectedId && tab === 'governance') void loadGovernance();
-    if (!selectedId || tab !== 'status') return;
+    if (!selectedId || (tab !== 'status' && tab !== 'ops')) return;
     const t = setInterval(() => void loadOpsTab(), 30000);
     return () => clearInterval(t);
   }, [selectedId, tab, loadOpsTab]);
@@ -348,7 +354,7 @@ export function NomadPage() {
         subtitle={tr('管理 Nomad Server/Client 编排、运行态工作台、Raft 快照与 ACL 多租户治理', 'Manage Nomad Server/Client orchestration, runtime workbench, Raft snapshots, and ACL multi-tenant governance')}
         actions={
           <>
-            <Button onClick={() => { void loadList(); if (tab === 'status' || tab === 'snapshots') void loadOpsTab(); if (tab === 'governance') void loadGovernance(); }}>
+            <Button onClick={() => { void loadList(); if (tab === 'status' || tab === 'ops' || tab === 'snapshots') void loadOpsTab(); if (tab === 'governance') void loadGovernance(); }}>
               <RefreshCw className="h-4 w-4" />
               <span>{tr('刷新', 'Refresh')}</span>
             </Button>
@@ -384,6 +390,9 @@ export function NomadPage() {
             <SectionTabs
               tabs={[
                 { id: 'status', label: tr('集群状态详情', 'Cluster Status') },
+                ...(isAdmin
+                  ? [{ id: 'ops', label: tr('集群运维', 'Cluster Ops'), title: tr('集群配置、版本升级、证书与 Gossip 密钥轮换、集群体检与卸载等运维操作', 'Cluster configuration, rolling upgrade, certificate & gossip rotation, cluster doctor, and uninstall operations') }]
+                  : []),
                 { id: 'workbench', label: tr('运行态工作台', 'Workbench'), title: tr('实时查看与管理 Nomad Clients、Servers、拓扑容量、CSI 存储、Variables 与 Evaluations', 'Inspect and manage Nomad Clients, Servers, Topology, CSI Storage, Variables, and Evaluations') },
                 { id: 'snapshots', label: tr('Raft 快照', 'Raft Snapshots'), badge: snapshots.length, title: tr('保存与恢复 Nomad Server Raft 状态机中的任务、变量与 ACL 快照', 'Save and restore Nomad Server Raft state snapshots') },
                 { id: 'governance', label: tr('治理 (Namespace / Pool / ACL)', 'Governance (Namespace / Pool / ACL)'), title: tr('配置多租户命名空间（Namespace）、节点资源池（Node Pool）与访问控制（ACL Policy / Role / Token）', 'Configure Namespaces, Node Pools, and ACL Policies / Roles / Tokens') },
@@ -393,109 +402,108 @@ export function NomadPage() {
             />
           </div>
 
-          {tab === 'status' && (
-            <div className="space-y-4">
-              <ClusterOpsSection
-                product="nomad"
-                cluster={cluster}
-                status={status}
-                clusterNodes={clusterNodes}
-                isAdmin={isAdmin}
-                deployVer={deployVer}
-                setDeployVer={setDeployVer}
-                upVer={upVer}
-                setUpVer={setUpVer}
-                proxyEnabled={proxyEnabled}
-                drainClients={drainClients}
-                setDrainClients={setDrainClients}
-                onDeploy={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest' })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('部署 Nomad', 'Deploy Nomad')); })
-                    .catch((ex) => setErr(ex.message))
+          {(tab === 'status' || (tab === 'ops' && isAdmin)) && (() => {
+            const opsProps = {
+              product: 'nomad' as const,
+              cluster,
+              status,
+              clusterNodes,
+              isAdmin,
+              deployVer,
+              setDeployVer,
+              upVer,
+              setUpVer,
+              proxyEnabled,
+              drainClients,
+              setDrainClients,
+              onDeploy: () =>
+                apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest' })
+                  .then((r) => { if (r.task?.id) openTask(r.task.id, tr('部署 Nomad', 'Deploy Nomad')); })
+                  .catch((ex) => setErr(ex.message)),
+              onUpgrade: () =>
+                apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', drain_clients: drainClients, confirm: true })
+                  .then((r) => { if (r.task?.id) openTask(r.task.id, tr('滚动升级 Nomad', 'Rolling Upgrade Nomad')); })
+                  .catch((ex) => setErr(ex.message)),
+              onRenewCerts: () =>
+                apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
+                  .then((r) => { if (r.task?.id) openTask(r.task.id, tr('续期 Nomad 证书', 'Renew Nomad Certificates')); })
+                  .catch((ex) => setErr(ex.message)),
+              onRotateCA: () => {
+                setPwAction({
+                  title: tr('确认轮换 Nomad 集群 CA', 'Rotate Nomad Cluster CA'),
+                  run: async (pw) => {
+                    const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
+                    if (r.task?.id) openTask(r.task.id, tr('轮换 Nomad CA', 'Rotate Nomad CA'));
+                  },
+                });
+              },
+              onRotateGossip: () => {
+                setPwAction({
+                  title: tr('确认轮换 Nomad Gossip 密钥', 'Rotate Nomad Gossip Key'),
+                  run: async (pw) => {
+                    const r = await apiPost(`/api/v1/clusters/${selectedId}/gossip/rotate`, { current_password: pw });
+                    if (r.task?.id) openTask(r.task.id, tr('轮换 Gossip 密钥', 'Rotate Gossip Key'));
+                  },
+                });
+              },
+              onDoctor: () =>
+                apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
+                  .then((r) => toast.info(r.report?.summary || tr('Doctor 完成', 'Doctor finished')))
+                  .catch((ex) => setErr(ex.message)),
+              onReconcile: () =>
+                apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
+                  .then((r) => { toast.success(r.report?.message || tr('已核对', 'Reconciled')); return loadOpsTab(); })
+                  .catch((ex) => setErr(ex.message)),
+              onRevealRootToken: handleRevealMgmtToken,
+              onOpenWebUI: handleOpenWebUI,
+              onUninstall: handleUninstall,
+              onOpenJoin: () => { setJoinNodeId(''); setJoinAdvertiseAddr(''); setShowJoin(true); },
+              onOpenLogs: (n: any) => openNodeLogs(selectedId, n.node_id, tr(`Nomad 日志: ${n.name}`, `Nomad Logs: ${n.name}`)),
+              onCheckGate: (n: any) =>
+                apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
+                  .then((r) => setGateView(r.gate))
+                  .catch((ex) => setErr(ex.message)),
+              onRestartNode: (n: any) =>
+                apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
+                  .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`重启节点: ${n.name}`, `Restart Node: ${n.name}`)); })
+                  .catch((ex) => setErr(ex.message)),
+              onRemoveNode: (n: any, force: boolean) =>
+                apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, { force })
+                  .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`${force ? '强制移出' : '缩容'}节点: ${n.name}`, `${force ? 'Force Remove' : 'Remove'} Node: ${n.name}`)); })
+                  .catch((ex) => setErr(ex.message)),
+              nodeConfigs,
+              onOpenClusterSettings: () => setShowClusterSettings(true),
+              onConfigureNode: (n: any) => {
+                const full = memberRecords.find((m) => m.node_id === n.node_id) || {
+                  ...n,
+                  install_state: n.installed_version ? 'installed' : 'pending',
+                  config: {},
+                };
+                setConfigMember(full);
+                if (cluster?.init_state === 'initialized' && pools.length === 0) {
+                  void apiGet(`/api/v1/nomad/${selectedId}/node-pools`)
+                    .then((r) => setPools(r.node_pools || []))
+                    .catch(() => {});
                 }
-                onUpgrade={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', drain_clients: drainClients, confirm: true })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('滚动升级 Nomad', 'Rolling Upgrade Nomad')); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                onRenewCerts={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('续期 Nomad 证书', 'Renew Nomad Certificates')); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                onRotateCA={() => {
-                  setPwAction({
-                    title: tr('确认轮换 Nomad 集群 CA', 'Rotate Nomad Cluster CA'),
-                    run: async (pw) => {
-                      const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
-                      if (r.task?.id) openTask(r.task.id, tr('轮换 Nomad CA', 'Rotate Nomad CA'));
-                    },
-                  });
-                }}
-                onRotateGossip={() => {
-                  setPwAction({
-                    title: tr('确认轮换 Nomad Gossip 密钥', 'Rotate Nomad Gossip Key'),
-                    run: async (pw) => {
-                      const r = await apiPost(`/api/v1/clusters/${selectedId}/gossip/rotate`, { current_password: pw });
-                      if (r.task?.id) openTask(r.task.id, tr('轮换 Gossip 密钥', 'Rotate Gossip Key'));
-                    },
-                  });
-                }}
-                onDoctor={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
-                    .then((r) => toast.info(r.report?.summary || tr('Doctor 完成', 'Doctor finished')))
-                    .catch((ex) => setErr(ex.message))
-                }
-                onReconcile={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
-                    .then((r) => { toast.success(r.report?.message || tr('已核对', 'Reconciled')); return loadOpsTab(); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                onRevealRootToken={handleRevealMgmtToken}
-                onOpenWebUI={handleOpenWebUI}
-                onUninstall={handleUninstall}
-                onOpenJoin={() => { setJoinNodeId(''); setJoinAdvertiseAddr(''); setShowJoin(true); }}
-                onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, tr(`Nomad 日志: ${n.name}`, `Nomad Logs: ${n.name}`))}
-                onCheckGate={(n) =>
-                  apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
-                    .then((r) => setGateView(r.gate))
-                    .catch((ex) => setErr(ex.message))
-                }
-                onRestartNode={(n) =>
-                  apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`重启节点: ${n.name}`, `Restart Node: ${n.name}`)); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                onRemoveNode={(n, force) =>
-                  apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, { force })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`${force ? '强制移出' : '缩容'}节点: ${n.name}`, `${force ? 'Force Remove' : 'Remove'} Node: ${n.name}`)); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                nodeConfigs={nodeConfigs}
-                onOpenClusterSettings={() => setShowClusterSettings(true)}
-                onConfigureNode={(n) => {
-                  const full = memberRecords.find((m) => m.node_id === n.node_id) || {
-                    ...n,
-                    install_state: n.installed_version ? 'installed' : 'pending',
-                    config: {},
-                  };
-                  setConfigMember(full);
-                  if (cluster?.init_state === 'initialized' && pools.length === 0) {
-                    void apiGet(`/api/v1/nomad/${selectedId}/node-pools`)
-                      .then((r) => setPools(r.node_pools || []))
-                      .catch(() => {});
-                  }
-                }}
-                quickActions={
-                  <Link to={`/jobs?cluster_id=${encodeURIComponent(selectedId)}`} className="primary-button">
-                    <FileCode2 className="h-3.5 w-3.5" />
-                    <span>{tr('前往 Job 中心', 'Go to Job Center')}</span>
-                  </Link>
-                }
-                onError={setErr}
-              />
-            </div>
-          )}
+              },
+              quickActions: (
+                <Link to={`/jobs?cluster_id=${encodeURIComponent(selectedId)}`} className="primary-button">
+                  <FileCode2 className="h-3.5 w-3.5" />
+                  <span>{tr('前往 Job 中心', 'Go to Job Center')}</span>
+                </Link>
+              ),
+              onError: setErr,
+            };
+            return (
+              <div className="space-y-4">
+                <ClusterOpsSection
+                  {...opsProps}
+                  section={tab === 'ops' ? 'ops' : 'status'}
+                  onOpenStatusTab={() => setTab('status')}
+                />
+              </div>
+            );
+          })()}
 
           {tab === 'workbench' && (
             <NomadWorkbench

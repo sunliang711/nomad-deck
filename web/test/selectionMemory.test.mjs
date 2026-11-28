@@ -36,7 +36,8 @@ describe('URL tab routing helpers', () => {
   });
 
   it('resolves generic page tab param with default fallback', () => {
-    const valid = ['status', 'workbench', 'snapshots', 'governance'];
+    const valid = ['status', 'ops', 'workbench', 'snapshots', 'governance'];
+    assert.equal(resolveTabParam(new URLSearchParams('tab=ops'), valid, 'status'), 'ops');
     assert.equal(resolveTabParam(new URLSearchParams('tab=governance'), valid, 'status'), 'governance');
     assert.equal(resolveTabParam(new URLSearchParams('tab=unknown'), valid, 'status'), 'status');
     assert.equal(resolveTabParam(new URLSearchParams(''), valid, 'status'), 'status');

@@ -342,7 +342,9 @@ export function DashboardPage() {
               {certAlerts.map((ca: any, i: number) => {
                 const targetCluster = clusterItems.find((c: any) => c.id === ca.cluster_id);
                 const certHref =
-                  targetCluster?.type === 'nomad' ? `/nomad?id=${ca.cluster_id}` : `/vault?id=${ca.cluster_id || ''}`;
+                  targetCluster?.type === 'nomad'
+                    ? `/nomad?id=${ca.cluster_id}&tab=ops`
+                    : `/vault?id=${ca.cluster_id || ''}&tab=ops`;
                 return (
                   <Link
                     key={`ca-${i}`}

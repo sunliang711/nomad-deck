@@ -46,6 +46,8 @@ interface ClusterOpsSectionProps {
   nodeConfigs?: Record<string, any>;
   onError: (msg: string) => void;
   quickActions?: React.ReactNode;
+  section?: 'all' | 'status' | 'ops';
+  onOpenStatusTab?: () => void;
 }
 
 export function ClusterOpsSection({
@@ -84,7 +86,11 @@ export function ClusterOpsSection({
   nodeConfigs,
   onError,
   quickActions,
+  section = 'all',
+  onOpenStatusTab,
 }: ClusterOpsSectionProps) {
+  const showStatusSection = section === 'all' || section === 'status';
+  const showOpsSection = section === 'all' || section === 'ops';
   const { locale, tr } = useI18n();
   const askConfirm = useConfirm();
   const toast = useToast();
@@ -270,8 +276,36 @@ export function ClusterOpsSection({
         </div>
       )}
 
+      {section === 'ops' && isNotDeployed && isAdmin && (
+        <Card
+          title={tr('集群运维', 'Cluster Operations')}
+          actions={
+            onOpenClusterSettings ? (
+              <Button size="sm" disabled={blocked} onClick={onOpenClusterSettings}>
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                <span>{tr('集群配置', 'Cluster Config')}</span>
+              </Button>
+            ) : undefined
+          }
+        >
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {tr(
+                `当前 ${productName} 集群尚未部署。请先前往「集群状态详情」完成首次部署${onOpenClusterSettings ? '，或点击右上角「集群配置」调整部署前参数' : ''}。`,
+                `This ${productName} cluster is not deployed yet. Deploy it from the Cluster Status tab first${onOpenClusterSettings ? ', or adjust pre-deploy parameters via Cluster Config' : ''}.`,
+              )}
+            </p>
+            {onOpenStatusTab && (
+              <Button variant="primary" size="sm" onClick={onOpenStatusTab}>
+                {tr('前往集群状态详情', 'Go to Cluster Status')} <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
+
       {/* 阶段 1：尚未部署任何节点 */}
-      {isNotDeployed && isAdmin && (
+      {showStatusSection && isNotDeployed && isAdmin && (
         <Card
           title={tr('下一步：部署集群服务', 'Next: Deploy Cluster Services')}
           actions={
@@ -351,7 +385,7 @@ export function ClusterOpsSection({
       )}
 
       {/* 阶段 2（Vault 专属）：二进制已安装运行，引导一键初始化托管 */}
-      {isVaultAwaitInit && isAdmin && (
+      {showStatusSection && isVaultAwaitInit && isAdmin && (
         <Card title={tr('下一步：初始化 Vault 并托管密钥', 'Next: Initialize Vault & Key Custody')}>
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="space-y-1.5 max-w-2xl">
@@ -384,6 +418,8 @@ export function ClusterOpsSection({
       {/* 已部署后才展示连接信息、仲裁健康、节点成员表与运维工具箱 */}
       {!isNotDeployed && (
         <>
+          {showStatusSection && (
+            <>
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <Card title={tr('连接与运行信息', 'Connection & Runtime')}>
               <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-5 gap-y-3 text-sm">
@@ -712,8 +748,10 @@ export function ClusterOpsSection({
               </table>
             </div>
           </Card>
+            </>
+          )}
 
-          {isAdmin && (
+          {showOpsSection && isAdmin && (
             <Card
               title={tr('集群运维', 'Cluster Operations')}
               actions={

@@ -69,7 +69,13 @@ export function VaultPage() {
   const [loadingList, setLoadingList] = useState(true);
   const selectionRef = useRef(selectedId);
   selectionRef.current = selectedId;
-  const tab = resolveTabParam(searchParams, ['status', 'custody', 'snapshots', 'manage'] as const, 'status');
+  const tab = resolveTabParam(
+    searchParams,
+    isAdmin
+      ? (['status', 'ops', 'custody', 'snapshots', 'manage'] as const)
+      : (['status', 'custody', 'snapshots', 'manage'] as const),
+    'status',
+  );
   const setTab = useCallback(
     (nextTab: string) => {
       const next = buildTabSearchParams(searchParams, nextTab, 'status');
@@ -389,7 +395,7 @@ export function VaultPage() {
   }, [selectedId, loadDetail]);
 
   useEffect(() => {
-    if (selectedId && tab === 'status') void loadDetail();
+    if (selectedId && (tab === 'status' || tab === 'ops')) void loadDetail();
     if (selectedId && tab === 'manage') void loadManage();
   }, [selectedId, tab, loadDetail, loadManage]);
 
@@ -513,6 +519,9 @@ export function VaultPage() {
             <SectionTabs
               tabs={[
                 { id: 'status', label: tr('集群状态详情', 'Cluster Status') },
+                ...(isAdmin
+                  ? [{ id: 'ops', label: tr('集群运维', 'Cluster Ops'), title: tr('版本升级、证书续期与 CA 轮换、集群体检、状态核对及卸载等运维操作', 'Rolling upgrade, cert renewal & CA rotation, cluster doctor, reconcile, and uninstall operations') }]
+                  : []),
                 { id: 'custody', label: tr('初始化与密钥托管', 'Init & Key Custody'), title: tr('控制面托管 Vault Unseal Key（Shamir 门限分片）与短时效运维 Token，支持自动解封、Rekey 轮换及签发临时 Root Token', 'Control plane custodies Shamir unseal shares and short-lived admin tokens for auto-unseal, rekeying, and emergency root tokens') },
                 { id: 'snapshots', label: tr('Raft 快照', 'Raft Snapshots'), badge: snapshots.length, title: tr('对 Vault Integrated Storage (Raft) 后端状态执行一致性快照备份与在线恢复', 'Take consistent Raft storage snapshots and perform online restores') },
                 { id: 'manage', label: 'Auth / Policy / KV', title: tr('管理 Vault 认证挂载（Userpass/JWT/AppRole）、HCL 权限策略（Policy）以及 KV v2 密钥引擎', 'Manage Vault Auth methods, HCL policies, and KV v2 secret engines') },
@@ -522,89 +531,87 @@ export function VaultPage() {
             />
           </div>
 
-          {tab === 'status' && (
-            <div className="space-y-4">
-              <ClusterOpsSection
-                product="vault"
-                cluster={cluster}
-                status={status}
-                clusterNodes={clusterNodes}
-                isAdmin={isAdmin}
-                deployVer={deployVer}
-                setDeployVer={setDeployVer}
-                upVer={upVer}
-                setUpVer={setUpVer}
-                proxyEnabled={proxyEnabled}
-                confirmSwap={deployConfirmSwap}
-                setConfirmSwap={setDeployConfirmSwap}
-                onDeploy={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', confirm_swap: deployConfirmSwap })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('部署 Vault', 'Deploy Vault')); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                onInitVault={() =>
-                  apiPost(`/api/v1/vault/${selectedId}/init`, { key_shares: 5, key_threshold: 3 })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('初始化 Vault 托管', 'Initialize Vault Custody')); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                quickActions={
-                  <Link to="/integrations" className="primary-button">
-                    <Link2 className="h-3.5 w-3.5" />
-                    <span>{tr('配置集群联动', 'Configure Integrations')}</span>
-                  </Link>
-                }
-                onUpgrade={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', confirm: true })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('滚动升级 Vault', 'Rolling Upgrade Vault')); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                onRenewCerts={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr('续期 Vault 证书', 'Renew Vault Certificates')); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                onRotateCA={() => {
-                  setPwAction({
-                    title: tr('确认轮换 Vault 集群 CA', 'Rotate Vault Cluster CA'),
-                    run: async (pw) => {
-                      const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
-                      if (r.task?.id) openTask(r.task.id, tr('轮换 Vault CA', 'Rotate Vault CA'));
-                    },
-                  });
-                }}
-                onDoctor={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
-                    .then((r) => toast.info(r.report?.summary || tr('Doctor 完成', 'Doctor finished')))
-                    .catch((ex) => setErr(ex.message))
-                }
-                onReconcile={() =>
-                  apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
-                    .then((r) => { toast.success(r.report?.message || tr('已核对', 'Reconciled')); return loadDetail(); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                onOpenWebUI={handleOpenWebUI}
-                onUninstall={handleUninstall}
-                onOpenJoin={() => { setJoinNodeId(''); setJoinAdvertiseAddr(''); setConfirmSwap(false); setShowJoin(true); }}
-                onOpenLogs={(n) => openNodeLogs(selectedId, n.node_id, tr(`Vault 日志: ${n.name}`, `Vault Logs: ${n.name}`))}
-                onCheckGate={(n) =>
-                  apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
-                    .then((r) => setGateView(r.gate))
-                    .catch((ex) => setErr(ex.message))
-                }
-                onRestartNode={(n) =>
-                  apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`重启节点: ${n.name}`, `Restart Node: ${n.name}`)); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                onRemoveNode={(n, force) =>
-                  apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, { force })
-                    .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`${force ? '强制移出' : '缩容'}节点: ${n.name}`, `${force ? 'Force Remove' : 'Remove'} Node: ${n.name}`)); })
-                    .catch((ex) => setErr(ex.message))
-                }
-                onError={setErr}
-              />
-            </div>
-          )}
+          {(tab === 'status' || (tab === 'ops' && isAdmin)) && (() => {
+            const opsProps = {
+              product: 'vault' as const,
+              cluster,
+              status,
+              clusterNodes,
+              isAdmin,
+              deployVer,
+              setDeployVer,
+              upVer,
+              setUpVer,
+              proxyEnabled,
+              confirmSwap: deployConfirmSwap,
+              setConfirmSwap: setDeployConfirmSwap,
+              onDeploy: () =>
+                apiPost(`/api/v1/clusters/${selectedId}/deploy`, { version: deployVer.trim() || 'latest', confirm_swap: deployConfirmSwap })
+                  .then((r) => { if (r.task?.id) openTask(r.task.id, tr('部署 Vault', 'Deploy Vault')); })
+                  .catch((ex) => setErr(ex.message)),
+              onInitVault: () =>
+                apiPost(`/api/v1/vault/${selectedId}/init`, { key_shares: 5, key_threshold: 3 })
+                  .then((r) => { if (r.task?.id) openTask(r.task.id, tr('初始化 Vault 托管', 'Initialize Vault Custody')); })
+                  .catch((ex) => setErr(ex.message)),
+              quickActions: (
+                <Link to="/integrations" className="primary-button">
+                  <Link2 className="h-3.5 w-3.5" />
+                  <span>{tr('配置集群联动', 'Configure Integrations')}</span>
+                </Link>
+              ),
+              onUpgrade: () =>
+                apiPost(`/api/v1/clusters/${selectedId}/upgrade`, { version: upVer.trim() || 'latest', confirm: true })
+                  .then((r) => { if (r.task?.id) openTask(r.task.id, tr('滚动升级 Vault', 'Rolling Upgrade Vault')); })
+                  .catch((ex) => setErr(ex.message)),
+              onRenewCerts: () =>
+                apiPost(`/api/v1/clusters/${selectedId}/certs/renew`, {})
+                  .then((r) => { if (r.task?.id) openTask(r.task.id, tr('续期 Vault 证书', 'Renew Vault Certificates')); })
+                  .catch((ex) => setErr(ex.message)),
+              onRotateCA: () => {
+                setPwAction({
+                  title: tr('确认轮换 Vault 集群 CA', 'Rotate Vault Cluster CA'),
+                  run: async (pw) => {
+                    const r = await apiPost(`/api/v1/clusters/${selectedId}/ca/rotate`, { current_password: pw });
+                    if (r.task?.id) openTask(r.task.id, tr('轮换 Vault CA', 'Rotate Vault CA'));
+                  },
+                });
+              },
+              onDoctor: () =>
+                apiPost(`/api/v1/clusters/${selectedId}/doctor`, {})
+                  .then((r) => toast.info(r.report?.summary || tr('Doctor 完成', 'Doctor finished')))
+                  .catch((ex) => setErr(ex.message)),
+              onReconcile: () =>
+                apiPost(`/api/v1/clusters/${selectedId}/reconcile`, {})
+                  .then((r) => { toast.success(r.report?.message || tr('已核对', 'Reconciled')); return loadDetail(); })
+                  .catch((ex) => setErr(ex.message)),
+              onOpenWebUI: handleOpenWebUI,
+              onUninstall: handleUninstall,
+              onOpenJoin: () => { setJoinNodeId(''); setJoinAdvertiseAddr(''); setConfirmSwap(false); setShowJoin(true); },
+              onOpenLogs: (n: any) => openNodeLogs(selectedId, n.node_id, tr(`Vault 日志: ${n.name}`, `Vault Logs: ${n.name}`)),
+              onCheckGate: (n: any) =>
+                apiGet(`/api/v1/clusters/${selectedId}/gate?node_id=${n.node_id}`)
+                  .then((r) => setGateView(r.gate))
+                  .catch((ex) => setErr(ex.message)),
+              onRestartNode: (n: any) =>
+                apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/service/restart`, {})
+                  .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`重启节点: ${n.name}`, `Restart Node: ${n.name}`)); })
+                  .catch((ex) => setErr(ex.message)),
+              onRemoveNode: (n: any, force: boolean) =>
+                apiPost(`/api/v1/clusters/${selectedId}/nodes/${n.node_id}/remove`, { force })
+                  .then((r) => { if (r.task?.id) openTask(r.task.id, tr(`${force ? '强制移出' : '缩容'}节点: ${n.name}`, `${force ? 'Force Remove' : 'Remove'} Node: ${n.name}`)); })
+                  .catch((ex) => setErr(ex.message)),
+              onError: setErr,
+            };
+            return (
+              <div className="space-y-4">
+                <ClusterOpsSection
+                  {...opsProps}
+                  section={tab === 'ops' ? 'ops' : 'status'}
+                  onOpenStatusTab={() => setTab('status')}
+                />
+              </div>
+            );
+          })()}
 
           {tab === 'custody' && (() => {
             const isInitialized = (status?.init_state || cluster.init_state) === 'initialized';

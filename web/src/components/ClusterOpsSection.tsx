@@ -479,11 +479,11 @@ export function ClusterOpsSection({
                         <button
                           type="button"
                           onClick={() => onOpenWebUI(cluster.public_api_url, tr('统一入口', 'Public Endpoint'))}
-                          title={tr(`验证管理员密码后生成 1 小时有效的 ${productName} 免密登录链接`, `Verify admin password to generate a 1h passwordless ${productName} UI link`)}
+                          title={tr(`验证管理员密码后自动登录 ${productName} UI，无需手动输入 Token，会话有效期为 1 小时`, `Verify your admin password to sign in to ${productName} UI automatically without entering a token. Session valid for 1 hour.`)}
                           className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
                         >
                           <KeyRound className="h-3 w-3" />
-                          <span>{tr('免密进 UI', 'Open UI')}</span>
+                          <span>{tr('快捷登录UI', 'Quick UI Login')}</span>
                         </button>
                       )}
                     </div>
@@ -620,11 +620,11 @@ export function ClusterOpsSection({
                               <button
                                 type="button"
                                 onClick={() => onOpenWebUI(String(n.api_addr || n.advertise_addr), n.name)}
-                                title={tr(`验证管理员密码后生成 1 小时有效的 ${productName} 免密登录链接`, `Verify admin password to generate a 1h passwordless ${productName} UI link`)}
+                                title={tr(`验证管理员密码后自动登录 ${productName} UI，无需手动输入 Token，会话有效期为 1 小时`, `Verify your admin password to sign in to ${productName} UI automatically without entering a token. Session valid for 1 hour.`)}
                                 className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
                               >
                                 <KeyRound className="h-3 w-3" />
-                                <span>{tr('免密进 UI', 'Open UI')}</span>
+                                <span>{tr('快捷登录UI', 'Quick UI Login')}</span>
                               </button>
                             )}
                           </div>

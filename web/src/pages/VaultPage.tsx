@@ -414,7 +414,7 @@ export function VaultPage() {
 
   const handleOpenWebUI = (targetUrl: string, label?: string) => {
     setPwAction({
-      title: tr(`免密登录 Vault Web UI${label ? ` · ${label}` : ''}`, `SSO Login to Vault Web UI${label ? ` · ${label}` : ''}`),
+      title: tr(`快捷登录UI · Vault${label ? ` · ${label}` : ''}`, `Quick UI Login · Vault${label ? ` · ${label}` : ''}`),
       run: async (pw) => {
         const r = await apiPost(`/api/v1/vault/${selectedId}/ui-login`, {
           current_password: pw,
@@ -1732,7 +1732,7 @@ export function VaultPage() {
 
       <Modal
         open={Boolean(uiLoginModal)}
-        title={tr(`免密登录 Vault Web UI${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`, `SSO Login to Vault Web UI${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`)}
+        title={tr(`快捷登录UI · Vault${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`, `Quick UI Login · Vault${uiLoginModal?.targetLabel ? ` · ${uiLoginModal.targetLabel}` : ''}`)}
         onClose={() => setUiLoginModal(null)}
         footer={
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1745,7 +1745,7 @@ export function VaultPage() {
                 onClick={() => setUiLoginModal(null)}
                 className="primary-button"
               >
-                <span>{tr('立即免密打开 Vault UI', 'Open Vault UI (SSO)')}</span>
+                <span>{tr('快捷登录UI', 'Quick UI Login')}</span>
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
             )}

@@ -615,6 +615,7 @@ export function Select({
 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const optionsRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const typeaheadRef = useRef({ text: '', at: 0 });
 
@@ -665,6 +666,10 @@ export function Select({
       const trg = triggerRef.current;
       if (!trg) return;
       const rect = trg.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > window.innerHeight) {
+        closeMenu(false);
+        return;
+      }
       const maxH = 300;
       const below = Math.max(0, window.innerHeight - rect.bottom - 12);
       const above = Math.max(0, rect.top - 12);
@@ -701,7 +706,7 @@ export function Select({
     place();
     const raf = window.requestAnimationFrame(place);
     if (showSearch) {
-      window.setTimeout(() => searchRef.current?.focus(), 0);
+      window.setTimeout(() => searchRef.current?.focus({ preventScroll: true }), 0);
     }
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
@@ -723,7 +728,14 @@ export function Select({
       setActiveIdx(next >= 0 ? next : 0);
     }
     const el = panelRef.current?.querySelector<HTMLElement>(`[data-opt-idx="${activeIdx}"]`);
-    el?.scrollIntoView({ block: 'nearest' });
+    const list = optionsRef.current;
+    // 只滚动选项容器，避免固定定位菜单带动整页滚出触发按钮。
+    if (el && list) {
+      const optionRect = el.getBoundingClientRect();
+      const listRect = list.getBoundingClientRect();
+      if (optionRect.top < listRect.top) list.scrollTop -= listRect.top - optionRect.top;
+      else if (optionRect.bottom > listRect.bottom) list.scrollTop += optionRect.bottom - listRect.bottom;
+    }
   }, [activeIdx, filtered, open]);
 
   const moveActive = (delta: number) => {
@@ -884,7 +896,7 @@ export function Select({
               </div>
             )}
 
-            <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain">
+            <div ref={optionsRef} className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain">
               {filtered.length === 0 ? (
                 <div className="px-3 py-4 text-center text-xs text-slate-400 dark:text-slate-500">
                   {tr('没有匹配的选项', 'No matching options')}
@@ -1266,6 +1278,16 @@ export function SectionTabs({
   variant?: 'pill' | 'underline';
 }) {
   const { tr } = useI18n();
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const nav = navRef.current;
+    const selected = nav?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!nav || !selected) return;
+    const rect = selected.getBoundingClientRect();
+    const container = nav.getBoundingClientRect();
+    if (rect.left < container.left) nav.scrollLeft -= container.left - rect.left;
+    else if (rect.right > container.right) nav.scrollLeft += rect.right - container.right;
+  }, [active]);
   const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
@@ -1285,10 +1307,11 @@ export function SectionTabs({
   if (variant === 'underline') {
     return (
       <nav
+        ref={navRef}
         role="tablist"
         aria-label={tr('页面分区', 'Page sections')}
         onKeyDown={handleKeyDown}
-        className="max-w-full overflow-x-auto scrollbar-none inline-flex items-center gap-1 border-b border-slate-200/80 dark:border-slate-800"
+        className="nd-section-tabs max-w-full overflow-x-auto inline-flex items-center gap-1 border-b border-slate-200/80 dark:border-slate-800"
       >
         {tabs.map((t) => {
           const isActive = active === t.id;
@@ -1334,10 +1357,11 @@ export function SectionTabs({
 
   return (
     <nav
+      ref={navRef}
       role="tablist"
       aria-label={tr('页面分区', 'Page sections')}
       onKeyDown={handleKeyDown}
-      className="max-w-full overflow-x-auto scrollbar-none bg-white dark:bg-slate-900/95 rounded-xl border border-[#e3e8f1] dark:border-slate-800 p-1 inline-flex items-center gap-1 shadow-[0_2px_8px_rgba(15,23,42,0.02)]"
+      className="nd-section-tabs max-w-full overflow-x-auto bg-white dark:bg-slate-900/95 rounded-xl border border-[#e3e8f1] dark:border-slate-800 p-1 inline-flex items-center gap-1 shadow-[0_2px_8px_rgba(15,23,42,0.02)]"
     >
       {tabs.map((t) => {
         const isActive = active === t.id;

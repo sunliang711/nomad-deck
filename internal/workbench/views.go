@@ -49,6 +49,25 @@ func (s *Service) JobView(ctx context.Context, clusterID, ns, jobID, view string
 	sub := map[string]string{"summary": "summary", "deployments": "deployments", "allocations": "allocations",
 		"evaluations": "evaluations", "services": "services", "scale": "scale"}[view]
 	switch view {
+	case "allocations":
+		raw, err := s.get(ctx, clusterID, jobPath(ns, jobID, sub))
+		if err != nil {
+			return nil, err
+		}
+		var allocs []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &allocs); err != nil {
+			return nil, fmt.Errorf("decode job allocations: %w", err)
+		}
+		if len(allocs) == 0 {
+			return raw, nil
+		}
+		// Job 专属列表不支持 resources 参数；批量补齐资源，保留原列表的实例范围与顺序。
+		path := "allocations?namespace=" + url.QueryEscape(ns) + "&resources=true&task_states=false&filter=" + url.QueryEscape(fmt.Sprintf("JobID == %q", jobID))
+		resources, err := s.get(ctx, clusterID, path)
+		if err != nil {
+			return nil, err
+		}
+		return mergeAllocationResources(allocs, resources)
 	case "children":
 		return s.get(ctx, clusterID, "jobs?namespace="+url.QueryEscape(ns)+"&prefix="+url.QueryEscape(jobID+"/"))
 	case "periodic":
@@ -70,6 +89,43 @@ func (s *Service) JobView(ctx context.Context, clusterID, ns, jobID, view string
 		return nil, badRequest("不支持的视图 %s", view)
 	}
 	return s.get(ctx, clusterID, jobPath(ns, jobID, sub))
+}
+
+func mergeAllocationResources(allocs []map[string]json.RawMessage, raw json.RawMessage) (json.RawMessage, error) {
+	var resources []struct {
+		ID                 string          `json:"ID"`
+		AllocatedResources json.RawMessage `json:"AllocatedResources"`
+		Resources          json.RawMessage `json:"Resources"`
+		TaskResources      json.RawMessage `json:"TaskResources"`
+	}
+	if err := json.Unmarshal(raw, &resources); err != nil {
+		return nil, fmt.Errorf("decode allocation resources: %w", err)
+	}
+	byID := make(map[string]map[string]json.RawMessage, len(allocs))
+	for _, alloc := range allocs {
+		var id string
+		if err := json.Unmarshal(alloc["ID"], &id); err != nil {
+			return nil, fmt.Errorf("decode allocation ID: %w", err)
+		}
+		byID[id] = alloc
+	}
+	for _, resource := range resources {
+		alloc := byID[resource.ID]
+		if alloc == nil {
+			continue
+		}
+		// 仅复制资源字段，不将 Job 定义或第二次查询中的状态带入运行态列表。
+		for key, value := range map[string]json.RawMessage{
+			"AllocatedResources": resource.AllocatedResources,
+			"Resources":          resource.Resources,
+			"TaskResources":      resource.TaskResources,
+		} {
+			if len(value) > 0 && string(value) != "null" {
+				alloc[key] = value
+			}
+		}
+	}
+	return json.Marshal(allocs)
 }
 
 // ---- Deployments ----

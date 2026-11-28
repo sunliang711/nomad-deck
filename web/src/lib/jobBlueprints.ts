@@ -542,12 +542,14 @@ http {
 
     location = /healthz {
       access_log off;
+      default_type text/plain;
       return 200 "ok\n";
     }
 
     # Optional HTTP -> HTTPS redirect:
     # location / { return 301 https://$host$request_uri; }
     location / {
+      default_type text/plain;
       return 200 "NomadDeck Nginx Gateway ready\n";
     }
   }
@@ -774,10 +776,12 @@ http {
 
     location = /healthz {
       access_log off;
+      default_type text/plain;
       return 200 "ok\n";
     }
 
     location / {
+      default_type text/plain;
       return 200 "NomadDeck OpenResty Gateway ready\n";
     }
   }
@@ -1426,6 +1430,25 @@ EOT
       }
     }
 
+    # Broker 以 rocketmq 用户运行，先准备共享存储目录的所有权。
+    task "prepare-data" {
+      lifecycle {
+        hook    = "prestart"
+        sidecar = false
+      }
+      driver = "docker"
+      config {
+        image   = "busybox:1.37.0"
+        command = "/bin/sh"
+        args    = ["-ec", "chown 3000:3000 /data && chmod 0750 /data"]
+        volumes = ["../alloc/data/rocketmq:/data"]
+      }
+      resources {
+        cpu    = 10
+        memory = 32
+      }
+    }
+
     task "namesrv" {
       driver = "docker"
       config {
@@ -1454,7 +1477,7 @@ EOT
         args    = ["mqbroker", "-n", "\${NOMAD_ADDR_namesrv}", "-c", "/etc/rocketmq/broker.conf"]
         volumes = [
           "local/broker.conf:/etc/rocketmq/broker.conf",
-          "local/store:/home/rocketmq/store",
+          "../alloc/data/rocketmq:/home/rocketmq/store",
         ]
       }
 
@@ -1542,6 +1565,25 @@ EOT
       }
     }
 
+    # 初始化共享数据目录权限，主服务保持镜像默认的非 root 用户。
+    task "prepare-data" {
+      lifecycle {
+        hook    = "prestart"
+        sidecar = false
+      }
+      driver = "docker"
+      config {
+        image   = "busybox:1.37.0"
+        command = "/bin/sh"
+        args    = ["-ec", "chown 65534:65534 /data && chmod 0750 /data"]
+        volumes = ["../alloc/data/prometheus:/data"]
+      }
+      resources {
+        cpu    = 10
+        memory = 32
+      }
+    }
+
     task "prometheus" {
       driver = "docker"
       config {
@@ -1555,7 +1597,7 @@ EOT
         ]
         volumes = [
           "local/prometheus.yml:/etc/prometheus/prometheus.yml",
-          "local/data:/prometheus",
+          "../alloc/data/prometheus:/prometheus",
         ]
       }
 
@@ -1657,12 +1699,31 @@ EOT
       }
     }
 
+    # 初始化共享数据目录权限，主服务保持镜像默认的非 root 用户。
+    task "prepare-data" {
+      lifecycle {
+        hook    = "prestart"
+        sidecar = false
+      }
+      driver = "docker"
+      config {
+        image   = "busybox:1.37.0"
+        command = "/bin/sh"
+        args    = ["-ec", "chown 472:0 /data && chmod 0750 /data"]
+        volumes = ["../alloc/data/grafana:/data"]
+      }
+      resources {
+        cpu    = 10
+        memory = 32
+      }
+    }
+
     task "grafana" {
       driver = "docker"
       config {
         image   = "grafana/grafana:11.4.0"
         ports   = ["http"]
-        volumes = ["local/grafana:/var/lib/grafana"]
+        volumes = ["../alloc/data/grafana:/var/lib/grafana"]
       }
 
       vault {
@@ -1677,6 +1738,8 @@ EOT
       template {
         destination = "secrets/grafana-admin-password"
         perms       = "0600"
+        uid         = 472
+        gid         = 0
         change_mode = "noop"
         data        = <<-EOT
 {{ with secret "secret/data/apps/grafana" }}{{ .Data.data.admin_password }}{{ end }}

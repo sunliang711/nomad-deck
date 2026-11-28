@@ -103,7 +103,11 @@ func TestViewsAndOperations(t *testing.T) {
 	s, dev := setup(t)
 	ctx := context.Background()
 	id := dev.Cluster.ID
-	register(t, dev, sleeper("web"))
+	job := sleeper("web")
+	job["TaskGroups"].([]any)[0].(map[string]any)["Networks"] = []any{map[string]any{
+		"DynamicPorts": []any{map[string]any{"Label": "http", "To": 80}},
+	}}
+	register(t, dev, job)
 	var allocID string
 	for i := 0; i < 60 && allocID == ""; i++ {
 		raw, err := s.JobView(ctx, id, "default", "web", "allocations")
@@ -111,12 +115,21 @@ func TestViewsAndOperations(t *testing.T) {
 			t.Fatal(err)
 		}
 		var allocs []struct {
-			ID           string `json:"ID"`
-			ClientStatus string `json:"ClientStatus"`
+			ID                 string `json:"ID"`
+			ClientStatus       string `json:"ClientStatus"`
+			AllocatedResources struct {
+				Shared struct {
+					Ports []struct{ Value, To int }
+				}
+			}
 		}
 		_ = json.Unmarshal(raw, &allocs)
 		for _, a := range allocs {
 			if a.ClientStatus == "running" {
+				ports := a.AllocatedResources.Shared.Ports
+				if len(ports) != 1 || ports[0].Value <= 0 || ports[0].To != 80 {
+					t.Fatalf("allocation list missing assigned ports: %s", raw)
+				}
 				allocID = a.ID
 			}
 		}

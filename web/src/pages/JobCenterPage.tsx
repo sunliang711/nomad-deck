@@ -116,6 +116,7 @@ export function JobCenterPage() {
   );
   const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'pending' | 'stopped'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [blueprintQuery, setBlueprintQuery] = useState('');
 
   // Composer state
   const [editMode, setEditMode] = useState<'visual' | 'hcl' | 'json'>(() => (isAdmin ? 'visual' : 'hcl'));
@@ -720,6 +721,15 @@ export function JobCenterPage() {
     if (!q) return templates;
     return templates.filter((t) => String(t.name || '').toLowerCase().includes(q));
   }, [templates, searchQuery]);
+
+  const filteredBlueprints = useMemo(() => {
+    const query = blueprintQuery.trim().toLowerCase();
+    if (!query) return STARTER_SAMPLES;
+    return STARTER_SAMPLES.filter((sample) =>
+      [getBlueprintLabel(sample, locale), getBlueprintDesc(sample, locale), ...getBlueprintTags(sample, locale)]
+        .join(' ').toLowerCase().includes(query),
+    );
+  }, [blueprintQuery, locale]);
 
   if (loadingClusters) return <LoadingState label={tr('正在加载 Job 工作区…', 'Loading Job workspace...')} />;
 
@@ -1474,8 +1484,31 @@ export function JobCenterPage() {
             title={tr(`内置场景蓝图 (${STARTER_SAMPLES.length})`, `Starter Blueprints (${STARTER_SAMPLES.length})`)}
             description={tr('点击即可载入可视化编排工作台，快速修改镜像、端口、资源与 Vault 密钥并运行', 'Click to load into Visual Composer to customize image, ports, resources, and Vault secrets')}
           >
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <div className="relative w-full sm:max-w-sm">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="search"
+                  aria-label={tr('搜索内置蓝图', 'Search starter blueprints')}
+                  placeholder={tr('搜索名称、用途或标签，如 Vault、网关…', 'Search names, descriptions or tags...')}
+                  value={blueprintQuery}
+                  onChange={(e) => setBlueprintQuery(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                />
+              </div>
+              <span role="status" className="text-xs text-slate-500 dark:text-slate-400">
+                {tr(`${filteredBlueprints.length} / ${STARTER_SAMPLES.length} 个蓝图`, `${filteredBlueprints.length} / ${STARTER_SAMPLES.length} blueprints`)}
+              </span>
+            </div>
+            {filteredBlueprints.length === 0 && (
+              <EmptyState
+                title={tr('没有匹配的蓝图', 'No matching blueprints')}
+                description={tr('尝试其他名称、用途或 Docker、Vault 等标签。', 'Try another name, description or a tag such as Docker or Vault.')}
+                action={<Button size="sm" onClick={() => setBlueprintQuery('')}>{tr('清除筛选', 'Clear search')}</Button>}
+              />
+            )}
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 text-xs">
-              {STARTER_SAMPLES.map((s) => {
+              {filteredBlueprints.map((s) => {
                 const reqs = getBlueprintRequires(s, locale);
                 return (
                   <div

@@ -283,6 +283,15 @@
     scrollbar-color: #cbd5e1 transparent;
   }
 
+  .nd-section-tabs {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+
+  html.dark .nd-section-tabs {
+    scrollbar-color: #334155 transparent;
+  }
+
   html.dark .nd-select-panel {
     scrollbar-color: #334155 transparent;
   }

@@ -192,17 +192,17 @@ export function DashboardPage() {
       />
 
       {/* KPI cards */}
-      <div className="grid grid-cols-1 min-[420px]:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
         {cards.map((c: any) => {
           const cardClass =
-            'group text-left bg-white dark:bg-[#0f172a]/95 rounded-2xl border border-[#e3e8f1] dark:border-slate-800/90 shadow-[0_2px_10px_rgba(15,23,42,0.03)] p-4 sm:p-5 flex flex-col justify-between hover:border-indigo-300 dark:hover:border-indigo-500/40 transition';
+            'group min-w-0 text-left bg-white dark:bg-[#0f172a]/95 rounded-2xl border border-[#e3e8f1] dark:border-slate-800/90 shadow-[0_2px_10px_rgba(15,23,42,0.03)] p-3 sm:p-5 flex flex-col justify-between hover:border-indigo-300 dark:hover:border-indigo-500/40 transition';
           const content = (
             <>
               <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
                 <span className="font-medium group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
                   {c.label}
                 </span>
-                <span className={`p-2 rounded-xl shrink-0 ${kpiIconTones[c.tone] || kpiIconTones.indigo}`}>
+                <span className={`p-1.5 sm:p-2 rounded-xl shrink-0 ${kpiIconTones[c.tone] || kpiIconTones.indigo}`}>
                   {c.icon}
                 </span>
               </div>

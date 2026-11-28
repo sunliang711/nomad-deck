@@ -6,6 +6,7 @@ import {
   buildTimeAxisTicks,
   computeYAxisScale,
   extractAllocCapacity,
+  extractAllocPorts,
   extractResourceSamples,
   formatChartPercent,
   formatMiB,
@@ -76,5 +77,68 @@ describe('allocResourceChart', () => {
     assert.equal(formatChartPercent(3.125), '3%');
     assert.equal(formatMiB(8), '8.0 MiB');
     assert.equal(formatMiB(128.4), '128 MiB');
+  });
+
+  it('extracts port mappings from AllocatedResources.Shared.Ports and legacy Networks', () => {
+    assert.deepEqual(
+      extractAllocPorts({
+        AllocatedResources: {
+          Shared: {
+            Ports: [
+              { Label: 'http', Value: 26854, To: 80, HostIP: '10.2.24.178' },
+              { Label: 'metrics', Value: 9090, To: 0, HostIP: '::1' },
+            ],
+          },
+        },
+      }),
+      [
+        {
+          label: 'http',
+          hostIP: '10.2.24.178',
+          hostPort: 26854,
+          mappedPort: 80,
+          hostAddress: '10.2.24.178:26854',
+        },
+        {
+          label: 'metrics',
+          hostIP: '::1',
+          hostPort: 9090,
+          mappedPort: undefined,
+          hostAddress: '[::1]:9090',
+        },
+      ],
+    );
+
+    assert.deepEqual(
+      extractAllocPorts({
+        Resources: {
+          Networks: [
+            {
+              IP: '127.0.0.1',
+              ReservedPorts: [{ Label: 'db', Value: 5432, To: 5432 }],
+              DynamicPorts: [{ Label: 'http', Value: 24001 }],
+            },
+          ],
+        },
+      }),
+      [
+        {
+          label: 'db',
+          hostIP: '127.0.0.1',
+          hostPort: 5432,
+          mappedPort: 5432,
+          hostAddress: '127.0.0.1:5432',
+        },
+        {
+          label: 'http',
+          hostIP: '127.0.0.1',
+          hostPort: 24001,
+          mappedPort: undefined,
+          hostAddress: '127.0.0.1:24001',
+        },
+      ],
+    );
+
+    assert.deepEqual(extractAllocPorts({}), []);
   });
 });

@@ -5,6 +5,72 @@ export interface AllocCapacity {
   memMB: number;
 }
 
+export interface AllocPort {
+  label: string;
+  hostIP: string;
+  hostPort: number;
+  mappedPort?: number;
+  hostAddress: string;
+}
+
+function formatHostPort(hostIP: string, port: number): string {
+  const ip = hostIP.trim();
+  if (!ip) return String(port);
+  const bracketed = ip.includes(':') && !ip.startsWith('[') ? `[${ip}]` : ip;
+  return `${bracketed}:${port}`;
+}
+
+/**
+ * Extracts published port mappings from a Nomad allocation object (supporting
+ * modern `AllocatedResources.Shared.Ports` and legacy `Networks` shapes).
+ */
+export function extractAllocPorts(alloc: any): AllocPort[] {
+  const sharedPorts = alloc?.AllocatedResources?.Shared?.Ports;
+  if (Array.isArray(sharedPorts) && sharedPorts.length > 0) {
+    const out: AllocPort[] = [];
+    for (const p of sharedPorts) {
+      const hostPort = Number(p?.Value || 0);
+      if (!Number.isFinite(hostPort) || hostPort <= 0) continue;
+      const hostIP = typeof p?.HostIP === 'string' ? p.HostIP.trim() : '';
+      const to = Number(p?.To || 0);
+      out.push({
+        label: typeof p?.Label === 'string' && p.Label ? p.Label : String(hostPort),
+        hostIP,
+        hostPort,
+        mappedPort: Number.isFinite(to) && to > 0 ? to : undefined,
+        hostAddress: formatHostPort(hostIP, hostPort),
+      });
+    }
+    if (out.length > 0) return out;
+  }
+
+  const networks =
+    (Array.isArray(alloc?.AllocatedResources?.Shared?.Networks) && alloc.AllocatedResources.Shared.Networks) ||
+    (Array.isArray(alloc?.Resources?.Networks) && alloc.Resources.Networks) ||
+    [];
+  const out: AllocPort[] = [];
+  for (const net of networks) {
+    const hostIP = typeof net?.IP === 'string' ? net.IP.trim() : '';
+    for (const key of ['ReservedPorts', 'DynamicPorts'] as const) {
+      const list = net?.[key];
+      if (!Array.isArray(list)) continue;
+      for (const p of list) {
+        const hostPort = Number(p?.Value || 0);
+        if (!Number.isFinite(hostPort) || hostPort <= 0) continue;
+        const to = Number(p?.To || 0);
+        out.push({
+          label: typeof p?.Label === 'string' && p.Label ? p.Label : String(hostPort),
+          hostIP,
+          hostPort,
+          mappedPort: Number.isFinite(to) && to > 0 ? to : undefined,
+          hostAddress: formatHostPort(hostIP, hostPort),
+        });
+      }
+    }
+  }
+  return out;
+}
+
 export interface ResourceSample {
   ts: number;
   value: number; // utilization percentage (0..100+)

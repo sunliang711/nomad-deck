@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ChevronRight,
   Copy,
+  ExternalLink,
   FileText,
   Folder,
   Minus,
@@ -40,6 +41,7 @@ import {
   AllocCapacity,
   appendResourceSample,
   extractAllocCapacity,
+  extractAllocPorts,
   extractResourceSamples,
   ResourceSample,
 } from '../lib/allocResourceChart';
@@ -775,6 +777,7 @@ export function JobRuntimePanel({
                         <th className="px-3 py-2.5 font-medium">Allocation ID</th>
                         <th className="px-3 py-2.5 font-medium">Task Group</th>
                         <th className="px-3 py-2.5 font-medium">{tr('运行节点', 'Node')}</th>
+                        <th className="px-3 py-2.5 font-medium">{tr('端口 (Ports)', 'Ports')}</th>
                         <th className="px-3 py-2.5 font-medium">{tr('状态 / Tasks', 'Status / Tasks')}</th>
                         <th className="px-3 py-2.5 text-right font-medium">{tr('操作', 'Actions')}</th>
                       </tr>
@@ -783,6 +786,7 @@ export function JobRuntimePanel({
                       {jobAllocs.map((a) => {
                         const taskEntries = Object.entries<any>(a.TaskStates || {});
                         const runningTask = taskEntries.find(([, st]) => st?.State === 'running')?.[0];
+                        const ports = extractAllocPorts(a);
                         return (
                           <tr key={a.ID} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
                             <td className="px-3 py-2.5 font-mono font-semibold text-slate-900 dark:text-slate-100">
@@ -796,6 +800,43 @@ export function JobRuntimePanel({
                             </td>
                             <td className="px-3 py-2.5 text-slate-700 dark:text-slate-300">{a.TaskGroup || '-'}</td>
                             <td className="px-3 py-2.5 font-mono text-slate-600 dark:text-slate-300">{a.NodeName || '-'}</td>
+                            <td className="px-3 py-2.5">
+                              {ports.length === 0 ? (
+                                <span className="text-slate-400">-</span>
+                              ) : (
+                                <div className="flex flex-wrap items-center gap-1">
+                                  {ports.slice(0, 2).map((p) => (
+                                    <button
+                                      key={`${p.label}:${p.hostAddress}`}
+                                      type="button"
+                                      title={tr(`点击复制 ${p.hostAddress}`, `Click to copy ${p.hostAddress}`)}
+                                      onClick={() =>
+                                        void copyText(p.hostAddress)
+                                          .then(() => toast.success(tr(`已复制 ${p.hostAddress}`, `Copied ${p.hostAddress}`)))
+                                          .catch((ex) => toast.error(ex?.message || tr('复制失败', 'Copy failed')))
+                                      }
+                                      className="inline-flex items-center gap-1 rounded-md border border-slate-200/80 bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] text-slate-700 transition hover:border-indigo-300 hover:bg-indigo-50/60 hover:text-indigo-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-indigo-500/40 dark:hover:bg-indigo-950/40 dark:hover:text-indigo-300"
+                                    >
+                                      <span className="font-semibold">{p.label}</span>
+                                      <span className="text-slate-400">·</span>
+                                      <span>{p.hostAddress}</span>
+                                      {p.mappedPort && p.mappedPort !== p.hostPort && (
+                                        <span className="text-slate-400">→{p.mappedPort}</span>
+                                      )}
+                                    </button>
+                                  ))}
+                                  {ports.length > 2 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => void inspectAlloc(a, 'events')}
+                                      className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                                    >
+                                      +{ports.length - 2}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </td>
                             <td className="px-3 py-2.5">
                               <div className="flex flex-wrap items-center gap-1.5">
                                 <StatusBadge value={a.ClientStatus} />
@@ -1003,7 +1044,7 @@ export function JobRuntimePanel({
                 variant="underline"
                 tabs={[
                   { id: 'logs', label: tr('实时日志', 'Live Logs') },
-                  { id: 'events', label: tr('事件与资源', 'Events & Resources') },
+                  { id: 'events', label: tr('端口、资源与事件', 'Ports, Resources & Events') },
                   { id: 'files', label: tr('文件浏览', 'Files') },
                 ]}
                 active={allocTab}
@@ -1029,6 +1070,34 @@ export function JobRuntimePanel({
                 </div>
               )}
             </div>
+
+            {(() => {
+              const selectedPorts = extractAllocPorts(selectedAlloc);
+              if (selectedPorts.length === 0 || allocTab === 'events') return null;
+              return (
+                <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/40">
+                  <span className="font-medium text-slate-500 dark:text-slate-400">Ports:</span>
+                  {selectedPorts.map((p) => (
+                    <button
+                      key={`${p.label}:${p.hostAddress}`}
+                      type="button"
+                      title={tr(`点击复制 ${p.hostAddress}`, `Click to copy ${p.hostAddress}`)}
+                      onClick={() =>
+                        void copyText(p.hostAddress)
+                          .then(() => toast.success(tr(`已复制 ${p.hostAddress}`, `Copied ${p.hostAddress}`)))
+                          .catch((ex) => toast.error(ex?.message || tr('复制失败', 'Copy failed')))
+                      }
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-0.5 font-mono text-[11px] text-slate-700 hover:border-indigo-300 hover:text-indigo-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-indigo-500/40 dark:hover:text-indigo-300"
+                    >
+                      <span className="font-semibold">{p.label}</span>
+                      <span className="text-slate-400">·</span>
+                      <span>{p.hostAddress}</span>
+                      {p.mappedPort && <span className="text-slate-400">→ {p.mappedPort}</span>}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
 
             {allocTab === 'logs' && (
               <div className="space-y-2">
@@ -1070,6 +1139,73 @@ export function JobRuntimePanel({
 
             {allocTab === 'events' && (
               <div className="space-y-4">
+                {(() => {
+                  const selectedPorts = extractAllocPorts(selectedAlloc);
+                  return (
+                    <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+                      <div className="border-b border-slate-200 bg-slate-50/80 px-3.5 py-2.5 font-semibold text-slate-800 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-100">
+                        Ports ({selectedPorts.length})
+                      </div>
+                      {selectedPorts.length === 0 ? (
+                        <div className="px-3.5 py-3 text-slate-400 dark:text-slate-500">
+                          {tr('该 Allocation 未分配端口。', 'No ports allocated for this Allocation.')}
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs">
+                            <thead className="border-b border-slate-200/80 bg-slate-50/40 text-slate-500 dark:border-slate-800 dark:bg-slate-950/30 dark:text-slate-400">
+                              <tr>
+                                <th className="px-3.5 py-2 font-medium">Name</th>
+                                <th className="px-3.5 py-2 font-medium">Host Address</th>
+                                <th className="px-3.5 py-2 font-medium">Mapped Port</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                              {selectedPorts.map((p) => (
+                                <tr key={`${p.label}:${p.hostAddress}`} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
+                                  <td className="px-3.5 py-2 font-mono font-medium text-slate-800 dark:text-slate-100">{p.label}</td>
+                                  <td className="px-3.5 py-2 font-mono">
+                                    <div className="inline-flex items-center gap-2">
+                                      {p.hostIP && p.hostIP !== '0.0.0.0' ? (
+                                        <a
+                                          href={`http://${p.hostAddress}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-1 text-indigo-600 hover:underline dark:text-indigo-400"
+                                        >
+                                          <span>{p.hostAddress}</span>
+                                          <ExternalLink className="h-3 w-3 shrink-0" />
+                                        </a>
+                                      ) : (
+                                        <span className="text-slate-700 dark:text-slate-200">{p.hostAddress}</span>
+                                      )}
+                                      <button
+                                        type="button"
+                                        title={tr('复制 Host Address', 'Copy Host Address')}
+                                        aria-label={tr(`复制 ${p.hostAddress}`, `Copy ${p.hostAddress}`)}
+                                        onClick={() =>
+                                          void copyText(p.hostAddress)
+                                            .then(() => toast.success(tr(`已复制 ${p.hostAddress}`, `Copied ${p.hostAddress}`)))
+                                            .catch((ex) => toast.error(ex?.message || tr('复制失败', 'Copy failed')))
+                                        }
+                                        className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                                      >
+                                        <Copy className="h-3 w-3" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                  <td className="px-3.5 py-2 font-mono text-slate-700 dark:text-slate-200">
+                                    {p.mappedPort ?? '-'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 <ResourceUtilizationPanel
                   cpuSamples={cpuHist}
                   memSamples={memHist}

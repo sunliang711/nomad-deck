@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Container, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Code2, Container, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { useConfirm } from './ConfirmDialog';
 import { useToast } from './Toast';
+import { CodeEditor } from './CodeEditor';
 import { DockerManageModal, dockerModeLabelOf, dockerStatusLabelOf } from './DockerManageModal';
 import { Badge, Button, ErrorAlert, Input, Modal, Select, StatusBadge, TermLabel } from './UI';
 
@@ -903,6 +904,128 @@ export function ClientPluginFields({
   );
 }
 
+const CUSTOM_HCL_PRESETS: Array<{
+  id: string;
+  label: string;
+  labelEn: string;
+  clientOnly?: boolean;
+  hcl: string;
+}> = [
+  {
+    id: 'client-loopback',
+    label: 'Client 默认仅绑定回环（单机+反代）',
+    labelEn: 'Client Loopback Default (Single-Node + Reverse Proxy)',
+    clientOnly: true,
+    hcl: `client {
+  network_interface                  = "lo"
+  preferred_address_family           = "ipv4"
+  bind_wildcard_default_host_network = false
+}`,
+  },
+  {
+    id: 'client-reserved',
+    label: 'Client 预留宿主机资源 (reserved)',
+    labelEn: 'Client Reserved Resources',
+    clientOnly: true,
+    hcl: `client {
+  reserved {
+    cpu    = 200
+    memory = 256
+    disk   = 1024
+  }
+}`,
+  },
+  {
+    id: 'limits',
+    label: '连接限流 (limits)',
+    labelEn: 'Connection Limits',
+    hcl: `limits {
+  http_max_conns_per_client = 200
+}`,
+  },
+];
+
+function CustomHCLSection({
+  scope,
+  value,
+  onChange,
+  includeClientPresets = true,
+}: {
+  scope: 'cluster' | 'node';
+  value: string;
+  onChange: (next: string) => void;
+  includeClientPresets?: boolean;
+}) {
+  const { tr } = useI18n();
+  const hasValue = value.trim().length > 0;
+  const [expanded, setExpanded] = useState(hasValue);
+
+  useEffect(() => {
+    if (value.trim().length > 0) setExpanded(true);
+  }, [value]);
+
+  const fileName = scope === 'cluster' ? '90-cluster-custom.hcl' : '95-node-custom.hcl';
+  const presets = CUSTOM_HCL_PRESETS.filter((p) => !p.clientOnly || includeClientPresets);
+
+  const insertPreset = (hcl: string) => {
+    const trimmed = value.trim();
+    onChange(trimmed ? `${trimmed}\n\n${hcl}\n` : `${hcl}\n`);
+    setExpanded(true);
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-3.5 space-y-2.5 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="inline-flex items-center gap-1.5 font-semibold text-slate-800 dark:text-slate-100 hover:text-indigo-600 dark:hover:text-indigo-400"
+        >
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          <Code2 className="h-3.5 w-3.5 text-indigo-500" />
+          <span>
+            {scope === 'cluster'
+              ? tr(`集群自定义 HCL 配置（${fileName}，高级）`, `Cluster Custom HCL (${fileName}, Advanced)`)
+              : tr(`节点自定义 HCL 配置（${fileName}，高级）`, `Node Custom HCL (${fileName}, Advanced)`)}
+          </span>
+          {hasValue && <Badge tone="blue">{tr('已配置', 'Configured')}</Badge>}
+        </button>
+        {expanded && hasValue && (
+          <Button type="button" size="sm" variant="ghost" onClick={() => onChange('')}>
+            {tr('清空', 'Clear')}
+          </Button>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="space-y-2.5 pt-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">{tr('快捷插入：', 'Quick Insert:')}</span>
+            {presets.map((p) => (
+              <Button key={p.id} type="button" size="sm" onClick={() => insertPreset(p.hcl)}>
+                <Plus className="h-3 w-3" />
+                <span>{tr(p.label, p.labelEn)}</span>
+              </Button>
+            ))}
+          </div>
+          <CodeEditor
+            value={value}
+            onChange={onChange}
+            height="180px"
+            label={tr(`自定义 HCL (${fileName})`, `Custom HCL (${fileName})`)}
+          />
+          <p className="text-[11px] leading-5 text-slate-500 dark:text-slate-400">
+            {tr(
+              `将作为 ${fileName} 随配置代际下发并经 nomad config validate 校验，支持一键回滚。禁止覆盖核心托管项（tls、acl、ports、advertise、bind_addr、data_dir、vault、server.encrypt 等）；请勿在此硬编码明文密码或 Token。`,
+              `Deployed as ${fileName} in the config generation, verified with nomad config validate, and rollback-safe. Overriding core managed fields (tls, acl, ports, advertise, bind_addr, data_dir, vault, server.encrypt, etc.) is blocked. Do not hardcode plaintext secrets or tokens here.`,
+            )}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function NomadClusterSettingsModal({
   open,
   cluster,
@@ -927,6 +1050,7 @@ export function NomadClusterSettingsModal({
   const [vaultUIURL, setVaultUIURL] = useState('');
   const [jobGC, setJobGC] = useState('');
   const [execEnabled, setExecEnabled] = useState(true);
+  const [customHCL, setCustomHCL] = useState('');
   const [nomadProxyEnabled, setNomadProxyEnabled] = useState(false);
   const [confirmSingle, setConfirmSingle] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -948,6 +1072,7 @@ export function NomadClusterSettingsModal({
     setVaultUIURL(ui.vault_ui_url || '');
     setJobGC(st.job_gc_threshold || '');
     setExecEnabled(st.exec_enabled !== false);
+    setCustomHCL(st.custom_hcl || '');
     setConfirmSingle(false);
     setErr('');
 
@@ -971,6 +1096,7 @@ export function NomadClusterSettingsModal({
         ...buildTelemetryPayload(telemetryDraft),
         job_gc_threshold: jobGC.trim(),
         exec_enabled: execEnabled,
+        custom_hcl: customHCL,
         confirm_single_node: confirmSingle,
         ui: {
           disabled: !uiEnabled,
@@ -1043,6 +1169,7 @@ export function NomadClusterSettingsModal({
           )}
         </div>
         <TelemetryFields value={telemetryDraft} onChange={setTelemetryDraft} />
+        <CustomHCLSection scope="cluster" value={customHCL} onChange={setCustomHCL} />
         {isSingleDeployed && (
           <label className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 cursor-pointer">
             <input
@@ -1091,6 +1218,7 @@ export function NomadNodeConfigModal({
   const [cniVersion, setCniVersion] = useState('');
   const [reinstallCNI, setReinstallCNI] = useState(false);
   const [extraSANs, setExtraSANs] = useState('');
+  const [customHCL, setCustomHCL] = useState('');
   const [nomadProxyEnabled, setNomadProxyEnabled] = useState(false);
   const [confirmSingle, setConfirmSingle] = useState(false);
   const [dockerInfo, setDockerInfo] = useState<any>(null);
@@ -1125,6 +1253,7 @@ export function NomadNodeConfigModal({
     setCniVersion(cluster.settings?.cni_version || '');
     setReinstallCNI(false);
     setExtraSANs(Array.isArray(member.config?.extra_sans) ? member.config.extra_sans.join(', ') : '');
+    setCustomHCL(member.config?.custom_hcl || '');
     setConfirmSingle(false);
     setDockerModalOpen(false);
     setDockerInfo(null);
@@ -1168,6 +1297,7 @@ export function NomadNodeConfigModal({
       const res = await apiPut(`/api/v1/clusters/${cluster.id}/nodes/${member.node_id}/config`, {
         ...clientPayload,
         extra_sans: sans.length > 0 ? sans : undefined,
+        custom_hcl: customHCL,
         reinstall_cni: reinstallCNI,
         confirm_single_node: confirmSingle,
       });
@@ -1301,6 +1431,8 @@ export function NomadNodeConfigModal({
             onChange={(e) => setExtraSANs(e.target.value)}
           />
         )}
+
+        <CustomHCLSection scope="node" value={customHCL} onChange={setCustomHCL} includeClientPresets={isClient} />
 
         {showCNIProxyOption && (
           <div className="flex flex-wrap items-center justify-between gap-2 text-slate-500 dark:text-slate-400">

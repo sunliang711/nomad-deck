@@ -164,7 +164,7 @@ func (s *Service) nodeConfig(gi *genInput, m *db.ClusterNode, gen int) NodeConfi
 		UI: cl.Settings.UI, Telemetry: !cl.Settings.DisableTelemetry, TelemetryOptions: cl.Settings.Telemetry,
 		JobGC: cl.Settings.JobGCThreshold, NodePool: mc.NodePool, Meta: mc.Meta, HostVolumes: mc.HostVolumes,
 		HostNetworks: mc.HostNetworks, Docker: mc.Docker, RawExec: mc.RawExec, Denylist: mc.Denylist, CNI: mc.CNI,
-		CPUTotal: mc.CPUTotalCompute}
+		CPUTotal: mc.CPUTotalCompute, ClusterCustomHCL: cl.Settings.CustomHCL, NodeCustomHCL: mc.CustomHCL}
 }
 
 // buildGeneration renders a complete config generation for a node: the HCL

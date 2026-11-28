@@ -151,6 +151,8 @@ type NodeConfig struct {
 	Denylist         []string
 	CNI              bool
 	CPUTotal         int
+	ClusterCustomHCL string
+	NodeCustomHCL    string
 	// Extra holds integration fragments (e.g. 60-vault.hcl, tls/vault-ca.crt)
 	// keyed by file name relative to the generation directory.
 	Extra map[string]string
@@ -410,6 +412,101 @@ func RenderCNI() string {
 	return fmt.Sprintf("%s\nclient {\n  cni_path       = %q\n  cni_config_dir = %q\n}\n", ManagedMark, CNIBinDir, CNIConfDir)
 }
 
+const maxCustomHCLBytes = 64 << 10
+
+var (
+	protectedTopAttrs = map[string]string{
+		"data_dir":   "数据目录由 NomadDeck 托管",
+		"bind_addr":  "监听地址由 NomadDeck 托管",
+		"region":     "Region 需在集群创建时指定",
+		"datacenter": "Datacenter 需在集群创建时指定",
+		"name":       "节点名称由 NomadDeck 托管",
+	}
+	protectedTopBlocks = map[string]string{
+		"tls":       "TLS 证书与校验由 NomadDeck 托管",
+		"acl":       "ACL 由 NomadDeck 托管",
+		"ports":     "端口配置由 NomadDeck 托管",
+		"advertise": "节点通告地址由 NomadDeck 托管",
+		"vault":     "Vault 集成由「集群联动」页面托管",
+	}
+	protectedServerKeys = map[string]string{
+		"enabled":          "Server 角色开关由节点角色托管",
+		"bootstrap_expect": "Raft 仲裁数量由集群成员托管",
+		"encrypt":          "Gossip 加密密钥由 NomadDeck 托管（请使用密钥轮换）",
+		"server_join":      "集群发现列表由 NomadDeck 托管",
+	}
+	protectedClientKeys = map[string]string{
+		"enabled":     "Client 角色开关由节点角色托管",
+		"server_join": "Server 发现列表由 NomadDeck 托管",
+	}
+)
+
+// ValidateCustomHCL verifies that a user-supplied custom HCL snippet parses
+// cleanly and does not override NomadDeck-managed core settings (TLS, ACL,
+// ports, advertise, gossip encrypt, Vault integration, etc.).
+func ValidateCustomHCL(name, src string) error {
+	trimmed := strings.TrimSpace(src)
+	if trimmed == "" {
+		return nil
+	}
+	if len(trimmed) > maxCustomHCLBytes {
+		return badRequest("自定义 HCL 内容不能超过 64 KiB")
+	}
+	file, diags := hclsyntax.ParseConfig([]byte(trimmed), name, hcl.InitialPos)
+	if diags.HasErrors() {
+		return badRequest("自定义 HCL 语法错误：%s", diags.Error())
+	}
+	body, ok := file.Body.(*hclsyntax.Body)
+	if !ok {
+		return badRequest("自定义 HCL 结构无效")
+	}
+	for attr := range body.Attributes {
+		if reason, blocked := protectedTopAttrs[attr]; blocked {
+			return badRequest("自定义 HCL 不允许覆盖顶层配置项 %q（%s）", attr, reason)
+		}
+	}
+	for _, blk := range body.Blocks {
+		if reason, blocked := protectedTopBlocks[blk.Type]; blocked {
+			return badRequest("自定义 HCL 不允许覆盖托管配置块 %q（%s）", blk.Type, reason)
+		}
+		switch blk.Type {
+		case "server":
+			for attr := range blk.Body.Attributes {
+				if reason, blocked := protectedServerKeys[attr]; blocked {
+					return badRequest("自定义 HCL 不允许覆盖 server.%s（%s）", attr, reason)
+				}
+			}
+			for _, sub := range blk.Body.Blocks {
+				if reason, blocked := protectedServerKeys[sub.Type]; blocked {
+					return badRequest("自定义 HCL 不允许覆盖 server.%s 块（%s）", sub.Type, reason)
+				}
+			}
+		case "client":
+			for attr := range blk.Body.Attributes {
+				if reason, blocked := protectedClientKeys[attr]; blocked {
+					return badRequest("自定义 HCL 不允许覆盖 client.%s（%s）", attr, reason)
+				}
+			}
+			for _, sub := range blk.Body.Blocks {
+				if reason, blocked := protectedClientKeys[sub.Type]; blocked {
+					return badRequest("自定义 HCL 不允许覆盖 client.%s 块（%s）", sub.Type, reason)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// RenderCustomHCL wraps a user-supplied custom HCL snippet with the NomadDeck
+// managed header.
+func RenderCustomHCL(src string) string {
+	trimmed := strings.TrimSpace(src)
+	if trimmed == "" {
+		return ""
+	}
+	return ManagedMark + "\n" + trimmed + "\n"
+}
+
 // GenerationFile is one file of a config generation.
 type GenerationFile struct {
 	Name    string // relative name, e.g. 10-base.hcl or tls/agent-key.pem
@@ -457,6 +554,18 @@ func RenderFiles(c NodeConfig) ([]GenerationFile, error) {
 		if c.CNI {
 			files = append(files, GenerationFile{Name: "83-cni.hcl", Content: []byte(RenderCNI())})
 		}
+	}
+	if strings.TrimSpace(c.ClusterCustomHCL) != "" {
+		if err := ValidateCustomHCL("90-cluster-custom.hcl", c.ClusterCustomHCL); err != nil {
+			return nil, err
+		}
+		files = append(files, GenerationFile{Name: "90-cluster-custom.hcl", Content: []byte(RenderCustomHCL(c.ClusterCustomHCL))})
+	}
+	if strings.TrimSpace(c.NodeCustomHCL) != "" {
+		if err := ValidateCustomHCL("95-node-custom.hcl", c.NodeCustomHCL); err != nil {
+			return nil, err
+		}
+		files = append(files, GenerationFile{Name: "95-node-custom.hcl", Content: []byte(RenderCustomHCL(c.NodeCustomHCL))})
 	}
 	names := make([]string, 0, len(c.Extra))
 	for n := range c.Extra {

@@ -41,6 +41,12 @@ func sampleConfig(role string) NodeConfig {
 			ExtraLabels: []string{"job_name", "task_group_name", "task_name", "namespace", "node_name", "short_alloc_id"},
 		},
 		RawExec: true, Denylist: []string{"java"}, CNI: true, CPUTotal: 4000,
+		ClusterCustomHCL: `leave_on_interrupt = true`,
+		NodeCustomHCL: `client {
+  network_interface                  = "lo"
+  preferred_address_family           = "ipv4"
+  bind_wildcard_default_host_network = false
+}`,
 		Extra: map[string]string{"60-vault.hcl": "# Managed by NomadDeck\nvault {\n  enabled = true\n}\n"}}
 }
 
@@ -92,6 +98,12 @@ func TestRenderFiles(t *testing.T) {
 			!strings.Contains(names["30-tls.hcl"], "verify_https_client    = false") {
 			t.Errorf("tls fragment: %s", names["30-tls.hcl"])
 		}
+		if !strings.Contains(names["90-cluster-custom.hcl"], "leave_on_interrupt = true") {
+			t.Errorf("%s: missing cluster custom hcl: %s", role, names["90-cluster-custom.hcl"])
+		}
+		if !strings.Contains(names["95-node-custom.hcl"], `network_interface                  = "lo"`) {
+			t.Errorf("%s: missing node custom hcl: %s", role, names["95-node-custom.hcl"])
+		}
 	}
 	if RunUser(RoleServer) != "nomad" || RunUser(RoleClient) != "root" || RunUser(RoleServerClient) != "root" {
 		t.Error("run user by role")
@@ -100,6 +112,55 @@ func TestRenderFiles(t *testing.T) {
 	for _, want := range []string{ModulesLoadFile, SysctlFile, "br_netfilter", "net.bridge.bridge-nf-call-iptables = 1"} {
 		if !strings.Contains(cniScript, want) {
 			t.Errorf("CNIInstallScript missing %q", want)
+		}
+	}
+}
+
+func TestValidateCustomHCL(t *testing.T) {
+	valid := []string{
+		"",
+		"   \n\t ",
+		`client {
+  network_interface                  = "lo"
+  preferred_address_family           = "ipv4"
+  bind_wildcard_default_host_network = false
+}`,
+		`leave_on_interrupt = true
+limits {
+  http_max_conns_per_client = 200
+}`,
+		`server {
+  heartbeat_grace = "10s"
+}`,
+	}
+	for _, src := range valid {
+		if err := ValidateCustomHCL("95-node-custom.hcl", src); err != nil {
+			t.Fatalf("expected valid custom HCL, got %v\n%s", err, src)
+		}
+	}
+
+	invalid := []struct {
+		name string
+		src  string
+	}{
+		{"syntax", `client { network_interface = `},
+		{"top_attr_data_dir", `data_dir = "/tmp/nomad"`},
+		{"top_attr_bind_addr", `bind_addr = "127.0.0.1"`},
+		{"top_block_tls", `tls { http = false }`},
+		{"top_block_acl", `acl { enabled = false }`},
+		{"top_block_ports", `ports { http = 4646 }`},
+		{"top_block_advertise", `advertise { http = "127.0.0.1" }`},
+		{"top_block_vault", `vault { enabled = true }`},
+		{"server_encrypt", `server { encrypt = "abc" }`},
+		{"server_bootstrap", `server { bootstrap_expect = 1 }`},
+		{"server_join", `server { server_join { retry_join = ["127.0.0.1"] } }`},
+		{"client_enabled", `client { enabled = false }`},
+		{"client_join", `client { server_join { retry_join = ["127.0.0.1"] } }`},
+		{"too_large", strings.Repeat("# a\n", (maxCustomHCLBytes/4)+10)},
+	}
+	for _, tc := range invalid {
+		if err := ValidateCustomHCL("95-node-custom.hcl", tc.src); err == nil {
+			t.Fatalf("case %s: expected error for custom HCL, got nil", tc.name)
 		}
 	}
 }

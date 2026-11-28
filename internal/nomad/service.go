@@ -78,6 +78,8 @@ type Settings struct {
 	DockerDefaults json.RawMessage `json:"docker_defaults,omitempty"`
 	// Consul is reserved for a future Consul integration (65-consul.hcl).
 	Consul json.RawMessage `json:"consul,omitempty"`
+	// CustomHCL holds optional cluster-wide custom Nomad HCL (90-cluster-custom.hcl).
+	CustomHCL string `json:"custom_hcl,omitempty"`
 }
 
 func (s *Settings) defaults() {
@@ -115,6 +117,8 @@ type MemberConfig struct {
 	ExtraSANs        []string `json:"extra_sans,omitempty"`
 	// ClientNodeID is the Nomad node ID of the client once registered.
 	ClientNodeID string `json:"client_node_id,omitempty"`
+	// CustomHCL holds optional node-scoped custom Nomad HCL (95-node-custom.hcl).
+	CustomHCL string `json:"custom_hcl,omitempty"`
 	ClientSettings
 }
 
@@ -229,6 +233,7 @@ type CreateInput struct {
 	RPCPort           int                   `json:"rpc_port"`
 	SerfPort          int                   `json:"serf_port"`
 	CNIVersion        string                `json:"cni_version"`
+	CustomHCL         string                `json:"custom_hcl"`
 	ClientDefaults    ClientSettings        `json:"client_defaults"`
 	Nodes             []cluster.MemberInput `json:"nodes"`
 }
@@ -481,11 +486,16 @@ func (s *Service) CreateCluster(ctx context.Context, actor audit.Actor, in Creat
 	if err := validateTelemetry(in.Telemetry); err != nil {
 		return nil, err
 	}
+	in.CustomHCL = strings.TrimSpace(in.CustomHCL)
+	if err := ValidateCustomHCL("90-cluster-custom.hcl", in.CustomHCL); err != nil {
+		return nil, err
+	}
 	if in.ClientDefaults.CNI && in.CNIVersion == "" {
 		return nil, badRequest("启用 CNI 时需选择 CNI 版本")
 	}
 	st := Settings{HTTPPort: in.HTTPPort, RPCPort: in.RPCPort, SerfPort: in.SerfPort, AllowInsecureHTTP: in.AllowInsecureHTTP,
-		VerifyHTTPSClient: in.VerifyHTTPSClient, DisableTelemetry: in.DisableTelemetry, JobGCThreshold: in.JobGCThreshold, CNIVersion: in.CNIVersion}
+		VerifyHTTPSClient: in.VerifyHTTPSClient, DisableTelemetry: in.DisableTelemetry, JobGCThreshold: in.JobGCThreshold,
+		CNIVersion: in.CNIVersion, CustomHCL: in.CustomHCL}
 	if in.Telemetry != nil {
 		st.Telemetry = *in.Telemetry
 		if in.Telemetry.PrometheusMetrics != nil && in.Telemetry.PublishAllocationMetrics != nil && in.Telemetry.PublishNodeMetrics != nil {

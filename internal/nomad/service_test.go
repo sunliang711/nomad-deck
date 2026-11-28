@@ -388,8 +388,31 @@ func TestUndeployedNodeConfigAndCNISettings(t *testing.T) {
 	goodInterval := "1s"
 	disableHost := false
 	jobGC := "4h"
+	clusterHCL := "leave_on_interrupt = true"
+	badCustomHCL := "tls { http = false }"
+	if _, err := e.s.UpdateSettings(ctx, testActor, cl.ID, SettingsInput{CustomHCL: &badCustomHCL}); err == nil {
+		t.Fatal("expected forbidden custom_hcl block to fail on cluster settings")
+	}
+	if _, err := e.s.UpdateNodeConfig(ctx, testActor, cl.ID, "h1", NodeConfigInput{CustomHCL: &badCustomHCL}); err == nil {
+		t.Fatal("expected forbidden custom_hcl block to fail on node config")
+	}
+	nodeHCL := "client {\n  network_interface = \"lo\"\n  preferred_address_family = \"ipv4\"\n  bind_wildcard_default_host_network = false\n}"
+	if _, err := e.s.UpdateNodeConfig(ctx, testActor, cl.ID, "h1", NodeConfigInput{
+		ClientSettings: mc.ClientSettings,
+		CustomHCL:      &nodeHCL,
+	}); err != nil {
+		t.Fatalf("update pending node custom_hcl: %v", err)
+	}
+	m1After, err := db.GetClusterNode(ctx, e.s.DB.Reader, cl.ID, "h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if memberConfig(m1After).CustomHCL != nodeHCL {
+		t.Fatalf("unexpected persisted node custom_hcl: %q", memberConfig(m1After).CustomHCL)
+	}
 	if _, err := e.s.UpdateSettings(ctx, testActor, cl.ID, SettingsInput{
 		JobGCThreshold: &jobGC,
+		CustomHCL:      &clusterHCL,
 		Telemetry: &TelemetrySettings{
 			CollectionInterval: goodInterval,
 			DisableHostname:    &disableHost,
@@ -398,7 +421,7 @@ func TestUndeployedNodeConfigAndCNISettings(t *testing.T) {
 		t.Fatalf("update pending cluster telemetry/job_gc_threshold: %v", err)
 	}
 	updatedCl := e.load()
-	if updatedCl.Settings.JobGCThreshold != "4h" || updatedCl.Settings.Telemetry.CollectionInterval != "1s" ||
+	if updatedCl.Settings.JobGCThreshold != "4h" || updatedCl.Settings.CustomHCL != clusterHCL || updatedCl.Settings.Telemetry.CollectionInterval != "1s" ||
 		updatedCl.Settings.Telemetry.DisableHostname == nil || *updatedCl.Settings.Telemetry.DisableHostname {
 		t.Fatalf("unexpected persisted cluster settings: %+v", updatedCl.Settings)
 	}

@@ -756,6 +756,7 @@ func (s *Service) NodeService(ctx context.Context, actor audit.Actor, clusterID,
 type NodeConfigInput struct {
 	ClientSettings
 	ExtraSANs     []string `json:"extra_sans"`
+	CustomHCL     *string  `json:"custom_hcl"`
 	ReinstallCNI  bool     `json:"reinstall_cni"`
 	UseProxy      *bool    `json:"use_proxy"`
 	ConfirmSingle bool     `json:"confirm_single_node"`
@@ -789,6 +790,11 @@ func (s *Service) UpdateNodeConfig(ctx context.Context, actor audit.Actor, clust
 			return nil, badRequest("证书附加 SAN %q 不合法", h)
 		}
 	}
+	if in.CustomHCL != nil {
+		if err := ValidateCustomHCL("95-node-custom.hcl", *in.CustomHCL); err != nil {
+			return nil, err
+		}
+	}
 	if in.CNI && cl.Settings.CNIVersion == "" {
 		return nil, badRequest("集群未选择 CNI 版本，不能启用 CNI")
 	}
@@ -804,6 +810,9 @@ func (s *Service) UpdateNodeConfig(ctx context.Context, actor audit.Actor, clust
 	old := memberConfig(m)
 	next := old
 	next.ClientSettings, next.ExtraSANs = in.ClientSettings, in.ExtraSANs
+	if in.CustomHCL != nil {
+		next.CustomHCL = strings.TrimSpace(*in.CustomHCL)
+	}
 	if m.InstallState != "installed" {
 		setMemberConfig(m, next)
 		if err := db.UpdateClusterNodeInstall(ctx, s.DB.Writer, m, s.DB.Now()); err != nil {
@@ -1076,6 +1085,7 @@ type SettingsInput struct {
 	JobGCThreshold   *string            `json:"job_gc_threshold"`
 	ExecEnabled      *bool              `json:"exec_enabled"`
 	CNIVersion       *string            `json:"cni_version"`
+	CustomHCL        *string            `json:"custom_hcl"`
 	UseProxy         *bool              `json:"use_proxy"`
 	ConfirmSingle    bool               `json:"confirm_single_node"`
 }
@@ -1141,6 +1151,15 @@ func (s *Service) UpdateSettings(ctx context.Context, actor audit.Actor, cluster
 	if in.ExecEnabled != nil {
 		v := *in.ExecEnabled
 		cl.Settings.ExecEnabled = &v
+	}
+	if in.CustomHCL != nil {
+		trimmed := strings.TrimSpace(*in.CustomHCL)
+		if trimmed != cl.Settings.CustomHCL {
+			if err := ValidateCustomHCL("90-cluster-custom.hcl", trimmed); err != nil {
+				return nil, err
+			}
+			cl.Settings.CustomHCL, rollout = trimmed, true
+		}
 	}
 	if in.CNIVersion != nil && *in.CNIVersion != cl.Settings.CNIVersion {
 		if *in.CNIVersion == "" {

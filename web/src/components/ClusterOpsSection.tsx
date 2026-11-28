@@ -592,6 +592,9 @@ export function ClusterOpsSection({
                               {Array.isArray(nodeConfigs?.[n.node_id]?.host_networks) && nodeConfigs[n.node_id].host_networks.length > 0 && (
                                 <Badge tone="blue">HN×{nodeConfigs[n.node_id].host_networks.length}</Badge>
                               )}
+                              {Boolean(nodeConfigs?.[n.node_id]?.custom_hcl) && (
+                                <Badge tone="blue">{tr('自定义 HCL', 'Custom HCL')}</Badge>
+                              )}
                             </div>
                           )}
                         </td>

@@ -1226,6 +1226,7 @@ export function NomadPage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={() => setUiLoginModal(null)}
+                data-autofocus
                 className="primary-button"
               >
                 <span>{tr('快捷登录UI', 'Quick UI Login')}</span>

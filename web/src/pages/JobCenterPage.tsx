@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
+  BookOpen,
   Boxes,
   Copy,
   Download,
@@ -61,6 +62,7 @@ import { ItemSwitcher } from '../components/ItemSwitcher';
 import { VisualJobBuilder, type VisualJobBuilderHandle } from '../components/VisualJobBuilder';
 import { JobRuntimePanel, type JobRuntimeRef } from '../components/JobRuntimePanel';
 import { JobPreflightPanel } from '../components/JobPreflightPanel';
+import { JobUsagePanel } from '../components/JobUsagePanel';
 import {
   VaultKVQuickFixModal,
   VaultRoleQuickFixModal,
@@ -149,6 +151,7 @@ export function JobCenterPage() {
     hcl: string;
     blueprint?: JobBlueprint | null;
     customDescription?: string;
+    connectionGuide?: boolean;
   } | null>(null);
   const [previewChecks, setPreviewChecks] = useState<PreflightCheck[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -1223,6 +1226,14 @@ export function JobCenterPage() {
               onFixAction={handleFixAction}
             />
 
+            <JobUsagePanel
+              source={hcl}
+              clusterId={clusterId}
+              namespace={effectiveBuilderNamespace}
+              inputType={editMode === 'json' ? 'json' : 'hcl'}
+              isAdmin={isAdmin}
+            />
+
             {editMode === 'visual' ? (
               <VisualJobBuilder
                 ref={visualRef}
@@ -1574,6 +1585,13 @@ export function JobCenterPage() {
                         <ShieldCheck className="h-3.5 w-3.5" />
                         <span>{tr('前置体检', 'Preflight')}</span>
                       </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => setPreviewTarget({ title: getBlueprintLabel(s, locale), hcl: s.hcl, blueprint: s, connectionGuide: true })}
+                      >
+                        <BookOpen className="h-3.5 w-3.5" />
+                        <span>{tr('连接与使用', 'Connect & Use')}</span>
+                      </Button>
                     </div>
                   </div>
                 );
@@ -1851,7 +1869,7 @@ export function JobCenterPage() {
         open={Boolean(previewTarget)}
         title={
           previewTarget
-            ? tr(`前置条件与实时体检 · ${previewTarget.title}`, `Prerequisites & Live Preflight · ${previewTarget.title}`)
+            ? tr(`模板指引 · ${previewTarget.title}`, `Template Guide · ${previewTarget.title}`)
             : ''
         }
         onClose={() => setPreviewTarget(null)}
@@ -1873,9 +1891,16 @@ export function JobCenterPage() {
               clusterName={selectedCluster?.name}
               needsDeployment={needsDeployment}
               isAdmin={isAdmin}
-              defaultExpanded
+              defaultExpanded={!previewTarget.connectionGuide}
               onRefresh={() => void runPreviewPreflight(previewTarget)}
               onFixAction={handleFixAction}
+            />
+            <JobUsagePanel
+              source={previewTarget.hcl}
+              clusterId={clusterId}
+              namespace={effectiveBuilderNamespace}
+              isAdmin={isAdmin}
+              defaultExpanded={previewTarget.connectionGuide}
             />
             <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200/70 pt-3 dark:border-slate-800">
               <Button size="sm" onClick={() => setPreviewTarget(null)}>

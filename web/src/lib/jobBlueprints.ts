@@ -1049,7 +1049,8 @@ EOT
   type        = "service"
 
   group "database" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "db" {
         static = 5432
@@ -1060,6 +1061,18 @@ EOT
     ephemeral_disk {
       size   = 1024
       sticky = true
+    }
+
+    service {
+      name     = "postgres"
+      port     = "db"
+      provider = "nomad"
+      check {
+        name     = "tcp-postgres"
+        type     = "tcp"
+        interval = "15s"
+        timeout  = "3s"
+      }
     }
 
     task "postgres" {
@@ -1142,7 +1155,8 @@ EOT
   type        = "service"
 
   group "database" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "db" {
         static = 3306
@@ -1153,6 +1167,18 @@ EOT
     ephemeral_disk {
       size   = 2048
       sticky = true
+    }
+
+    service {
+      name     = "mysql"
+      port     = "db"
+      provider = "nomad"
+      check {
+        name     = "tcp-mysql"
+        type     = "tcp"
+        interval = "15s"
+        timeout  = "3s"
+      }
     }
 
     task "mysql" {
@@ -1233,7 +1259,8 @@ EOT
   type        = "service"
 
   group "cache" {
-    count = 1
+    count          = 1
+    shutdown_delay = "5s"
     network {
       port "redis" {
         static = 6379
@@ -1244,6 +1271,18 @@ EOT
     ephemeral_disk {
       size   = 512
       sticky = true
+    }
+
+    service {
+      name     = "redis"
+      port     = "redis"
+      provider = "nomad"
+      check {
+        name     = "tcp-redis"
+        type     = "tcp"
+        interval = "15s"
+        timeout  = "3s"
+      }
     }
 
     task "redis" {

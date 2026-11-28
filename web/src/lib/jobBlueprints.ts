@@ -225,8 +225,8 @@ EOT
     ],
     notes: [
       {
-        title: '可选：启用 Nomad 服务发现 (providers.nomad)',
-        titleEn: 'Optional: Enable Nomad service discovery (providers.nomad)',
+        title: '可选：启用 Traefik 的 Nomad 服务发现（providers.nomad）',
+        titleEn: 'Optional: Enable Traefik Nomad service discovery (providers.nomad)',
         detail: '在「Nomad 集群 → 治理 → ACL Policies」建只读 Policy（namespace "*" read + node read），再到「ACL Tokens & Roles → 签发 Client Token」获取 Secret ID；若需校验 Nomad TLS，挂载 /opt/nomad-deck/nomad/etc/nomad.d/tls/ca.pem 并取消 traefik.yml 中 nomad provider 注释。',
         detailEn: 'Create a read-only ACL Policy (namespace "*" read + node read) under Nomad Cluster -> Governance -> ACL Policies, issue a Client Token, mount the Nomad CA if using TLS, and uncomment providers.nomad in traefik.yml.',
         optional: true,

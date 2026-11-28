@@ -1015,6 +1015,7 @@ export function Modal({
   busy = false,
   dismissible = true,
   closeOnBackdrop = false,
+  closeOnBackdropDoubleClick = true,
   backdropClassName = '',
   placement = 'center',
   footer,
@@ -1028,6 +1029,7 @@ export function Modal({
   busy?: boolean;
   dismissible?: boolean;
   closeOnBackdrop?: boolean;
+  closeOnBackdropDoubleClick?: boolean;
   backdropClassName?: string;
   placement?: 'center' | 'right';
   footer?: React.ReactNode;
@@ -1042,6 +1044,7 @@ export function Modal({
       busy={busy}
       dismissible={dismissible}
       closeOnBackdrop={closeOnBackdrop}
+      closeOnBackdropDoubleClick={closeOnBackdropDoubleClick}
       backdropClassName={backdropClassName}
       placement={placement}
       footer={footer}
@@ -1059,6 +1062,7 @@ function ModalDialog({
   busy,
   dismissible,
   closeOnBackdrop,
+  closeOnBackdropDoubleClick,
   backdropClassName,
   placement,
   footer,
@@ -1070,6 +1074,7 @@ function ModalDialog({
   busy: boolean;
   dismissible: boolean;
   closeOnBackdrop: boolean;
+  closeOnBackdropDoubleClick: boolean;
   backdropClassName: string;
   placement: 'center' | 'right';
   footer?: React.ReactNode;
@@ -1137,7 +1142,17 @@ function ModalDialog({
       onPointerUp={(e) => backdropGuard.onPointerUp(e)}
       onPointerCancel={() => backdropGuard.reset()}
       onClick={(e) => {
-        if (backdropGuard.shouldCloseOnClick(e, closeOnBackdrop && !busy && dismissible)) {
+        if (backdropGuard.shouldCloseOnClick(e, closeOnBackdrop && !busy && dismissible && isTopDialog(root.current))) {
+          onClose();
+        }
+      }}
+      onDoubleClick={(e) => {
+        if (
+          backdropGuard.shouldCloseOnDoubleClick(
+            e,
+            closeOnBackdropDoubleClick && !busy && dismissible && isTopDialog(root.current),
+          )
+        ) {
           onClose();
         }
       }}

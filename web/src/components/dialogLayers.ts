@@ -3,6 +3,7 @@ let originalOverflow = '';
 
 export interface BackdropPointerEventLike {
   button?: number;
+  detail?: number;
   pointerType?: string;
   target: EventTarget | null;
   currentTarget: EventTarget | null;
@@ -12,16 +13,19 @@ export interface BackdropClickGuard {
   onPointerDown: (event: BackdropPointerEventLike) => void;
   onPointerUp: (event: BackdropPointerEventLike) => void;
   shouldCloseOnClick: (event: BackdropPointerEventLike, enabled: boolean) => boolean;
+  shouldCloseOnDoubleClick: (event: BackdropPointerEventLike, enabled: boolean) => boolean;
   reset: () => void;
 }
 
 /**
- * 仅当按压起止都落在遮罩层自身且显式允许点击遮罩关闭时，才允许触发关闭，
- * 避免在弹窗内划选文本拖出边界时误关闭弹窗。
+ * 仅当按压起止都落在遮罩层自身时才视为有效遮罩点击，
+ * 避免在弹窗内划选文本拖出边界时误关闭弹窗；
+ * 同时支持显式单击关闭或连续两次有效遮罩点击后的双击关闭。
  */
 export function createBackdropClickGuard(): BackdropClickGuard {
   let startedOnBackdrop = false;
   let endedOnBackdrop = false;
+  let consecutiveBackdropClicks = 0;
 
   const isPrimaryBackdropEvent = (event: BackdropPointerEventLike) => {
     const isPrimaryButton =
@@ -35,17 +39,48 @@ export function createBackdropClickGuard(): BackdropClickGuard {
     onPointerDown(event) {
       startedOnBackdrop = isPrimaryBackdropEvent(event);
       endedOnBackdrop = false;
+      if (!startedOnBackdrop) {
+        consecutiveBackdropClicks = 0;
+      }
     },
     onPointerUp(event) {
       endedOnBackdrop = isPrimaryBackdropEvent(event);
+      if (!endedOnBackdrop) {
+        consecutiveBackdropClicks = 0;
+      }
     },
     shouldCloseOnClick(event, enabled) {
-      const shouldClose =
-        enabled &&
+      const cleanBackdropClick =
         startedOnBackdrop &&
         endedOnBackdrop &&
         event.target !== null &&
         event.target === event.currentTarget;
+      startedOnBackdrop = false;
+      endedOnBackdrop = false;
+
+      if (cleanBackdropClick) {
+        if (event.detail === 1) {
+          consecutiveBackdropClicks = 1;
+        } else {
+          consecutiveBackdropClicks += 1;
+        }
+      } else {
+        consecutiveBackdropClicks = 0;
+      }
+
+      if (enabled && cleanBackdropClick) {
+        consecutiveBackdropClicks = 0;
+        return true;
+      }
+      return false;
+    },
+    shouldCloseOnDoubleClick(event, enabled) {
+      const shouldClose =
+        enabled &&
+        consecutiveBackdropClicks >= 2 &&
+        event.target !== null &&
+        event.target === event.currentTarget;
+      consecutiveBackdropClicks = 0;
       startedOnBackdrop = false;
       endedOnBackdrop = false;
       return shouldClose;
@@ -53,6 +88,7 @@ export function createBackdropClickGuard(): BackdropClickGuard {
     reset() {
       startedOnBackdrop = false;
       endedOnBackdrop = false;
+      consecutiveBackdropClicks = 0;
     },
   };
 }

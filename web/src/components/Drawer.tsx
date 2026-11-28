@@ -10,6 +10,7 @@ interface DrawerProps {
   onClose: () => void;
   busy?: boolean;
   closeOnBackdrop?: boolean;
+  closeOnBackdropDoubleClick?: boolean;
   width?: 'md' | 'lg' | 'xl' | '2xl';
   headerExtra?: React.ReactNode;
   footer?: React.ReactNode;
@@ -30,6 +31,7 @@ export function Drawer({
   onClose,
   busy = false,
   closeOnBackdrop = false,
+  closeOnBackdropDoubleClick = true,
   width = 'md',
   headerExtra,
   footer,
@@ -94,7 +96,17 @@ export function Drawer({
       onPointerUp={(event) => backdropGuard.onPointerUp(event)}
       onPointerCancel={() => backdropGuard.reset()}
       onClick={(event) => {
-        if (backdropGuard.shouldCloseOnClick(event, closeOnBackdrop && !busy)) onClose();
+        if (backdropGuard.shouldCloseOnClick(event, closeOnBackdrop && !busy && isTopDialog(root.current))) onClose();
+      }}
+      onDoubleClick={(event) => {
+        if (
+          backdropGuard.shouldCloseOnDoubleClick(
+            event,
+            closeOnBackdropDoubleClick && !busy && isTopDialog(root.current),
+          )
+        ) {
+          onClose();
+        }
       }}
     >
       <div

@@ -758,7 +758,19 @@ export function InfraPage() {
                           {n.is_control_plane_host && (
                             <span className="inline-flex items-center gap-0.5">
                               <Badge tone="amber">{tr('控制面同机', 'Control Plane Host')}</Badge>
-                              <InfoTip text={tr('该主机与 NomadDeck 控制面同机：若控制面运行在 Docker 容器中，请勿在本页重装或重启 Docker；组成多节点集群时，请在集群配置中将集群通信地址（advertise_addr）设为真实内网 IP 而非 127.0.0.1。', 'Co-located with NomadDeck control plane: do not reinstall/restart Docker here if NomadDeck runs in Docker; use a real private IP (not 127.0.0.1) for advertise_addr in multi-node clusters.')} />
+                              <InfoTip
+                                text={
+                                  n.control_plane_in_docker
+                                    ? tr(
+                                        '该主机与 NomadDeck 控制面同机，且当前控制面运行在 Docker 容器中：请勿在本页重装或重启该主机 Docker，否则会中断控制面服务；组成多节点集群时，请在集群配置中将集群通信地址（advertise_addr）设为真实内网 IP 而非 127.0.0.1。',
+                                        'Co-located with NomadDeck control plane running inside a Docker container: do not reinstall or restart Docker here, as it will interrupt the control plane; use a real private IP (not 127.0.0.1) for advertise_addr in multi-node clusters.',
+                                      )
+                                    : tr(
+                                        '该主机与 NomadDeck 控制面同机：组成多节点集群时，请在集群配置中将集群通信地址（advertise_addr）设为真实内网 IP 而非 127.0.0.1。',
+                                        'Co-located with NomadDeck control plane: use a real private IP (not 127.0.0.1) for advertise_addr in multi-node clusters.',
+                                      )
+                                }
+                              />
                             </span>
                           )}
                         </div>

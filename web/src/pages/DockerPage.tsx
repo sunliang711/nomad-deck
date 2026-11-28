@@ -600,12 +600,21 @@ export function DockerPage() {
                               <span className="text-[13px] font-semibold text-slate-900 dark:text-slate-100">{n.name}</span>
                               {n.is_control_plane_host && (
                                 <span className="inline-flex items-center gap-0.5">
-                                  <Badge tone="amber">{tr('控制面同机', 'Control Plane Host')}</Badge>
+                                  <Badge tone={n.control_plane_in_docker ? 'amber' : 'neutral'}>
+                                    {tr('控制面同机', 'Control Plane Host')}
+                                  </Badge>
                                   <InfoTip
-                                    text={tr(
-                                      '该主机与 NomadDeck 控制面同机：若控制面运行在 Docker 容器中，请勿在此重装或重启 Docker。',
-                                      'Co-located with NomadDeck control plane: do not reinstall or restart Docker if NomadDeck runs inside Docker.',
-                                    )}
+                                    text={
+                                      n.control_plane_in_docker
+                                        ? tr(
+                                            '该主机与 NomadDeck 控制面同机，且当前控制面运行在 Docker 容器中：请勿在此重装或重启该主机 Docker，否则会中断控制面服务。',
+                                            'Co-located with NomadDeck control plane running inside a Docker container: do not reinstall or restart Docker here, as it will interrupt the control plane.',
+                                          )
+                                        : tr(
+                                            '该主机与 NomadDeck 控制面同机；当前控制面以宿主机进程运行，未运行在 Docker 容器中，操作该主机 Docker 不会中断控制面。',
+                                            'Co-located with NomadDeck control plane running natively on the host (not in Docker); Docker operations here will not interrupt the control plane.',
+                                          )
+                                    }
                                   />
                                 </span>
                               )}

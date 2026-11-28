@@ -37,13 +37,48 @@ func TestControlPlaneHostColocationAllowedWithWarning(t *testing.T) {
 	if !strings.Contains(joined, "与 NomadDeck 控制面同机") {
 		t.Fatalf("expected co-location warning, got %v", warnings)
 	}
+	if strings.Contains(joined, "Docker") {
+		t.Fatalf("native control plane should not emit Docker container warning, got %v", warnings)
+	}
 	if !strings.Contains(joined, "回环地址") {
 		t.Fatalf("expected loopback warning, got %v", warnings)
+	}
+
+	dockerWarnings := WarningsForHostWithRuntime(same, probe, true, true, nil)
+	dockerJoined := strings.Join(dockerWarnings, "\n")
+	if !strings.Contains(dockerJoined, "运行在 Docker 容器中") || !strings.Contains(dockerJoined, "请勿在本页重启或重装该主机 Docker") {
+		t.Fatalf("expected Docker container warning when control plane runs in Docker, got %v", dockerWarnings)
 	}
 
 	otherWarnings := WarningsForHost(other, probe, svc.IsControlPlaneHost(other))
 	if len(otherWarnings) != 0 {
 		t.Fatalf("expected no warnings for clean remote node, got %v", otherWarnings)
+	}
+}
+
+func TestDetectDockerContainer(t *testing.T) {
+	noFiles := func(string) bool { return false }
+	noRead := func(string) string { return "" }
+
+	if detectDockerContainer("", noFiles, noRead) {
+		t.Fatal("plain host should not be detected as Docker container")
+	}
+	if !detectDockerContainer("", func(p string) bool { return p == "/.dockerenv" }, noRead) {
+		t.Fatal("/.dockerenv should be detected as Docker container")
+	}
+	if detectDockerContainer("1", func(p string) bool { return p == "/run/.containerenv" }, noRead) {
+		t.Fatal("Podman /run/.containerenv should not be treated as Docker container")
+	}
+	if !detectDockerContainer("", noFiles, func(p string) string {
+		if p == "/proc/1/cgroup" {
+			return "0::/system.slice/docker-abc.scope\n"
+		}
+		return ""
+	}) {
+		t.Fatal("docker cgroup should be detected as Docker container")
+	}
+	if !detectDockerContainer("1", noFiles, noRead) {
+		t.Fatal("NOMAD_DECK_CONTAINER=1 without Podman marker should be detected as Docker container")
 	}
 }
 

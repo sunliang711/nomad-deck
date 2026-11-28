@@ -128,8 +128,9 @@ type nodeView struct {
 	MemTotalBytes      int64             `json:"mem_total_bytes"`
 	MemUsedBytes       int64             `json:"mem_used_bytes"`
 	MemPercent         float64           `json:"mem_percent"`
-	IsControlPlaneHost bool              `json:"is_control_plane_host"`
-	Status             string            `json:"status"`
+	IsControlPlaneHost   bool              `json:"is_control_plane_host"`
+	ControlPlaneInDocker bool              `json:"control_plane_in_docker"`
+	Status               string            `json:"status"`
 	LastCheckedAt      any               `json:"last_checked_at"`
 	Labels             map[string]string `json:"labels"`
 	Notes              string            `json:"notes"`
@@ -144,8 +145,9 @@ func (a *API) nodeOf(n *db.Node) nodeView {
 		DockerStatus: n.DockerStatus, DockerVersion: n.DockerVersion, MachineID: n.MachineID, TimeSync: n.TimeSync,
 		ClockSkewMS: n.ClockSkewMS, HostKeyFingerprint: n.HostKeyFingerprint, OSInfo: n.OSInfo, Arch: n.Arch,
 		CPUCores: n.CPUCores, CPUPercent: n.CPUPercent, MemTotalBytes: n.MemTotalBytes, MemUsedBytes: n.MemUsedBytes, MemPercent: n.MemPercent,
-		IsControlPlaneHost: a.Hosts.IsControlPlaneHost(n),
-		Status:             n.Status, LastCheckedAt: fmtTime(n.LastCheckedAt), Notes: n.Notes,
+		IsControlPlaneHost:   a.Hosts.IsControlPlaneHost(n),
+		ControlPlaneInDocker: a.Hosts.IsControlPlaneInDocker(),
+		Status:               n.Status, LastCheckedAt: fmtTime(n.LastCheckedAt), Notes: n.Notes,
 		CreatedAt: fmtTime(n.CreatedAt), UpdatedAt: fmtTime(n.UpdatedAt)}
 	_ = json.Unmarshal([]byte(n.AddressAliasesJSON), &v.AddressAliases)
 	_ = json.Unmarshal([]byte(n.LabelsJSON), &v.Labels)

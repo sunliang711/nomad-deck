@@ -54,6 +54,9 @@ type Service struct {
 	LocalMachineID string
 	// LocalIdentity holds the control plane host's full identity signals.
 	LocalIdentity HostIdentity
+	// ControlPlaneInDocker reports whether NomadDeck itself runs inside a Docker
+	// container whose lifecycle depends on the host Docker daemon.
+	ControlPlaneInDocker bool
 }
 
 // Error is a validation or conflict error with an HTTP status.
@@ -80,6 +83,43 @@ func ReadLocalMachineID() string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// DetectDockerContainer reports whether the current process runs inside a
+// Docker/containerd container whose lifecycle would be disrupted by restarting
+// or reinstalling the host Docker daemon.
+func DetectDockerContainer() bool {
+	return detectDockerContainer(
+		os.Getenv("NOMAD_DECK_CONTAINER"),
+		func(p string) bool {
+			_, err := os.Stat(p)
+			return err == nil
+		},
+		func(p string) string {
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return ""
+			}
+			return string(b)
+		},
+	)
+}
+
+func detectDockerContainer(envFlag string, exists func(string) bool, readFile func(string) string) bool {
+	if exists("/.dockerenv") {
+		return true
+	}
+	// Podman/Buildah create /run/.containerenv rather than /.dockerenv;
+	// restarting the host Docker daemon does not interrupt Podman containers.
+	if exists("/run/.containerenv") {
+		return false
+	}
+	if cgroup := readFile("/proc/1/cgroup"); cgroup != "" {
+		if strings.Contains(cgroup, "docker") || strings.Contains(cgroup, "containerd") {
+			return true
+		}
+	}
+	return envFlag == "1"
 }
 
 // ReadLocalIdentity reads the control plane host's machine-id, DMI product UUID,
@@ -696,7 +736,7 @@ func (s *Service) probe(ctx context.Context, n *db.Node) (*TestResult, error) {
 	return &TestResult{
 		Node:       n,
 		Probe:      p,
-		Warnings:   WarningsForHostWithClones(n, p, s.IsControlPlaneHost(n), clonePeers),
+		Warnings:   WarningsForHostWithRuntime(n, p, s.IsControlPlaneHost(n), s.IsControlPlaneInDocker(), clonePeers),
 		ClonePeers: clonePeers,
 	}, nil
 }
@@ -739,7 +779,13 @@ func (s *Service) WarningsForNodeWithClones(ctx context.Context, n *db.Node, p *
 	if err != nil {
 		clonePeers = nil
 	}
-	return WarningsForHostWithClones(n, p, s.IsControlPlaneHost(n), clonePeers), clonePeers
+	return WarningsForHostWithRuntime(n, p, s.IsControlPlaneHost(n), s.IsControlPlaneInDocker(), clonePeers), clonePeers
+}
+
+// IsControlPlaneInDocker reports whether the control plane is running inside a
+// Docker container.
+func (s *Service) IsControlPlaneInDocker() bool {
+	return s != nil && s.ControlPlaneInDocker
 }
 
 // IsControlPlaneHost reports whether n refers to the same host as the
@@ -783,12 +829,22 @@ func WarningsForHost(n *db.Node, p *sshx.ProbeResult, isControlPlaneHost bool) [
 // WarningsForHostWithClones lists preflight problems, co-location cautions, and
 // non-blocking notices when cloned VMs share /etc/machine-id.
 func WarningsForHostWithClones(n *db.Node, p *sshx.ProbeResult, isControlPlaneHost bool, clonePeers []string) []string {
+	return WarningsForHostWithRuntime(n, p, isControlPlaneHost, false, clonePeers)
+}
+
+// WarningsForHostWithRuntime lists preflight problems, co-location cautions
+// tailored to whether the control plane runs inside Docker, and clone notices.
+func WarningsForHostWithRuntime(n *db.Node, p *sshx.ProbeResult, isControlPlaneHost, controlPlaneInDocker bool, clonePeers []string) []string {
 	var w []string
 	if len(clonePeers) > 0 {
 		w = append(w, fmt.Sprintf("检测到该主机与「%s」共用相同的 /etc/machine-id（疑似克隆虚拟机），已允许接入；建议按需在目标机执行 sudo rm -f /etc/machine-id /var/lib/dbus/machine-id && sudo systemd-machine-id-setup 重新生成，以免影响 DHCP 或系统日志", strings.Join(clonePeers, "、")))
 	}
 	if isControlPlaneHost {
-		w = append(w, "该主机与 NomadDeck 控制面同机：若控制面以 Docker 容器运行，请勿在本页重启/重装该主机 Docker；组建多节点集群时，请将该节点的集群通信地址（advertise_addr）填写真实内网 IP 而非 127.0.0.1")
+		if controlPlaneInDocker {
+			w = append(w, "该主机与 NomadDeck 控制面同机，且当前控制面运行在 Docker 容器中：请勿在本页重启或重装该主机 Docker，否则会中断控制面服务；组建多节点集群时，请将该节点的集群通信地址（advertise_addr）填写真实内网 IP 而非 127.0.0.1")
+		} else {
+			w = append(w, "该主机与 NomadDeck 控制面同机：组建多节点集群时，请将该节点的集群通信地址（advertise_addr）填写真实内网 IP 而非 127.0.0.1")
+		}
 	}
 	if n != nil && (n.Host == "127.0.0.1" || strings.EqualFold(n.Host, "localhost") || n.Host == "::1") {
 		w = append(w, "当前主机 SSH 地址为回环地址，组建跨机集群时请将该节点的集群通信地址（advertise_addr）设为真实内网 IP")

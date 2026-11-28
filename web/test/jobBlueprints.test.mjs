@@ -34,6 +34,7 @@ test('STARTER_SAMPLES include all expected built-in blueprints with structured p
     assert.ok(sample.requires.length > 0, `${sample.id} must declare structured requires badges`);
     assert.match(sample.hcl, /^job\s+"[^"]+"\s+\{/, `${sample.id} must start with job block`);
     assert.equal(sample.hcl.includes('前置依赖'), false, `${sample.id} should keep prerequisites in structured metadata, not HCL comment walls`);
+    assert.equal(sample.hcl.includes('<<EOT'), false, `${sample.id} template blocks should use indented heredoc <<-EOT`);
     assert.ok(!sample.hcl.includes('undefined'), `${sample.id} contains unexpected undefined`);
   }
 

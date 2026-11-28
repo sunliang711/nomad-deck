@@ -191,7 +191,7 @@ export const STARTER_SAMPLES: JobBlueprint[] = [
       template {
         destination = "local/Caddyfile"
         change_mode = "restart"
-        data        = <<EOT
+        data        = <<-EOT
 # Replace :80 with your domain for automatic HTTPS; use nomadService to discover backends:
 # app.example.com {
 #   reverse_proxy {{ range nomadService "app" }}{{ .Address }}:{{ .Port }}{{ end }}
@@ -322,7 +322,7 @@ EOT
       #   destination = "secrets/traefik.env"
       #   env         = true
       #   change_mode = "restart"
-      #   data        = <<EOT
+      #   data        = <<-EOT
       # {{ with secret "secret/data/apps/traefik" }}
       # NOMAD_TOKEN={{ .Data.data.nomad_token | toJSON }}
       # ALICLOUD_ACCESS_KEY={{ .Data.data.ali_key | toJSON }}
@@ -334,7 +334,7 @@ EOT
       template {
         destination = "local/traefik.yml"
         change_mode = "restart"
-        data        = <<EOT
+        data        = <<-EOT
 entryPoints:
   web:
     address: ":80"
@@ -383,7 +383,7 @@ EOT
       template {
         destination = "local/dynamic.yml"
         change_mode = "noop"
-        data        = <<EOT
+        data        = <<-EOT
 http:
   routers: {}
   services: {}
@@ -483,7 +483,7 @@ EOT
       #   perms         = "0640"
       #   change_mode   = "signal"
       #   change_signal = "SIGHUP"
-      #   data          = <<EOT
+      #   data          = <<-EOT
       # {{ with secret "secret/data/certs/tls" }}{{ .Data.data.fullchain }}{{ end }}
       # EOT
       # }
@@ -493,7 +493,7 @@ EOT
       #   perms         = "0600"
       #   change_mode   = "signal"
       #   change_signal = "SIGHUP"
-      #   data          = <<EOT
+      #   data          = <<-EOT
       # {{ with secret "secret/data/certs/tls" }}{{ .Data.data.privkey }}{{ end }}
       # EOT
       # }
@@ -502,7 +502,7 @@ EOT
         destination   = "local/nginx.conf"
         change_mode   = "signal"
         change_signal = "SIGHUP"
-        data          = <<EOT
+        data          = <<-EOT
 events {
   worker_connections 1024;
 }
@@ -664,7 +664,7 @@ EOT
       #   perms         = "0640"
       #   change_mode   = "signal"
       #   change_signal = "SIGHUP"
-      #   data          = <<EOT
+      #   data          = <<-EOT
       # {{ with secret "secret/data/certs/tls" }}{{ .Data.data.fullchain }}{{ end }}
       # EOT
       # }
@@ -674,7 +674,7 @@ EOT
       #   perms         = "0600"
       #   change_mode   = "signal"
       #   change_signal = "SIGHUP"
-      #   data          = <<EOT
+      #   data          = <<-EOT
       # {{ with secret "secret/data/certs/tls" }}{{ .Data.data.privkey }}{{ end }}
       # EOT
       # }
@@ -683,7 +683,7 @@ EOT
         destination   = "local/ban-rules.conf"
         change_mode   = "signal"
         change_signal = "SIGHUP"
-        data          = <<EOT
+        data          = <<-EOT
 lua_shared_dict waf_probe_counter 10m;
 lua_shared_dict waf_ban_ip 10m;
 
@@ -702,7 +702,7 @@ EOT
         destination   = "local/ban-check.lua"
         change_mode   = "signal"
         change_signal = "SIGHUP"
-        data          = <<EOT
+        data          = <<-EOT
 local ip = ngx.var.remote_addr or ""
 if ip == "" or ip == "127.0.0.1" then
   return
@@ -730,7 +730,7 @@ EOT
         destination   = "local/nginx.conf"
         change_mode   = "signal"
         change_signal = "SIGHUP"
-        data          = <<EOT
+        data          = <<-EOT
 events {
   worker_connections 1024;
 }
@@ -894,7 +894,7 @@ EOT
         destination = "secrets/acme.env"
         env         = true
         change_mode = "noop"
-        data        = <<EOT
+        data        = <<-EOT
 {{ with secret "secret/data/certs/dns" }}
 DOMAIN={{ .Data.data.domain | toJSON }}
 ALT_DOMAINS={{ or .Data.data.alt_domains "" | toJSON }}
@@ -914,7 +914,7 @@ EOT
         destination = "secrets/vault-ca.crt"
         perms       = "0644"
         change_mode = "noop"
-        data        = <<EOT
+        data        = <<-EOT
 {{ with secret "secret/data/certs/dns" }}{{ or .Data.data.vault_cacert "" }}{{ end }}
 EOT
       }
@@ -923,7 +923,7 @@ EOT
         destination = "local/sync.sh"
         perms       = "0755"
         change_mode = "noop"
-        data        = <<EOT
+        data        = <<-EOT
 #!/bin/sh
 set -eu
 
@@ -1071,7 +1071,7 @@ EOT
         destination = "secrets/postgres-password"
         perms       = "0600"
         change_mode = "noop"
-        data        = <<EOT
+        data        = <<-EOT
 {{ with secret "secret/data/apps/postgres" }}{{ .Data.data.password }}{{ end }}
 EOT
       }
@@ -1079,7 +1079,7 @@ EOT
       template {
         destination = "secrets/postgres.env"
         env         = true
-        data        = <<EOT
+        data        = <<-EOT
 {{ with secret "secret/data/apps/postgres" }}
 POSTGRES_USER={{ .Data.data.username | toJSON }}
 POSTGRES_DB={{ .Data.data.database | toJSON }}
@@ -1165,7 +1165,7 @@ EOT
         destination = "secrets/mysql-root-password"
         perms       = "0600"
         change_mode = "noop"
-        data        = <<EOT
+        data        = <<-EOT
 {{ with secret "secret/data/apps/mysql" }}{{ .Data.data.root_password }}{{ end }}
 EOT
       }
@@ -1174,7 +1174,7 @@ EOT
         destination = "secrets/mysql-password"
         perms       = "0600"
         change_mode = "noop"
-        data        = <<EOT
+        data        = <<-EOT
 {{ with secret "secret/data/apps/mysql" }}{{ .Data.data.password }}{{ end }}
 EOT
       }
@@ -1182,7 +1182,7 @@ EOT
       template {
         destination = "secrets/mysql.env"
         env         = true
-        data        = <<EOT
+        data        = <<-EOT
 {{ with secret "secret/data/apps/mysql" }}
 MYSQL_USER={{ .Data.data.username | toJSON }}
 MYSQL_DATABASE={{ .Data.data.database | toJSON }}
@@ -1252,7 +1252,7 @@ EOT
         destination = "secrets/redis-password"
         perms       = "0600"
         change_mode = "restart"
-        data        = <<EOT
+        data        = <<-EOT
 {{ with secret "secret/data/apps/redis" }}{{ .Data.data.password }}{{ end }}
 EOT
       }
@@ -1336,7 +1336,7 @@ EOT
         destination = "secrets/rabbitmq.env"
         env         = true
         change_mode = "restart"
-        data        = <<EOT
+        data        = <<-EOT
 {{ with secret "secret/data/apps/rabbitmq" }}
 RABBITMQ_DEFAULT_USER={{ .Data.data.username | toJSON }}
 RABBITMQ_DEFAULT_PASS={{ .Data.data.password | toJSON }}
@@ -1457,7 +1457,7 @@ EOT
       template {
         destination = "local/broker.conf"
         change_mode = "restart"
-        data        = <<EOT
+        data        = <<-EOT
 brokerClusterName = DefaultCluster
 brokerName = broker-a
 brokerId = 0
@@ -1555,7 +1555,7 @@ EOT
         destination   = "local/prometheus.yml"
         change_mode   = "signal"
         change_signal = "SIGHUP"
-        data          = <<EOT
+        data          = <<-EOT
 global:
   scrape_interval: 15s
 
@@ -1670,7 +1670,7 @@ EOT
         destination = "secrets/grafana-admin-password"
         perms       = "0600"
         change_mode = "noop"
-        data        = <<EOT
+        data        = <<-EOT
 {{ with secret "secret/data/apps/grafana" }}{{ .Data.data.admin_password }}{{ end }}
 EOT
       }
@@ -1678,7 +1678,7 @@ EOT
       template {
         destination = "secrets/grafana.env"
         env         = true
-        data        = <<EOT
+        data        = <<-EOT
 {{ with secret "secret/data/apps/grafana" }}
 GF_SECURITY_ADMIN_USER={{ .Data.data.admin_user | toJSON }}
 {{ end }}

@@ -8,7 +8,6 @@ import {
   Boxes,
   ChevronRight,
   Clock,
-  Container,
   FileCode2,
   LayoutDashboard,
   Link2,
@@ -32,10 +31,33 @@ import { useToast } from './Toast';
 import { NotificationDrawer } from './NotificationDrawer';
 import { LocaleToggleButton, ThemeToggleButton } from './UI';
 
+function DockerIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.9}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M2 12h14.2c1.1 0 1.9-.7 2.4-1.8.4-.9 1.5-1.3 2.5-.7.4 1.1 0 2.2-.8 2.9.9.1 1.5.5 1.7 1-.9 1.1-2.2 1.5-3.5 1.3C17.3 17.4 14.3 19 10.2 19 5.3 19 2 16.5 2 12Z" />
+      <path d="M4.5 12V8.5h3.5V5h7v7" />
+      <path d="M8 8.5h7" />
+      <path d="M8 8.5V12" />
+      <path d="M11.5 5v7" />
+      <circle cx="6.2" cy="15.2" r="0.9" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 const navItems = [
   { to: '/', label: '总览仪表盘', labelEn: 'Dashboard', icon: LayoutDashboard, group: 'workspace' },
   { to: '/infra', label: '基础设施', labelEn: 'Infrastructure', icon: Server, group: 'workspace' },
-  { to: '/docker', label: '容器运行时', labelEn: 'Docker Runtime', icon: Container, group: 'workspace' },
+  { to: '/docker', label: '容器运行时', labelEn: 'Docker Runtime', icon: DockerIcon, group: 'workspace' },
   { to: '/nomad', label: 'Nomad 集群', labelEn: 'Nomad Clusters', icon: Boxes, group: 'workspace' },
   { to: '/vault', label: 'Vault 集群', labelEn: 'Vault Clusters', icon: Shield, group: 'workspace' },
   { to: '/integrations', label: '集群联动', labelEn: 'Integrations', icon: Link2, group: 'workspace' },

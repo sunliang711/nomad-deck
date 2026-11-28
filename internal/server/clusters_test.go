@@ -257,6 +257,18 @@ func TestNomadGovernanceDockerIntegrationAPI(t *testing.T) {
 	if code, _ := viewer.do("POST", "/api/v1/nomad/"+nid+"/acl/tokens", map[string]any{"name": "x"}, nil); code != 403 {
 		t.Fatal("viewer cannot issue tokens")
 	}
+	if code, _ := viewer.do("POST", "/api/v1/nomad/"+nid+"/acl/tokens/acc-1/reveal", map[string]any{"current_password": adminPass}, nil); code != 403 {
+		t.Fatal("viewer cannot reveal ACL token secret")
+	}
+	if code, _ := root.do("POST", "/api/v1/nomad/"+nid+"/acl/tokens/acc-1/reveal", map[string]any{"current_password": "wrong-password"}, nil); code != 401 && code != 403 {
+		t.Fatalf("reveal token with wrong password: %d", code)
+	}
+	if code, b := root.do("POST", "/api/v1/nomad/"+nid+"/acl/tokens/acc-1/reveal", map[string]any{"current_password": adminPass}, nil); code != 409 || errCode(b) != "not_initialized" {
+		t.Fatalf("reveal token on undeployed cluster: %d %v", code, b)
+	}
+	if code, b := root.do("POST", "/api/v1/nomad/"+vid+"/acl/tokens/acc-1/reveal", map[string]any{"current_password": adminPass}, nil); code != 400 || errCode(b) != "wrong_cluster_type" {
+		t.Fatalf("reveal token on vault cluster: %d %v", code, b)
+	}
 	if code, _ := root.do("DELETE", "/api/v1/integrations/"+iid, nil, nil); code != 204 {
 		t.Fatal("a draft integration is deleted at once")
 	}

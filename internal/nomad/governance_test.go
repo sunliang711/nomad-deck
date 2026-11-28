@@ -120,6 +120,16 @@ func TestGovernance(t *testing.T) {
 	if err != nil || len(toks) != 1 || toks[0].AccessorID != tok.AccessorID {
 		t.Fatalf("tokens must list the client token only: %+v %v", toks, err)
 	}
+	// The issued token's secret can be revealed repeatedly.
+	for i := 0; i < 2; i++ {
+		rev, err := s.RevealToken(ctx, testActor, id, tok.AccessorID)
+		if err != nil || rev.SecretID != tok.SecretID || rev.AccessorID != tok.AccessorID || rev.Name != "ci" {
+			t.Fatalf("reveal token attempt %d: %+v %v", i+1, rev, err)
+		}
+	}
+	if _, err := s.RevealToken(ctx, testActor, id, "00000000-0000-0000-0000-000000000000"); errCode(err) != "not_found" {
+		t.Fatalf("reveal missing token: %v", err)
+	}
 	// The issued token can read but not write.
 	ro := e.ls.client(tok.SecretID)
 	if _, err := ro.Nodes(ctx); err != nil {
@@ -129,6 +139,9 @@ func TestGovernance(t *testing.T) {
 		t.Fatalf("write with read-only token: %v", err)
 	}
 	self, _ := api.TokenSelf(ctx)
+	if _, err := s.RevealToken(ctx, testActor, id, self.AccessorID); errCode(err) != "protected_token" {
+		t.Fatalf("own token must be protected on reveal: %v", err)
+	}
 	if err := s.RevokeToken(ctx, testActor, id, self.AccessorID); errCode(err) != "protected_token" {
 		t.Fatalf("own token must be protected: %v", err)
 	}

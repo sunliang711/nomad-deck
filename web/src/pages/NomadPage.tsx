@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Boxes, ExternalLink, FileCode2, Plus, RefreshCw } from 'lucide-react';
+import { Boxes, ExternalLink, FileCode2, KeyRound, Plus, RefreshCw } from 'lucide-react';
 import { apiDelete, apiDownload, apiGet, apiPost, apiPut, apiUpload, fmtBytes, fmtTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useI18n } from '../lib/i18n';
@@ -106,7 +106,16 @@ export function NomadPage() {
   const [governanceEdit, setGovernanceEdit] = useState<{ kind: 'namespaces' | 'node-pools'; name: string; description: string; meta: Record<string, string>; creating: boolean } | null>(null);
   const [roleEdit, setRoleEdit] = useState<{ id: string; name: string; description: string; policies: string[] } | null>(null);
   const [policyEdit, setPolicyEdit] = useState({ name: '', rules: '' });
-  const [newToken, setNewToken] = useState('');
+  const [revealedToken, setRevealedToken] = useState<{
+    accessor_id: string;
+    name: string;
+    type?: string;
+    policies?: string[];
+    roles?: string[];
+    expiration_time?: string;
+    secret_id: string;
+    newlyIssued?: boolean;
+  } | null>(null);
   const [mgmtToken, setMgmtToken] = useState('');
   const [uiLoginModal, setUiLoginModal] = useState<{ url: string; targetLabel: string; ottTTL: number; tokenTTL: string } | null>(null);
   const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(null);
@@ -231,6 +240,7 @@ export function NomadPage() {
   useEffect(() => {
     setGateView(null);
     setMgmtToken('');
+    setRevealedToken(null);
     setUninstallPlan(null);
     if (selectedId && (tab === 'status' || tab === 'snapshots')) void loadOpsTab();
     if (selectedId && tab === 'governance') void loadGovernance();
@@ -245,6 +255,30 @@ export function NomadPage() {
       run: async (pw) => {
         const res = await apiPost(`/api/v1/nomad/${selectedId}/management-token/reveal`, { current_password: pw });
         setMgmtToken(res.management_token || '');
+      },
+    });
+  };
+
+  const handleRevealAclToken = (tk: any) => {
+    const label = tk.name || (tk.accessor_id || '').slice(0, 12);
+    setPwAction({
+      title: tr(`查看 ACL Token Secret · ${label}`, `Reveal ACL Token Secret · ${label}`),
+      run: async (pw) => {
+        const res = await apiPost(
+          `/api/v1/nomad/${selectedId}/acl/tokens/${encodeURIComponent(tk.accessor_id)}/reveal`,
+          { current_password: pw },
+        );
+        const revealed = res.token || {};
+        setRevealedToken({
+          accessor_id: revealed.accessor_id || tk.accessor_id,
+          name: revealed.name || tk.name || 'unnamed',
+          type: revealed.type || tk.type,
+          policies: revealed.policies || tk.policies || [],
+          roles: revealed.roles || tk.roles || [],
+          expiration_time: revealed.expiration_time || tk.expiration_time,
+          secret_id: revealed.secret_id || '',
+          newlyIssued: false,
+        });
       },
     });
   };
@@ -329,7 +363,6 @@ export function NomadPage() {
       />
 
       <ErrorAlert message={err} onClose={() => setErr('')} />
-      {newToken && <MaskedSecret value={newToken} label={tr('新签发 ACL Token Secret（仅展示一次）：', 'Newly Issued ACL Token Secret (shown once):')} />}
 
       {!cluster ? (
         <Card>
@@ -782,7 +815,7 @@ export function NomadPage() {
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                   <Card
                     title={`ACL Tokens (${tokens.length})`}
-                    description={tr('签发与吊销 Nomad API 访问令牌', 'Issue and revoke Nomad API access tokens')}
+                    description={tr('签发、查看与吊销 Nomad API 访问令牌', 'Issue, reveal, and revoke Nomad API access tokens')}
                     actions={
                       isAdmin && (
                         <Button
@@ -800,7 +833,7 @@ export function NomadPage() {
                       <EmptyState title={tr('暂无 ACL Token', 'No ACL Tokens')} />
                     ) : (
                       <div className="space-y-2 text-xs">
-                        {tokens.slice(0, 20).map((tk) => (
+                        {tokens.map((tk) => (
                           <div
                             key={tk.accessor_id}
                             className="flex items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2.5 dark:border-slate-800 dark:bg-slate-950/30"
@@ -813,24 +846,35 @@ export function NomadPage() {
                               <div className="mt-0.5 font-mono text-[11px] text-slate-500">
                                 Accessor: {(tk.accessor_id || '').slice(0, 12)}
                                 {Array.isArray(tk.policies) && tk.policies.length > 0 ? ` · ${tk.policies.join(', ')}` : ''}
+                                {Array.isArray(tk.roles) && tk.roles.length > 0 ? ` · Roles: ${tk.roles.join(', ')}` : ''}
                               </div>
                             </div>
                             {isAdmin && (
-                              <Button
-                                size="sm"
-                                variant="danger-outline"
-                                onClick={async () => {
-                                  if (!(await askConfirm(tr(`确认吊销 ACL Token「${tk.name}」吗？`, `Revoke ACL Token "${tk.name}"?`), { title: tr('吊销 Token', 'Revoke Token'), confirmText: tr('确认吊销', 'Revoke'), danger: true }))) return;
-                                  void apiDelete(`/api/v1/nomad/${selectedId}/acl/tokens/${tk.accessor_id}`)
-                                    .then(() => {
-                                      toast.success(tr('Token 已吊销', 'Token revoked'));
-                                      return loadGovernance();
-                                    })
-                                    .catch((ex) => setErr(ex.message));
-                                }}
-                              >
-                                {tr('吊销', 'Revoke')}
-                              </Button>
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleRevealAclToken(tk)}
+                                >
+                                  <KeyRound className="h-3.5 w-3.5" />
+                                  <span>{tr('查看 Secret', 'Reveal Secret')}</span>
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="danger-outline"
+                                  onClick={async () => {
+                                    if (!(await askConfirm(tr(`确认吊销 ACL Token「${tk.name}」吗？`, `Revoke ACL Token "${tk.name}"?`), { title: tr('吊销 Token', 'Revoke Token'), confirmText: tr('确认吊销', 'Revoke'), danger: true }))) return;
+                                    void apiDelete(`/api/v1/nomad/${selectedId}/acl/tokens/${tk.accessor_id}`)
+                                      .then(() => {
+                                        setRevealedToken((prev) => (prev?.accessor_id === tk.accessor_id ? null : prev));
+                                        toast.success(tr('Token 已吊销', 'Token revoked'));
+                                        return loadGovernance();
+                                      })
+                                      .catch((ex) => setErr(ex.message));
+                                  }}
+                                >
+                                  {tr('吊销', 'Revoke')}
+                                </Button>
+                              </div>
                             )}
                           </div>
                         ))}
@@ -933,7 +977,19 @@ export function NomadPage() {
               })
                 .then((r) => {
                   setTokenModal(null);
-                  setNewToken(r.token?.secret_id || '');
+                  const issued = r.token;
+                  if (issued?.secret_id) {
+                    setRevealedToken({
+                      accessor_id: issued.accessor_id || '',
+                      name: issued.name || tokenModal.name.trim(),
+                      type: issued.type || 'client',
+                      policies: issued.policies || tokenModal.policies,
+                      roles: issued.roles || [],
+                      expiration_time: issued.expiration_time,
+                      secret_id: issued.secret_id,
+                      newlyIssued: true,
+                    });
+                  }
                   toast.success(tr('已签发 Client Token', 'Client Token issued'));
                   return loadGovernance();
                 })
@@ -1175,6 +1231,73 @@ export function NomadPage() {
           </div>
           <MaskedSecret value={mgmtToken} label="Management (Root) Token:" />
         </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(revealedToken)}
+        title={
+          revealedToken?.newlyIssued
+            ? tr('新签发 ACL Token Secret', 'Newly Issued ACL Token Secret')
+            : tr('ACL Token Secret', 'ACL Token Secret')
+        }
+        onClose={() => setRevealedToken(null)}
+        footer={
+          <div className="flex justify-end">
+            <Button variant="primary" onClick={() => setRevealedToken(null)}>{tr('关闭', 'Close')}</Button>
+          </div>
+        }
+      >
+        {revealedToken && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 px-4 py-3 text-xs leading-relaxed text-indigo-950 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-100">
+              {revealedToken.newlyIssued
+                ? tr(
+                    '关闭弹窗后将清除页面内存中的明文；后续可随时在 ACL Tokens 列表中点击「查看 Secret」，验证管理员密码后再次查看。',
+                    'Closing this modal clears the plaintext from memory. You can reveal it again anytime from the ACL Tokens list after verifying your password.',
+                  )
+                : tr(
+                    '关闭弹窗后将清除页面内存中的明文，下次查看需重新验证管理员密码。',
+                    'Closing this modal clears the plaintext from memory; next reveal requires password verification again.',
+                  )}
+            </div>
+            <div className="grid grid-cols-1 gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3.5 py-2.5 text-xs dark:border-slate-800 dark:bg-slate-950/40 sm:grid-cols-2">
+              <div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">{tr('名称', 'Name')}</div>
+                <div className="mt-0.5 flex items-center gap-1.5 font-semibold text-slate-900 dark:text-slate-100">
+                  <span className="truncate">{revealedToken.name || 'unnamed'}</span>
+                  {revealedToken.type && <Badge tone={revealedToken.type === 'management' ? 'amber' : 'neutral'}>{revealedToken.type}</Badge>}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">Accessor ID</div>
+                <div className="mt-0.5 font-mono text-[11px] text-slate-700 dark:text-slate-300 break-all">{revealedToken.accessor_id}</div>
+              </div>
+              {Array.isArray(revealedToken.policies) && revealedToken.policies.length > 0 && (
+                <div className="sm:col-span-2">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">Policies</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {revealedToken.policies.map((p) => <Badge key={p} tone="blue">{p}</Badge>)}
+                  </div>
+                </div>
+              )}
+              {Array.isArray(revealedToken.roles) && revealedToken.roles.length > 0 && (
+                <div className="sm:col-span-2">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">Roles</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {revealedToken.roles.map((r) => <Badge key={r} tone="neutral">{r}</Badge>)}
+                  </div>
+                </div>
+              )}
+              {revealedToken.expiration_time && (
+                <div className="sm:col-span-2">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">{tr('过期时间', 'Expires At')}</div>
+                  <div className="mt-0.5 font-mono text-[11px] text-slate-700 dark:text-slate-300">{fmtTime(revealedToken.expiration_time)}</div>
+                </div>
+              )}
+            </div>
+            <MaskedSecret value={revealedToken.secret_id} label={tr('ACL Token Secret：', 'ACL Token Secret:')} />
+          </div>
+        )}
       </Modal>
 
       <Modal open={Boolean(dlModal)} title={dlModal?.title || ''} onClose={() => setDlModal(null)}>

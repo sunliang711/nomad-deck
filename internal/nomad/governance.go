@@ -552,7 +552,8 @@ type TokenInput struct {
 	TTL string `json:"ttl"`
 }
 
-// IssuedToken is returned once on creation; the secret is never stored.
+// IssuedToken is an ACL token with its SecretID (returned on creation or
+// password-verified reveal; the secret is never persisted in the control plane DB).
 type IssuedToken struct {
 	TokenView
 	SecretID string `json:"secret_id"`
@@ -593,6 +594,40 @@ func (s *Service) CreateToken(ctx context.Context, actor audit.Actor, clusterID 
 	}
 	s.govAudit(ctx, actor, cl, "nomad.acl_token_create", map[string]any{"accessor_id": t.AccessorID, "name": in.Name,
 		"policies": in.Policies, "roles": in.Roles, "ttl": in.TTL})
+	return &IssuedToken{TokenView: tokenView(t), SecretID: t.SecretID}, nil
+}
+
+// RevealToken reads a single ACL token (including its SecretID) from Nomad for
+// audited admin access. The control plane's own management token is protected
+// and must be revealed through RevealManagementToken instead.
+func (s *Service) RevealToken(ctx context.Context, actor audit.Actor, clusterID, accessor string) (*IssuedToken, error) {
+	accessor = strings.TrimSpace(accessor)
+	if accessor == "" {
+		return nil, badRequest("缺少 Token Accessor ID")
+	}
+	api, cl, err := s.govClient(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	self, err := api.TokenSelf(ctx)
+	if err != nil {
+		return nil, nomadErr(err)
+	}
+	if self.AccessorID == accessor {
+		return nil, conflict("protected_token", "请通过「查看 Management Token」入口查看控制面自身持有的 Management Token")
+	}
+	var t ACLToken
+	if err := api.Request(ctx, http.MethodGet, "acl/token/"+url.PathEscape(accessor), nil, &t); err != nil {
+		return nil, nomadErr(err)
+	}
+	if t.SecretID == "" {
+		return nil, &auth.Error{Status: 502, Code: "nomad_error", Message: "Nomad 未返回该 Token 的 Secret ID"}
+	}
+	s.govAudit(ctx, actor, cl, "nomad.acl_token_reveal", map[string]any{
+		"accessor_id": t.AccessorID,
+		"name":        t.Name,
+		"type":        t.Type,
+	})
 	return &IssuedToken{TokenView: tokenView(t), SecretID: t.SecretID}, nil
 }
 

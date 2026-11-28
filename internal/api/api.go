@@ -297,6 +297,7 @@ func (a *API) Handler() http.Handler {
 				r.Put("/nomad/{id}/acl/roles/{role_id}", a.nomadPutRole)
 				r.Delete("/nomad/{id}/acl/roles/{role_id}", a.nomadDeleteRole)
 				r.Post("/nomad/{id}/acl/tokens", a.nomadCreateToken)
+				r.Post("/nomad/{id}/acl/tokens/{accessor_id}/reveal", a.nomadRevealToken)
 				r.Delete("/nomad/{id}/acl/tokens/{accessor_id}", a.nomadRevokeToken)
 				r.Post("/nomad/{id}/management-token/reveal", a.nomadRevealManagementToken)
 				r.Post("/nomad/{id}/ui-login", a.nomadUILogin)

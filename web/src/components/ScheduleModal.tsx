@@ -47,10 +47,9 @@ export function ScheduleModal({
 
   useEffect(() => {
     if (!open) return;
-    if (suggestedVersion && !version) {
-      setVersion(suggestedVersion);
-    }
-  }, [open, suggestedVersion, version]);
+    // 优先填充当前版本，保留用户手动输入的内容。
+    setVersion((value) => value || currentVersion || suggestedVersion || '');
+  }, [open, currentVersion, suggestedVersion]);
 
   const versionValid = mode === 'latest' || UPGRADE_VERSION_PATTERN.test(version.trim());
   const versionExample = currentVersion && UPGRADE_VERSION_PATTERN.test(currentVersion) ? currentVersion : 'v0.3.0';

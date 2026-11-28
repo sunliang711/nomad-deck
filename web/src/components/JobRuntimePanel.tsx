@@ -1039,6 +1039,23 @@ export function JobRuntimePanel({
           }
         >
           <div className="space-y-4 text-xs">
+            <dl className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3.5 py-3 sm:grid-cols-2 dark:border-slate-800 dark:bg-slate-950/40">
+              {[
+                { label: tr('创建时间', 'Created At'), value: selectedAlloc.CreateTime },
+                { label: tr('修改时间', 'Modified At'), value: selectedAlloc.ModifyTime },
+              ].map(({ label, value }) => {
+                // Nomad 返回纳秒时间戳，转换为毫秒后按本地时间展示。
+                const timestamp = Number(value);
+                const date = new Date(timestamp / 1_000_000);
+                const time = timestamp > 0 && !Number.isNaN(date.getTime()) ? fmtTime(date.toISOString(), locale) : '-';
+                return (
+                  <div key={label} className="space-y-1">
+                    <dt className="text-slate-500 dark:text-slate-400">{label}</dt>
+                    <dd className="font-medium text-slate-800 dark:text-slate-100">{time}</dd>
+                  </div>
+                );
+              })}
+            </dl>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <SectionTabs
                 variant="underline"

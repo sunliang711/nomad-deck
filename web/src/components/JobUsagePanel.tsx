@@ -104,10 +104,19 @@ export function JobUsagePanel({ source, clusterId, namespace, inputType = 'hcl',
                 <div className="space-y-2 rounded-lg border border-slate-200/80 bg-white/80 p-3 leading-5 dark:border-slate-800 dark:bg-slate-900/60">
                   {guide.type === 'batch' ? (
                     <p>{tr('这是批处理任务，不提供常驻连接端口。运行后在「运行态 Jobs → Allocation → 日志与详情」查看完成状态、日志及生成文件；定时任务还需查看各次派生执行。', 'This batch Job does not expose a persistent endpoint. After running it, open Runtime Jobs → Allocation → Logs & Inspect for completion status, logs and files. For periodic Jobs, inspect each dispatched run.')}</p>
+                  ) : guide.ports.length === 0 ? (
+                    <>
+                      <p>{tr('当前未注册服务，也未声明网络端口。此类守护脚本或后台任务通常通过 Allocation 日志查看运行结果，不能直接添加引用未声明端口的 service 块。', 'No service or network port is declared. Inspect Allocation logs for daemon scripts and background tasks; do not add a service block referencing an undeclared port.')}</p>
+                      <p>{tr('若需供其他 Job 连接，先让应用监听端口，在对应 Group 的 network 中声明端口，并按驱动要求完成 Task 的端口绑定，再添加服务注册。', 'To accept connections from other Jobs, make the application listen, declare the port in its Group network, bind it to the Task as required by the driver, and then register a service.')}</p>
+                    </>
                   ) : (
                     <>
-                      <p>{tr('当前未注册服务，其他 Job 无法通过 nomadService 发现它。若需被应用引用，在提供服务的 Group 中添加以下配置，并将服务名和 port 替换为实际值。', 'No service is registered, so other Jobs cannot discover it with nomadService. Add this block to the serving Group and replace the service name and port label.')}</p>
-                      {codeBlock(tr('服务注册示例 · 放入提供方 Group', 'Service registration · Provider Group'), 'service {\n  name     = "your-service"\n  provider = "nomad"\n  port     = "http"\n}')}
+                      <p>{tr('当前未注册服务，其他 Job 无法通过 nomadService 发现它。选择与应用监听端口对应的一项，将配置放入标注的 Group 并替换服务名；确认应用实际监听该端口且 Task 已完成端口绑定。', 'No service is registered, so other Jobs cannot discover it with nomadService. Choose the entry matching the application listener, add it to the indicated Group, and replace the service name. Ensure the application listens on that port and the Task binds it.')}</p>
+                      {guide.ports.map((port, index) => (
+                        <div key={`${port.group}-${port.label}-${index}`}>
+                          {codeBlock(tr(`服务注册示例 · Group: ${port.group} · port: ${port.label}`, `Service registration · Group: ${port.group} · port: ${port.label}`), `service {\n  name     = "your-service"\n  provider = "nomad"\n  port     = ${JSON.stringify(port.label)}\n}`)}
+                        </div>
+                      ))}
                       <p>{tr('只查看本任务的运行结果时，可直接进入运行态 Jobs 查看 Allocation 日志和端口。', 'To inspect this task directly, open its Allocation logs and ports in Runtime Jobs.')}</p>
                     </>
                   )}
@@ -141,7 +150,7 @@ export function JobUsagePanel({ source, clusterId, namespace, inputType = 'hcl',
                           </>
                         )}
                         {service.secrets.length > 0 && !snippet.policy && <p className="leading-5 text-slate-500 dark:text-slate-400">{tr('此示例仅生成地址变量。自定义镜像或密钥字段需按上方路径与字段列表自行补充 Vault 读取模板和应用配置。', 'This example generates only address variables. For custom images or secret fields, add the Vault template and application configuration using the paths and fields listed above.')}</p>}
-                        <p className="leading-5 text-slate-500 dark:text-slate-400">{tr('nomadService 获取服务注册的地址和端口，请确认应用所在节点可达该地址。示例取首个实例；多个数据库实例需自行确定主库。未发现服务时不会生成地址变量，应用需等待依赖就绪。连接或密钥变化会触发应用 Task 重启。', 'nomadService returns the registered address and port; ensure the application node can reach it. This example selects the first instance; select the primary explicitly for database clusters. No address variables are generated until a service is discovered, so the application must wait for dependencies. Connection or secret changes restart the consuming Task.')}</p>
+                        <p className="leading-5 text-slate-500 dark:text-slate-400">{tr('nomadService 获取服务注册的地址和端口，请确认调用方容器的网络可达该地址；发现 IPv6 地址时，调用方需具备 IPv6 连通性，拼接 URL 时使用 [IPv6]:端口。示例取首个实例；多个数据库实例需自行确定主库。未发现服务时不会生成地址变量，应用需等待依赖就绪。连接或密钥变化会触发应用 Task 重启。', 'nomadService returns the registered address and port; ensure the consuming container can reach it. An IPv6 address requires IPv6 connectivity; wrap it in brackets when building a URL: [IPv6]:port. This example selects the first instance; select the primary explicitly for database clusters. No address variables are generated until a service is discovered, so the application must wait for dependencies. Connection or secret changes restart the consuming Task.')}</p>
                       </>
                     ) : (
                       <p className="leading-5 text-amber-700 dark:text-amber-300">{service.provider && service.provider !== 'nomad'

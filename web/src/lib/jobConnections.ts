@@ -18,6 +18,7 @@ export interface JobConnection {
 export interface JobConnections {
   namespace: string;
   type: string;
+  ports: Array<{ group: string; label: string }>;
   services: JobConnection[];
   secrets: ConnectionSecret[];
 }
@@ -59,10 +60,20 @@ export function getJobConnections(document: HCLDocument, defaultNamespace = 'def
   const result: JobConnections = {
     namespace: namespaceExpr === undefined ? defaultNamespace : literal(namespaceExpr),
     type: literal(attr(job, 'type')) || 'service',
+    ports: [],
     services: [],
     secrets: [],
   };
   for (const group of blocks(job, 'group')) {
+    // 注册示例只能引用该 Group 实际声明的端口，不能为无端口任务虚构 http 标签。
+    for (const network of blocks(group, 'network')) {
+      for (const port of blocks(network, 'port')) {
+        const label = port.labels?.[0];
+        if (label && !label.includes('${') && !label.includes('%{')) {
+          result.ports.push({ group: group.labels?.[0] || '', label });
+        }
+      }
+    }
     const tasks = blocks(group, 'task');
     for (const task of tasks) result.secrets.push(...taskSecrets(task));
     const addService = (service: HCLNode, owners: HCLNode[]) => {
@@ -106,6 +117,10 @@ export function connectionDocumentFromJSON(source: string): HCLDocument {
     ...(job.Namespace ? [attribute('namespace', job.Namespace)] : []),
     attribute('type', job.Type || 'service'),
     ...job.TaskGroups.map((g: any) => block('group', [
+      ...(g.Networks || []).map((n: any) => block('network', [
+        ...[...(n.ReservedPorts || []), ...(n.DynamicPorts || [])]
+          .filter((p: any) => p.Label).map((p: any) => block('port', [], p.Label)),
+      ])),
       ...(g.Services || []).map(service),
       ...(g.Tasks || []).map((t: any) => block('task', [
         block('config', [attribute('image', t.Config?.image || ''), attribute('ports', t.Config?.ports || [])]),

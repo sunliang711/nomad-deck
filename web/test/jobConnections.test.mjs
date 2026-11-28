@@ -140,3 +140,29 @@ test('多任务服务无法确定端口归属时不猜测或传播其它任务�
   assert.deepEqual(service.secrets, []);
   assert.equal(buildConnectionSnippet(service).policy, '');
 });
+
+test('无端口守护任务不生成虚构的服务注册端口', () => {
+  const value = job();
+  value.TaskGroups[0].Services = [];
+  assert.deepEqual(guide(value).ports, []);
+});
+
+test('未注册服务的 JSON 配置保留各 Group 的静态和动态端口标签', () => {
+  const value = job();
+  value.TaskGroups[0].Services = [];
+  value.TaskGroups[0].Networks = [{ ReservedPorts: [{ Label: 'sql', Value: 5432 }], DynamicPorts: [{ Label: 'metrics' }, { Value: 8080 }] }];
+  value.TaskGroups.push({ Name: 'web', Networks: [{ DynamicPorts: [{ Label: 'api' }] }], Tasks: [] });
+  assert.deepEqual(guide(value).ports, [
+    { group: 'database', label: 'sql' },
+    { group: 'database', label: 'metrics' },
+    { group: 'web', label: 'api' },
+  ]);
+});
+
+test('HCL 网络端口只提取明确标签，不把动态标签写入注册示例', () => {
+  const block = (name, labels, nodes = []) => ({ kind: 'block', name, labels, body: { nodes, trailing: '' }, leading: '' });
+  const document = { trailing: '', nodes: [block('job', ['script'], [
+    block('group', ['app'], [block('network', [], [block('port', ['api']), block('port', ['${var.port}'])])]),
+  ])] };
+  assert.deepEqual(getJobConnections(document).ports, [{ group: 'app', label: 'api' }]);
+});

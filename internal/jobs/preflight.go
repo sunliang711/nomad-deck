@@ -106,11 +106,18 @@ func sortedMapKeys(m map[string]int) []string {
 // PreflightJob checks whether the target cluster currently satisfies the
 // environment requirements of a parsed Nomad Job JSON.
 func (s *Service) PreflightJob(ctx context.Context, clusterID string, j Job) []string {
+	issues, _ := s.PreflightJobDetailed(ctx, clusterID, j)
+	return issues
+}
+
+// PreflightJobDetailed checks cluster prerequisites and returns both blocking
+// issue messages and structured check items with quick-fix metadata.
+func (s *Service) PreflightJobDetailed(ctx context.Context, clusterID string, j Job) ([]string, []PreflightCheck) {
 	c, err := s.api(ctx, clusterID)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return s.Preflight(ctx, c, clusterID, j)
+	return s.PreflightDetailed(ctx, c, clusterID, j)
 }
 
 func (s *Service) vaultInspectJob(ctx context.Context, clusterID string, j Job) (JobValidationReport, []VaultIntegrationRef) {
@@ -161,27 +168,56 @@ func (s *Service) InspectJobWarnings(ctx context.Context, clusterID string, j Jo
 // task drivers, CNI configuration, host volumes, Docker host mounts, static
 // port collisions, and Vault/template prerequisites against the Job definition.
 func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID string, j Job) []string {
+	issues, _ := s.PreflightDetailed(ctx, c, clusterID, j)
+	return issues
+}
+
+// PreflightDetailed runs full cluster & Vault prerequisite checks and returns
+// both flat blocking error messages and structured per-requirement check items.
+func (s *Service) PreflightDetailed(ctx context.Context, c *nomad.Client, clusterID string, j Job) ([]string, []PreflightCheck) {
 	if j == nil {
-		return nil
+		return nil, nil
 	}
 	if stop, _ := j["Stop"].(bool); stop {
-		return nil
+		return nil, nil
 	}
 
 	var issues []string
+	var checks []PreflightCheck
 	seen := map[string]bool{}
-	add := func(format string, args ...any) {
+	seenCheck := map[string]bool{}
+	add := func(format string, args ...any) string {
 		msg := fmt.Sprintf(format, args...)
 		if !seen[msg] {
 			seen[msg] = true
 			issues = append(issues, msg)
 		}
+		return msg
+	}
+	addCheck := func(chk PreflightCheck) {
+		if chk.ID == "" || seenCheck[chk.ID] {
+			return
+		}
+		seenCheck[chk.ID] = true
+		checks = append(checks, chk)
+	}
+	nomadClusterLink := "/nomad"
+	if clusterID != "" {
+		nomadClusterLink = "/nomad?id=" + url.QueryEscape(clusterID)
 	}
 
 	// Run Vault integration, KV mount/secret/key and paired gateway config blockers first.
 	vaultRep, igs := s.vaultInspectJob(ctx, clusterID, j)
 	for _, msg := range vaultRep.Blocking {
 		add("%s", msg)
+	}
+	// Vault checks are appended after cluster/driver checks for natural top-down reading,
+	// so we attach them right before returning.
+	finalize := func() ([]string, []PreflightCheck) {
+		for _, chk := range vaultRep.Checks {
+			addCheck(chk)
+		}
+		return issues, checks
 	}
 
 	jobNS := orDefault(str(j["Namespace"]), "default")
@@ -197,7 +233,22 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 			}
 		}
 		if !found {
-			add("命名空间 %q 在当前 Nomad 集群中不存在（请先前往「Nomad 集群 → 治理」创建）", jobNS)
+			msg := add("命名空间 %q 在当前 Nomad 集群中不存在（请先前往「Nomad 集群 → 治理」创建）", jobNS)
+			addCheck(PreflightCheck{
+				ID:       "namespace:" + jobNS,
+				Kind:     "namespace",
+				Status:   "error",
+				Title:    fmt.Sprintf("命名空间 %q 不存在", jobNS),
+				TitleEn:  fmt.Sprintf("Namespace %q missing", jobNS),
+				Detail:   msg,
+				DetailEn: fmt.Sprintf("Namespace %q does not exist in this Nomad cluster.", jobNS),
+				FixAction: &PreflightFixAction{
+					Type:    "link",
+					Path:    nomadClusterLink,
+					Label:   "前往集群治理",
+					LabelEn: "Open Governance",
+				},
+			})
 		}
 	}
 
@@ -215,18 +266,48 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 				}
 			}
 			if !found {
-				add("Node Pool %q 在当前 Nomad 集群中不存在（请先前往「Nomad 集群 → 治理」创建）", jobPool)
+				msg := add("Node Pool %q 在当前 Nomad 集群中不存在（请先前往「Nomad 集群 → 治理」创建）", jobPool)
+				addCheck(PreflightCheck{
+					ID:       "node_pool:" + jobPool,
+					Kind:     "node_pool",
+					Status:   "error",
+					Title:    fmt.Sprintf("Node Pool %q 不存在", jobPool),
+					TitleEn:  fmt.Sprintf("Node Pool %q missing", jobPool),
+					Detail:   msg,
+					DetailEn: fmt.Sprintf("Node Pool %q does not exist in this Nomad cluster.", jobPool),
+					FixAction: &PreflightFixAction{
+						Type:    "link",
+						Path:    nomadClusterLink,
+						Label:   "前往集群治理",
+						LabelEn: "Open Governance",
+					},
+				})
 			}
 		}
 	}
 
 	nodes, err := c.Nodes(ctx)
 	if err != nil {
-		return issues
+		return finalize()
 	}
 	if len(nodes) == 0 {
-		add("当前 Nomad 集群没有 Client 节点（纯 Server 集群无法运行任务，请先扩容 Client 或 Server+Client 节点）")
-		return issues
+		msg := add("当前 Nomad 集群没有 Client 节点（纯 Server 集群无法运行任务，请先扩容 Client 或 Server+Client 节点）")
+		addCheck(PreflightCheck{
+			ID:       "client_nodes",
+			Kind:     "client_nodes",
+			Status:   "error",
+			Title:    "没有可用的 Client 节点",
+			TitleEn:  "No Nomad Client nodes",
+			Detail:   msg,
+			DetailEn: "This Nomad cluster has no Client nodes to run workloads.",
+			FixAction: &PreflightFixAction{
+				Type:    "link",
+				Path:    nomadClusterLink,
+				Label:   "前往集群节点",
+				LabelEn: "Open Cluster Nodes",
+			},
+		})
+		return finalize()
 	}
 
 	var eligible []nomad.NodeStub
@@ -236,8 +317,23 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 		}
 	}
 	if len(eligible) == 0 {
-		add("当前集群共有 %d 个 Client 节点，但均处于下线、维护排空或不可调度状态，任务无法调度", len(nodes))
-		return issues
+		msg := add("当前集群共有 %d 个 Client 节点，但均处于下线、维护排空或不可调度状态，任务无法调度", len(nodes))
+		addCheck(PreflightCheck{
+			ID:       "client_nodes",
+			Kind:     "client_nodes",
+			Status:   "error",
+			Title:    "所有 Client 节点当前不可调度",
+			TitleEn:  "No eligible Client nodes",
+			Detail:   msg,
+			DetailEn: fmt.Sprintf("All %d Client node(s) are down, draining, or ineligible.", len(nodes)),
+			FixAction: &PreflightFixAction{
+				Type:    "link",
+				Path:    nomadClusterLink,
+				Label:   "前往集群节点",
+				LabelEn: "Open Cluster Nodes",
+			},
+		})
+		return finalize()
 	}
 
 	dcs := jobStringList(j["Datacenters"])
@@ -257,8 +353,23 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 		if len(dcs) > 0 {
 			dcLabel = strings.Join(dcs, ", ")
 		}
-		add("在目标 Datacenter（%s）和 Node Pool（%s）范围内没有就绪且可调度的 Client 节点", dcLabel, jobPool)
-		return issues
+		msg := add("在目标 Datacenter（%s）和 Node Pool（%s）范围内没有就绪且可调度的 Client 节点", dcLabel, jobPool)
+		addCheck(PreflightCheck{
+			ID:       "client_nodes",
+			Kind:     "client_nodes",
+			Status:   "error",
+			Title:    "目标范围无可用 Client 节点",
+			TitleEn:  "No matching Client nodes in scope",
+			Detail:   msg,
+			DetailEn: fmt.Sprintf("No ready, eligible Client nodes match Datacenter (%s) and Node Pool (%s).", dcLabel, jobPool),
+			FixAction: &PreflightFixAction{
+				Type:    "link",
+				Path:    nomadClusterLink,
+				Label:   "前往集群节点",
+				LabelEn: "Open Cluster Nodes",
+			},
+		})
+		return finalize()
 	}
 
 	groups := parseGroupRequirements(j)
@@ -385,12 +496,62 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 				case "/opt/nomad-deck/nomad/etc/nomad.d/tls/vault-ca.crt":
 					if len(igs) > 0 || s.VaultInspector != nil {
 						if !hasTLSVaultIG {
-							add("Task %q 在 docker volumes 挂载了 Vault CA（%s），但当前 Nomad 集群尚未应用带 TLS 的 Nomad-Vault 联动，节点上不存在该文件。", bind.task, bind.src)
+							msg := add("Task %q 在 docker volumes 挂载了 Vault CA（%s），但当前 Nomad 集群尚未应用带 TLS 的 Nomad-Vault 联动，节点上不存在该文件。", bind.task, bind.src)
+							addCheck(PreflightCheck{
+								ID:       "ca_mount:vault-ca",
+								Kind:     "ca_mount",
+								Status:   "error",
+								Title:    "节点缺少 Vault CA 证书文件",
+								TitleEn:  "Vault CA file missing on nodes",
+								Detail:   msg,
+								DetailEn: fmt.Sprintf("Task %q mounts Vault CA (%s), but no TLS-enabled Nomad-Vault integration is applied yet.", bind.task, bind.src),
+								FixAction: &PreflightFixAction{
+									Type:    "link",
+									Path:    "/integrations",
+									Label:   "前往集群联动",
+									LabelEn: "Open Integrations",
+								},
+							})
+						} else {
+							addCheck(PreflightCheck{
+								ID:       "ca_mount:vault-ca",
+								Kind:     "ca_mount",
+								Status:   "ok",
+								Title:    "节点 Vault CA 证书已分发",
+								TitleEn:  "Vault CA certificate present on nodes",
+								Detail:   fmt.Sprintf("已启用带 TLS 的 Nomad-Vault 联动，节点存在 %s。", bind.src),
+								DetailEn: fmt.Sprintf("TLS Nomad-Vault integration is active; %s is provisioned on nodes.", bind.src),
+							})
 						}
 					}
 				case "/opt/nomad-deck/nomad/etc/nomad.d/tls/ca.pem":
 					if clMeta != nil && !clMeta.TLSEnabled {
-						add("Task %q 在 docker volumes 挂载了 Nomad CA（%s），但当前集群未启用 TLS，节点上不存在该文件。", bind.task, bind.src)
+						msg := add("Task %q 在 docker volumes 挂载了 Nomad CA（%s），但当前集群未启用 TLS，节点上不存在该文件。", bind.task, bind.src)
+						addCheck(PreflightCheck{
+							ID:       "ca_mount:nomad-ca",
+							Kind:     "ca_mount",
+							Status:   "error",
+							Title:    "节点缺少 Nomad CA 证书文件",
+							TitleEn:  "Nomad CA file missing on nodes",
+							Detail:   msg,
+							DetailEn: fmt.Sprintf("Task %q mounts Nomad CA (%s), but TLS is not enabled on this Nomad cluster.", bind.task, bind.src),
+							FixAction: &PreflightFixAction{
+								Type:    "link",
+								Path:    nomadClusterLink,
+								Label:   "查看集群配置",
+								LabelEn: "Cluster Config",
+							},
+						})
+					} else if clMeta != nil && clMeta.TLSEnabled {
+						addCheck(PreflightCheck{
+							ID:       "ca_mount:nomad-ca",
+							Kind:     "ca_mount",
+							Status:   "ok",
+							Title:    "节点 Nomad CA 证书已就绪",
+							TitleEn:  "Nomad CA certificate ready on nodes",
+							Detail:   fmt.Sprintf("集群已启用 TLS，节点存在 %s。", bind.src),
+							DetailEn: fmt.Sprintf("Nomad TLS is enabled; %s is present on nodes.", bind.src),
+						})
 					}
 				}
 			}
@@ -443,7 +604,7 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 		groupMissingSingle := false
 
 		for _, dr := range g.drivers {
-			healthyFound := false
+			healthyCount := 0
 			detectedUnhealthy := false
 			for _, n := range scoped {
 				info, ok := n.Drivers[dr.driver]
@@ -451,90 +612,244 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 					continue
 				}
 				if info.Healthy {
-					healthyFound = true
-					break
+					healthyCount++
+					continue
 				}
 				if info.Detected {
 					detectedUnhealthy = true
 				}
 			}
-			if !healthyFound {
+			if healthyCount == 0 {
 				groupMissingSingle = true
-				add("%s", driverMissingMessage(dr.task, dr.driver, detectedUnhealthy))
+				msg := add("%s", driverMissingMessage(dr.task, dr.driver, detectedUnhealthy))
+				fix := &PreflightFixAction{
+					Type:    "link",
+					Path:    nomadClusterLink,
+					Label:   "前往集群配置",
+					LabelEn: "Cluster Config",
+				}
+				if dr.driver == "docker" {
+					fix = &PreflightFixAction{
+						Type:    "link",
+						Path:    "/docker",
+						Label:   "前往 Docker 管理",
+						LabelEn: "Open Docker Engine",
+					}
+				} else if dr.driver == "raw_exec" {
+					fix = &PreflightFixAction{
+						Type:    "link",
+						Path:    nomadClusterLink,
+						Label:   "前往启用 raw_exec",
+						LabelEn: "Enable raw_exec",
+					}
+				}
+				addCheck(PreflightCheck{
+					ID:        "driver:" + dr.driver,
+					Kind:      "driver",
+					Status:    "error",
+					Title:     fmt.Sprintf("驱动 %s 未就绪", dr.driver),
+					TitleEn:   fmt.Sprintf("Driver %s not ready", dr.driver),
+					Detail:    msg,
+					DetailEn:  fmt.Sprintf("Task %q requires driver %q, which is not healthy on any eligible Client node.", dr.task, dr.driver),
+					FixAction: fix,
+				})
+			} else {
+				addCheck(PreflightCheck{
+					ID:       "driver:" + dr.driver,
+					Kind:     "driver",
+					Status:   "ok",
+					Title:    fmt.Sprintf("驱动 %s 已就绪", dr.driver),
+					TitleEn:  fmt.Sprintf("Driver %s ready", dr.driver),
+					Detail:   fmt.Sprintf("%d 个可用 Client 节点的 %s 驱动健康。", healthyCount, dr.driver),
+					DetailEn: fmt.Sprintf("%s driver is healthy on %d eligible Client node(s).", dr.driver, healthyCount),
+				})
 			}
 		}
 
 		if g.needsBridge && hasManagedMembers {
-			cniFound := false
+			cniCount := 0
 			for _, n := range scoped {
 				if nodeHasCNI(n) {
-					cniFound = true
-					break
+					cniCount++
 				}
 			}
-			if !cniFound {
+			if cniCount == 0 {
 				groupMissingSingle = true
-				add("任务组 %q 使用了 bridge 网络模式，但目标范围内的 Client 节点尚未启用 CNI 插件（请先在「Nomad 集群 → 集群配置」选择 CNI 版本并在「节点插件/配置」启用 CNI）", g.name)
+				msg := add("任务组 %q 使用了 bridge 网络模式，但目标范围内的 Client 节点尚未启用 CNI 插件（请先在「Nomad 集群 → 集群配置」选择 CNI 版本并在「节点插件/配置」启用 CNI）", g.name)
+				addCheck(PreflightCheck{
+					ID:       "cni",
+					Kind:     "cni",
+					Status:   "error",
+					Title:    "CNI 插件未启用（bridge 网络）",
+					TitleEn:  "CNI plugin not enabled (bridge network)",
+					Detail:   msg,
+					DetailEn: fmt.Sprintf("Group %q uses bridge networking, but no eligible Client node has CNI enabled.", g.name),
+					FixAction: &PreflightFixAction{
+						Type:    "link",
+						Path:    nomadClusterLink,
+						Label:   "前往启用 CNI",
+						LabelEn: "Configure CNI",
+					},
+				})
+			} else {
+				addCheck(PreflightCheck{
+					ID:       "cni",
+					Kind:     "cni",
+					Status:   "ok",
+					Title:    "CNI 插件已就绪（bridge 网络）",
+					TitleEn:  "CNI plugin ready (bridge network)",
+					Detail:   fmt.Sprintf("%d 个可用 Client 节点已启用 CNI。", cniCount),
+					DetailEn: fmt.Sprintf("CNI is enabled on %d eligible Client node(s).", cniCount),
+				})
 			}
 		}
 
 		if len(g.dockerHostBinds) > 0 {
-			allowFound := false
+			allowCount := 0
 			for _, n := range scoped {
 				if nodeAllowsDockerVolumes(n) {
-					allowFound = true
-					break
+					allowCount++
 				}
 			}
-			if !allowFound {
+			if allowCount == 0 {
 				groupMissingSingle = true
-				add("Task %q 在 docker volumes 使用了宿主机路径挂载（%s），但可用 Client 节点均未开启「Docker 允许卷挂载」（请先在「Nomad 集群 → 节点插件/配置」开启 volumes）", g.dockerHostBinds[0].task, g.dockerHostBinds[0].src)
+				msg := add("Task %q 在 docker volumes 使用了宿主机路径挂载（%s），但可用 Client 节点均未开启「Docker 允许卷挂载」（请先在「Nomad 集群 → 节点插件/配置」开启 volumes）", g.dockerHostBinds[0].task, g.dockerHostBinds[0].src)
+				addCheck(PreflightCheck{
+					ID:       "docker_volumes",
+					Kind:     "docker_volumes",
+					Status:   "error",
+					Title:    "未开启 Docker 宿主机卷挂载",
+					TitleEn:  "Docker host volume mounts disabled",
+					Detail:   msg,
+					DetailEn: fmt.Sprintf("Task %q bind-mounts host path %s, but docker.volumes.enabled is false on eligible nodes.", g.dockerHostBinds[0].task, g.dockerHostBinds[0].src),
+					FixAction: &PreflightFixAction{
+						Type:    "link",
+						Path:    nomadClusterLink,
+						Label:   "前往开启卷挂载",
+						LabelEn: "Enable Docker Volumes",
+					},
+				})
+			} else {
+				addCheck(PreflightCheck{
+					ID:       "docker_volumes",
+					Kind:     "docker_volumes",
+					Status:   "ok",
+					Title:    "Docker 宿主机卷挂载已开启",
+					TitleEn:  "Docker host volume mounts enabled",
+					Detail:   fmt.Sprintf("%d 个可用 Client 节点允许宿主机路径挂载。", allowCount),
+					DetailEn: fmt.Sprintf("Docker host bind mounts enabled on %d eligible Client node(s).", allowCount),
+				})
 			}
 		}
 
-		if len(g.staticPorts) > 0 && len(nodeUsedPorts) > 0 {
-			freeNodeFound := false
-			conflicts := map[string]bool{}
-			for _, n := range scoped {
-				used, known := nodeUsedPorts[n.ID]
-				if !known {
-					freeNodeFound = true
-					break
-				}
-				allFree := true
-				for _, p := range g.staticPorts {
-					if owner := used[p]; owner != "" {
-						allFree = false
-						conflicts[fmt.Sprintf("%d（被 %s 占用）", p, owner)] = true
-					}
-				}
-				if allFree {
-					freeNodeFound = true
-					break
+		if len(g.staticPorts) > 0 {
+			portStrs := make([]string, len(g.staticPorts))
+			var privPorts []string
+			for i, p := range g.staticPorts {
+				portStrs[i] = strconv.Itoa(p)
+				if p == 80 || p == 443 {
+					privPorts = append(privPorts, strconv.Itoa(p))
 				}
 			}
-			if !freeNodeFound {
-				groupMissingSingle = true
-				list := make([]string, 0, len(conflicts))
-				for c := range conflicts {
-					list = append(list, c)
+			portsLabel := strings.Join(portStrs, " / ")
+
+			if len(nodeUsedPorts) > 0 {
+				freeNodeFound := false
+				conflicts := map[string]bool{}
+				for _, n := range scoped {
+					used, known := nodeUsedPorts[n.ID]
+					if !known {
+						freeNodeFound = true
+						break
+					}
+					allFree := true
+					for _, p := range g.staticPorts {
+						if owner := used[p]; owner != "" {
+							allFree = false
+							conflicts[fmt.Sprintf("%d（被 %s 占用）", p, owner)] = true
+						}
+					}
+					if allFree {
+						freeNodeFound = true
+						break
+					}
 				}
-				sort.Strings(list)
-				add("任务组 %q 申请的静态端口在所有可用 Client 节点上均已被占用：%s（请先停止冲突任务或更换端口）", g.name, strings.Join(list, "、"))
+				if !freeNodeFound {
+					groupMissingSingle = true
+					list := make([]string, 0, len(conflicts))
+					for c := range conflicts {
+						list = append(list, c)
+					}
+					sort.Strings(list)
+					msg := add("任务组 %q 申请的静态端口在所有可用 Client 节点上均已被占用：%s（请先停止冲突任务或更换端口）", g.name, strings.Join(list, "、"))
+					addCheck(PreflightCheck{
+						ID:       "ports:" + g.name,
+						Kind:     "port",
+						Status:   "error",
+						Title:    fmt.Sprintf("静态端口冲突（%s）", portsLabel),
+						TitleEn:  fmt.Sprintf("Static port conflict (%s)", portsLabel),
+						Detail:   msg,
+						DetailEn: fmt.Sprintf("Static ports %s for group %q are occupied on all eligible nodes.", portsLabel, g.name),
+					})
+				} else if len(privPorts) > 0 {
+					addCheck(PreflightCheck{
+						ID:       "ports:" + g.name,
+						Kind:     "port",
+						Status:   "warning",
+						Title:    fmt.Sprintf("静态端口 %s（需确认宿主机未占用）", portsLabel),
+						TitleEn:  fmt.Sprintf("Static ports %s (verify host availability)", portsLabel),
+						Detail:   fmt.Sprintf("Nomad 任务间无冲突，但映射了宿主机端口 %s，请确保宿主机进程（如 systemd Nginx / Caddy）未占用并放行防火墙。", strings.Join(privPorts, "、")),
+						DetailEn: fmt.Sprintf("No Nomad port conflict, but privileged host ports %s are bound; ensure no host daemon occupies them.", strings.Join(privPorts, ", ")),
+					})
+				} else {
+					addCheck(PreflightCheck{
+						ID:       "ports:" + g.name,
+						Kind:     "port",
+						Status:   "ok",
+						Title:    fmt.Sprintf("静态端口 %s 可用", portsLabel),
+						TitleEn:  fmt.Sprintf("Static ports %s available", portsLabel),
+						Detail:   fmt.Sprintf("目标范围存在端口 %s 空闲的可用 Client 节点。", portsLabel),
+						DetailEn: fmt.Sprintf("Ports %s are free on at least one eligible Client node.", portsLabel),
+					})
+				}
 			}
 		}
 
 		for _, vol := range g.hostVolumes {
-			volFound := false
+			volCount := 0
 			for _, n := range scoped {
 				if nodeVolumes[n.ID][vol] {
-					volFound = true
-					break
+					volCount++
 				}
 			}
-			if !volFound {
+			if volCount == 0 {
 				groupMissingSingle = true
-				add("任务组 %q 引用了 Host Volume %q，但目标范围的可用 Client 节点均未配置该挂载卷（请先在「Nomad 集群 → 节点插件/配置」添加同名 Host Volume）", g.name, vol)
+				msg := add("任务组 %q 引用了 Host Volume %q，但目标范围的可用 Client 节点均未配置该挂载卷（请先在「Nomad 集群 → 节点插件/配置」添加同名 Host Volume）", g.name, vol)
+				addCheck(PreflightCheck{
+					ID:       "host_volume:" + vol,
+					Kind:     "host_volume",
+					Status:   "error",
+					Title:    fmt.Sprintf("缺少 Host Volume %q", vol),
+					TitleEn:  fmt.Sprintf("Missing Host Volume %q", vol),
+					Detail:   msg,
+					DetailEn: fmt.Sprintf("Group %q requires Host Volume %q, which is not configured on eligible Client nodes.", g.name, vol),
+					FixAction: &PreflightFixAction{
+						Type:    "link",
+						Path:    nomadClusterLink,
+						Label:   "前往配置挂载卷",
+						LabelEn: "Configure Host Volume",
+					},
+				})
+			} else {
+				addCheck(PreflightCheck{
+					ID:       "host_volume:" + vol,
+					Kind:     "host_volume",
+					Status:   "ok",
+					Title:    fmt.Sprintf("Host Volume %q 已就绪", vol),
+					TitleEn:  fmt.Sprintf("Host Volume %q ready", vol),
+					Detail:   fmt.Sprintf("%d 个可用 Client 节点已配置该挂载卷。", volCount),
+					DetailEn: fmt.Sprintf("Host Volume %q is configured on %d eligible Client node(s).", vol, volCount),
+				})
 			}
 		}
 
@@ -585,12 +900,21 @@ func (s *Service) Preflight(ctx context.Context, c *nomad.Client, clusterID stri
 				break
 			}
 			if !singleNodeOK {
-				add("任务组 %q 所需的驱动、网络、端口或存储卷分布在集群中不同节点上，目标范围内没有单个 Client 节点同时满足全部条件", g.name)
+				msg := add("任务组 %q 所需的驱动、网络、端口或存储卷分布在集群中不同节点上，目标范围内没有单个 Client 节点同时满足全部条件", g.name)
+				addCheck(PreflightCheck{
+					ID:       "placement:" + g.name,
+					Kind:     "placement",
+					Status:   "error",
+					Title:    fmt.Sprintf("任务组 %q 无单节点同时满足全部条件", g.name),
+					TitleEn:  fmt.Sprintf("No single node satisfies all requirements for %q", g.name),
+					Detail:   msg,
+					DetailEn: fmt.Sprintf("Required drivers, network, ports, and volumes for group %q are spread across different nodes.", g.name),
+				})
 			}
 		}
 	}
 
-	return issues
+	return finalize()
 }
 
 type taskDriverRef struct {

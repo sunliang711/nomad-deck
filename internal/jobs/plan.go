@@ -121,9 +121,10 @@ type PlanResult struct {
 	JobModifyIndex   uint64         `json:"job_modify_index"`
 	Diff             any            `json:"diff"`
 	Annotations      any            `json:"annotations"`
-	FailedTGAllocs   any            `json:"failed_tg_allocs"`
-	PreflightErrors  []string       `json:"preflight_errors,omitempty"`
-	SchedulingErrors []string       `json:"scheduling_errors,omitempty"`
+	FailedTGAllocs   any              `json:"failed_tg_allocs"`
+	PreflightErrors  []string         `json:"preflight_errors,omitempty"`
+	PreflightChecks  []PreflightCheck `json:"preflight_checks,omitempty"`
+	SchedulingErrors []string         `json:"scheduling_errors,omitempty"`
 	CanApply         bool           `json:"can_apply"`
 	Warnings         string         `json:"warnings"`
 	ValidationWarns  string         `json:"validation_warnings,omitempty"`
@@ -294,7 +295,7 @@ func (s *Service) Plan(ctx context.Context, caller Caller, clusterID string, in 
 	if in.EditMode != "visual" && in.EditMode != "hcl" && in.EditMode != "json" {
 		return nil, badRequest("edit_mode 需为 visual、hcl 或 json")
 	}
-	preflightErrs := s.Preflight(ctx, c, clusterID, j)
+	preflightErrs, preflightChecks := s.PreflightDetailed(ctx, c, clusterID, j)
 	schedErrs := ExplainFailedTGAllocs(pr.FailedTGAllocs)
 	blockingReasons := make([]string, 0, len(preflightErrs)+len(schedErrs))
 	blockingReasons = append(blockingReasons, preflightErrs...)
@@ -329,7 +330,7 @@ func (s *Service) Plan(ctx context.Context, caller Caller, clusterID string, in 
 	}
 	res := &PlanResult{PlanID: rec.ID, PlanHash: rec.Hash, ExpiresAt: rec.ExpiresAt, JobID: id, Namespace: ns,
 		JobModifyIndex: pr.JobModifyIndex, Diff: pr.Diff, Annotations: pr.Annotations, FailedTGAllocs: pr.FailedTGAllocs,
-		PreflightErrors: preflightErrs, SchedulingErrors: schedErrs, CanApply: len(blockingReasons) == 0,
+		PreflightErrors: preflightErrs, PreflightChecks: preflightChecks, SchedulingErrors: schedErrs, CanApply: len(blockingReasons) == 0,
 		Warnings: planOnlyWarns, ValidationWarns: combinedWarns, Job: j}
 	if over := s.pendingCountOverride(ctx, clusterID, ns, id); len(over) > 0 {
 		res.CountOverridden = over

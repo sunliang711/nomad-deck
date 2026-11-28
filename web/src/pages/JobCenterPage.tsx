@@ -12,6 +12,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  ShieldCheck,
   Sparkles,
   Square,
   Trash2,
@@ -59,7 +60,21 @@ import { CodeEditor } from '../components/CodeEditor';
 import { ItemSwitcher } from '../components/ItemSwitcher';
 import { VisualJobBuilder, type VisualJobBuilderHandle } from '../components/VisualJobBuilder';
 import { JobRuntimePanel, type JobRuntimeRef } from '../components/JobRuntimePanel';
-import { getBlueprintDesc, getBlueprintLabel, getBlueprintTags, STARTER_SAMPLES } from '../lib/jobBlueprints';
+import { JobPreflightPanel } from '../components/JobPreflightPanel';
+import {
+  VaultKVQuickFixModal,
+  VaultRoleQuickFixModal,
+  type PreflightCheck,
+  type PreflightFixAction,
+} from '../components/PreflightQuickFixModals';
+import {
+  getBlueprintDesc,
+  getBlueprintLabel,
+  getBlueprintRequires,
+  getBlueprintTags,
+  STARTER_SAMPLES,
+  type JobBlueprint,
+} from '../lib/jobBlueprints';
 
 const sampleHCL = STARTER_SAMPLES[0].hcl;
 
@@ -117,10 +132,29 @@ export function JobCenterPage() {
   const planRequestRef = useRef(0);
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
   const [preflightErrors, setPreflightErrors] = useState<string[]>([]);
+  const [preflightChecks, setPreflightChecks] = useState<PreflightCheck[]>([]);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [preflightCheckErr, setPreflightCheckErr] = useState('');
+  const preflightReqRef = useRef(0);
   const [ignorePreflight, setIgnorePreflight] = useState(false);
   const [revisions, setRevisions] = useState<any[]>([]);
   const [selectedJobId, setSelectedJobId] = useState('');
+  const [activeBlueprintId, setActiveBlueprintId] = useState<string>(STARTER_SAMPLES[0].id);
+  const [activeCustomTemplateDesc, setActiveCustomTemplateDesc] = useState('');
   const [tplName, setTplName] = useState('');
+  const [tplDesc, setTplDesc] = useState('');
+  const [previewTarget, setPreviewTarget] = useState<{
+    title: string;
+    hcl: string;
+    blueprint?: JobBlueprint | null;
+    customDescription?: string;
+  } | null>(null);
+  const [previewChecks, setPreviewChecks] = useState<PreflightCheck[]>([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewErr, setPreviewErr] = useState('');
+  const previewReqRef = useRef(0);
+  const [roleFixAction, setRoleFixAction] = useState<PreflightFixAction | null>(null);
+  const [kvFixAction, setKvFixAction] = useState<PreflightFixAction | null>(null);
   const [err, setErr] = useState('');
   const [loadingClusters, setLoadingClusters] = useState(true);
   const editRequestRef = useRef(0);
@@ -361,8 +395,11 @@ export function JobCenterPage() {
         .map((s) => s.trim())
         .filter(Boolean);
       const preErrs = Array.isArray(res.preflight_errors) ? (res.preflight_errors as string[]).filter(Boolean) : [];
+      const preChecks = Array.isArray(res.preflight_checks) ? (res.preflight_checks as PreflightCheck[]) : [];
       setValidationWarnings(warns);
       setPreflightErrors(preErrs);
+      setPreflightChecks(preChecks);
+      setPreflightCheckErr('');
       if (preErrs.length > 0) {
         toast.error(tr(`环境前置检查未通过：发现 ${preErrs.length} 项阻塞问题`, `Preflight checks failed: ${preErrs.length} blocker(s) found`));
       } else if (warns.length > 0) {
@@ -372,6 +409,97 @@ export function JobCenterPage() {
       }
     } catch (ex: any) {
       setErr(ex?.message || tr('校验失败', 'Validation failed'));
+    }
+  };
+
+  const runLivePreflight = useCallback(async () => {
+    if (!clusterId || needsDeployment || !hcl.trim()) {
+      setPreflightChecks([]);
+      setPreflightCheckErr('');
+      return;
+    }
+    const req = ++preflightReqRef.current;
+    setPreflightLoading(true);
+    setPreflightCheckErr('');
+    try {
+      let payload: Record<string, any>;
+      if (editMode === 'json') {
+        payload = { input_type: 'json', job_json: JSON.parse(hcl), namespace: effectiveBuilderNamespace, edit_mode: 'json' };
+      } else {
+        payload = { input_type: 'hcl', hcl, variables: jobVariables, namespace: effectiveBuilderNamespace, edit_mode: 'hcl' };
+      }
+      const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/validate`, payload);
+      if (req !== preflightReqRef.current) return;
+      setPreflightChecks(Array.isArray(res.preflight_checks) ? (res.preflight_checks as PreflightCheck[]) : []);
+    } catch (ex: any) {
+      if (req !== preflightReqRef.current) return;
+      setPreflightChecks([]);
+      setPreflightCheckErr(ex?.message || tr('前置体检暂不可用', 'Preflight check unavailable'));
+    } finally {
+      if (req === preflightReqRef.current) setPreflightLoading(false);
+    }
+  }, [clusterId, needsDeployment, hcl, editMode, jobVariables, effectiveBuilderNamespace, tr]);
+
+  const runPreviewPreflight = useCallback(
+    async (target: { hcl: string } | null) => {
+      if (!target || !clusterId || needsDeployment || !target.hcl.trim()) {
+        setPreviewChecks([]);
+        setPreviewErr('');
+        return;
+      }
+      const req = ++previewReqRef.current;
+      setPreviewLoading(true);
+      setPreviewErr('');
+      try {
+        const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/validate`, {
+          input_type: 'hcl',
+          hcl: target.hcl,
+          namespace: effectiveBuilderNamespace,
+          edit_mode: 'hcl',
+        });
+        if (req !== previewReqRef.current) return;
+        setPreviewChecks(Array.isArray(res.preflight_checks) ? (res.preflight_checks as PreflightCheck[]) : []);
+      } catch (ex: any) {
+        if (req !== previewReqRef.current) return;
+        setPreviewChecks([]);
+        setPreviewErr(ex?.message || tr('前置体检暂不可用', 'Preflight check unavailable'));
+      } finally {
+        if (req === previewReqRef.current) setPreviewLoading(false);
+      }
+    },
+    [clusterId, needsDeployment, effectiveBuilderNamespace, tr],
+  );
+
+  useEffect(() => {
+    if (pageTab !== 'builder' || !clusterId || needsDeployment || !hcl.trim()) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void runLivePreflight();
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [pageTab, clusterId, needsDeployment, hcl, editMode, effectiveBuilderNamespace, runLivePreflight]);
+
+  useEffect(() => {
+    if (!previewTarget) return;
+    void runPreviewPreflight(previewTarget);
+  }, [previewTarget, runPreviewPreflight]);
+
+  const handleFixAction = (action: PreflightFixAction) => {
+    if (action.type === 'vault_role') {
+      setRoleFixAction(action);
+    } else if (action.type === 'vault_kv') {
+      setKvFixAction(action);
+    }
+  };
+
+  const handleFixCompleted = async () => {
+    await loadBuilderContext();
+    if (previewTarget) {
+      await runPreviewPreflight(previewTarget);
+    }
+    if (pageTab === 'builder') {
+      await runLivePreflight();
     }
   };
 
@@ -444,6 +572,10 @@ export function JobCenterPage() {
       const res = await apiPost(`/api/v1/nomad/${clusterId}/job-ops/plan`, input);
       if (request === planRequestRef.current) {
         setPlan(res.plan);
+        if (Array.isArray(res.plan?.preflight_checks)) {
+          setPreflightChecks(res.plan.preflight_checks as PreflightCheck[]);
+          setPreflightCheckErr('');
+        }
         const pre = Array.isArray(res.plan?.preflight_errors) ? res.plan.preflight_errors : [];
         const sched = Array.isArray(res.plan?.scheduling_errors) ? res.plan.scheduling_errors : [];
         if (pre.length > 0 || sched.length > 0) {
@@ -485,6 +617,8 @@ export function JobCenterPage() {
       formatCacheRef.current = null;
       const ns = j.namespace || effectiveBuilderNamespace;
       setSelectedJobId(j.id);
+      setActiveBlueprintId('');
+      setActiveCustomTemplateDesc('');
       updatePageTab('builder', { replace: opts?.replaceHistory });
       clearPlan();
       setHcl('');
@@ -536,10 +670,14 @@ export function JobCenterPage() {
     return Array.from(set);
   }, [clusterNamespaces, namespace]);
 
-  // Only show starter match when creating a fresh draft (never falsely match a live job being edited)
+  // Track active starter blueprint (either exact match or the blueprint currently being customized)
   const activeSample = useMemo(
-    () => (selectedJobId ? null : STARTER_SAMPLES.find((sample) => sample.hcl === hcl) || null),
-    [hcl, selectedJobId],
+    () =>
+      selectedJobId
+        ? null
+        : STARTER_SAMPLES.find((sample) => sample.hcl === hcl) ||
+          (activeBlueprintId ? STARTER_SAMPLES.find((sample) => sample.id === activeBlueprintId) || null : null),
+    [hcl, selectedJobId, activeBlueprintId],
   );
 
   const planBlockingReasons = useMemo(() => {
@@ -606,11 +744,17 @@ export function JobCenterPage() {
     );
   }
 
-  const loadDraftIntoComposer = (nextHcl: string, mode?: 'visual' | 'hcl') => {
+  const loadDraftIntoComposer = (
+    nextHcl: string,
+    mode?: 'visual' | 'hcl',
+    meta?: { blueprintId?: string; customDescription?: string },
+  ) => {
     setSelectedJobId('');
     setRevisions([]);
     setHcl(nextHcl);
     setJobVariables({});
+    setActiveBlueprintId(meta?.blueprintId || STARTER_SAMPLES.find((s) => s.hcl === nextHcl)?.id || '');
+    setActiveCustomTemplateDesc(meta?.customDescription || '');
     clearPlan();
     if (mode) {
       setEditMode(mode);
@@ -621,7 +765,7 @@ export function JobCenterPage() {
   };
 
   const startFreshDraft = () => {
-    loadDraftIntoComposer(sampleHCL, isAdmin ? 'visual' : 'hcl');
+    loadDraftIntoComposer(sampleHCL, isAdmin ? 'visual' : 'hcl', { blueprintId: STARTER_SAMPLES[0].id });
   };
 
   return (
@@ -1035,7 +1179,7 @@ export function JobCenterPage() {
                       onChange={(e) => {
                         const found = STARTER_SAMPLES.find((s) => s.id === e.target.value);
                         if (!found) return;
-                        loadDraftIntoComposer(found.hcl);
+                        loadDraftIntoComposer(found.hcl, undefined, { blueprintId: found.id });
                       }}
                     >
                       <option value="">{tr('选择场景示例…', 'Select a blueprint...')}</option>
@@ -1055,6 +1199,19 @@ export function JobCenterPage() {
                 {tr('当前蓝图：', 'Current blueprint: ')}{getBlueprintDesc(activeSample, locale)}
               </p>
             )}
+
+            <JobPreflightPanel
+              checks={preflightChecks}
+              loading={preflightLoading}
+              error={preflightCheckErr}
+              blueprint={activeSample}
+              customDescription={activeCustomTemplateDesc}
+              clusterName={selectedCluster?.name}
+              needsDeployment={needsDeployment}
+              isAdmin={isAdmin}
+              onRefresh={() => void runLivePreflight()}
+              onFixAction={handleFixAction}
+            />
 
             {editMode === 'visual' ? (
               <VisualJobBuilder
@@ -1091,16 +1248,28 @@ export function JobCenterPage() {
                     placeholder={tr('输入名称保存为模板…', 'Template name...')}
                     value={tplName}
                     onChange={(e) => setTplName(e.target.value)}
-                    className="w-44 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
+                    className="w-40 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
+                  />
+                  <input
+                    placeholder={tr('前置/用途说明（可选）', 'Prerequisites / note (optional)')}
+                    value={tplDesc}
+                    onChange={(e) => setTplDesc(e.target.value)}
+                    className="w-48 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-900"
                   />
                   <Button
                     size="sm"
                     disabled={!tplName.trim() || modeBusy || editMode === 'json' || (editMode === 'visual' && !visualReady)}
                     onClick={() =>
                       tplName.trim() &&
-                      void apiPost('/api/v1/job-templates', { name: tplName.trim(), edit_mode: 'hcl', hcl })
+                      void apiPost('/api/v1/job-templates', {
+                        name: tplName.trim(),
+                        description: tplDesc.trim(),
+                        edit_mode: 'hcl',
+                        hcl,
+                      })
                         .then(() => {
                           setTplName('');
+                          setTplDesc('');
                           toast.success(tr('模板已保存至模板库', 'Saved to template library'));
                           return loadClusters();
                         })
@@ -1306,35 +1475,76 @@ export function JobCenterPage() {
             description={tr('点击即可载入可视化编排工作台，快速修改镜像、端口、资源与 Vault 密钥并运行', 'Click to load into Visual Composer to customize image, ports, resources, and Vault secrets')}
           >
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 text-xs">
-              {STARTER_SAMPLES.map((s) => (
-                <div
-                  key={s.id}
-                  className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200/90 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-950/40"
-                >
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-semibold text-sm text-slate-900 dark:text-slate-100">{getBlueprintLabel(s, locale)}</span>
-                      <div className="flex flex-wrap gap-1">
-                        {getBlueprintTags(s, locale).map((tag) => (
-                          <Badge key={tag} tone={tag === 'Vault' ? 'green' : tag === 'Docker' ? 'blue' : 'neutral'}>
-                            {tag}
-                          </Badge>
-                        ))}
+              {STARTER_SAMPLES.map((s) => {
+                const reqs = getBlueprintRequires(s, locale);
+                return (
+                  <div
+                    key={s.id}
+                    className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200/90 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-950/40"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-sm text-slate-900 dark:text-slate-100">{getBlueprintLabel(s, locale)}</span>
+                        <div className="flex flex-wrap gap-1">
+                          {getBlueprintTags(s, locale).map((tag) => (
+                            <Badge key={tag} tone={tag === 'Vault' ? 'green' : tag === 'Docker' ? 'blue' : 'neutral'}>
+                              {tag}
+                            </Badge>
+                          ))}
+                        </div>
                       </div>
+                      <p className="leading-5 text-slate-500 dark:text-slate-400">{getBlueprintDesc(s, locale)}</p>
+                      {reqs.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                          <span className="text-[11px] text-slate-400 dark:text-slate-500">{tr('前置：', 'Requires:')}</span>
+                          {reqs.map((req, idx) => (
+                            <span
+                              key={idx}
+                              className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
+                                req.kind === 'vault'
+                                  ? 'border-emerald-200 bg-emerald-50/80 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300'
+                                  : req.kind === 'port'
+                                    ? 'border-amber-200 bg-amber-50/80 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
+                                    : req.kind === 'driver'
+                                      ? 'border-indigo-200 bg-indigo-50/70 text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-300'
+                                      : 'border-slate-200 bg-white text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                              }`}
+                            >
+                              {req.label}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <p className="leading-5 text-slate-500 dark:text-slate-400">{getBlueprintDesc(s, locale)}</p>
+                    <div className="flex flex-wrap items-center gap-2 border-t border-slate-200/70 pt-3 dark:border-slate-800">
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => loadDraftIntoComposer(s.hcl, isAdmin ? 'visual' : 'hcl', { blueprintId: s.id })}
+                      >
+                        <LayoutGrid className="h-3.5 w-3.5" />
+                        <span>{tr('可视化编排', 'Visual Builder')}</span>
+                      </Button>
+                      <Button size="sm" onClick={() => loadDraftIntoComposer(s.hcl, 'hcl', { blueprintId: s.id })}>
+                        {tr('HCL 源码', 'Edit HCL')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          setPreviewTarget({
+                            title: getBlueprintLabel(s, locale),
+                            hcl: s.hcl,
+                            blueprint: s,
+                          })
+                        }
+                      >
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                        <span>{tr('前置体检', 'Preflight')}</span>
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 border-t border-slate-200/70 pt-3 dark:border-slate-800">
-                    <Button size="sm" variant="primary" onClick={() => loadDraftIntoComposer(s.hcl, isAdmin ? 'visual' : 'hcl')}>
-                      <LayoutGrid className="h-3.5 w-3.5" />
-                      <span>{tr('可视化编排', 'Visual Builder')}</span>
-                    </Button>
-                    <Button size="sm" onClick={() => loadDraftIntoComposer(s.hcl, 'hcl')}>
-                      {tr('HCL 源码编辑', 'Edit HCL')}
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Card>
 
@@ -1371,10 +1581,33 @@ export function JobCenterPage() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-semibold text-slate-800 dark:text-slate-100">{t.name}</div>
-                      <div className="mt-0.5 text-[11px] text-slate-400">{tr('自定义 HCL 模板', 'Custom HCL Template')}</div>
+                      <div className="mt-0.5 truncate text-[11px] text-slate-500 dark:text-slate-400" title={t.description || ''}>
+                        {t.description || tr('自定义 HCL 模板', 'Custom HCL Template')}
+                      </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
-                      <Button size="sm" onClick={() => loadDraftIntoComposer(t.hcl || '', isAdmin ? 'visual' : 'hcl')}>
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          setPreviewTarget({
+                            title: t.name,
+                            hcl: t.hcl || '',
+                            customDescription: t.description || '',
+                          })
+                        }
+                      >
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                        <span>{tr('体检', 'Check')}</span>
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() =>
+                          loadDraftIntoComposer(t.hcl || '', isAdmin ? 'visual' : 'hcl', {
+                            customDescription: t.description || '',
+                          })
+                        }
+                      >
                         {tr('载入编排', 'Load')}
                       </Button>
                       {isAdmin && (
@@ -1580,6 +1813,89 @@ export function JobCenterPage() {
           );
         })()}
       </Modal>
+      {/* Template Library Live Preflight Preview Modal */}
+      <Modal
+        open={Boolean(previewTarget)}
+        title={
+          previewTarget
+            ? tr(`前置条件与实时体检 · ${previewTarget.title}`, `Prerequisites & Live Preflight · ${previewTarget.title}`)
+            : ''
+        }
+        onClose={() => setPreviewTarget(null)}
+        wide
+      >
+        {previewTarget && (
+          <div className="space-y-4 text-xs">
+            {previewTarget.blueprint && (
+              <p className="leading-5 text-slate-600 dark:text-slate-300">
+                {getBlueprintDesc(previewTarget.blueprint, locale)}
+              </p>
+            )}
+            <JobPreflightPanel
+              checks={previewChecks}
+              loading={previewLoading}
+              error={previewErr}
+              blueprint={previewTarget.blueprint}
+              customDescription={previewTarget.customDescription}
+              clusterName={selectedCluster?.name}
+              needsDeployment={needsDeployment}
+              isAdmin={isAdmin}
+              defaultExpanded
+              onRefresh={() => void runPreviewPreflight(previewTarget)}
+              onFixAction={handleFixAction}
+            />
+            <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200/70 pt-3 dark:border-slate-800">
+              <Button size="sm" onClick={() => setPreviewTarget(null)}>
+                {tr('关闭', 'Close')}
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  const target = previewTarget;
+                  setPreviewTarget(null);
+                  loadDraftIntoComposer(target.hcl, 'hcl', {
+                    blueprintId: target.blueprint?.id,
+                    customDescription: target.customDescription,
+                  });
+                }}
+              >
+                {tr('载入 HCL 源码', 'Load HCL')}
+              </Button>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => {
+                  const target = previewTarget;
+                  setPreviewTarget(null);
+                  loadDraftIntoComposer(target.hcl, isAdmin ? 'visual' : 'hcl', {
+                    blueprintId: target.blueprint?.id,
+                    customDescription: target.customDescription,
+                  });
+                }}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+                <span>{tr('载入可视化编排', 'Load in Visual Builder')}</span>
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <VaultRoleQuickFixModal
+        open={Boolean(roleFixAction)}
+        action={roleFixAction}
+        clusterMode={selectedCluster?.mode}
+        onClose={() => setRoleFixAction(null)}
+        onFixed={handleFixCompleted}
+      />
+
+      <VaultKVQuickFixModal
+        open={Boolean(kvFixAction)}
+        action={kvFixAction}
+        secretHints={previewTarget?.blueprint?.secretHints || activeSample?.secretHints}
+        onClose={() => setKvFixAction(null)}
+        onFixed={handleFixCompleted}
+      />
     </div>
   );
 }

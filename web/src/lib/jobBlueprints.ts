@@ -1,5 +1,31 @@
 import type { Locale } from './locale.ts';
 
+export interface BlueprintRequirementBadge {
+  kind: 'driver' | 'vault' | 'port' | 'network';
+  label: string;
+  labelEn: string;
+}
+
+export interface BlueprintNote {
+  title: string;
+  titleEn: string;
+  detail: string;
+  detailEn: string;
+  optional?: boolean;
+  linkTo?: string;
+  linkLabel?: string;
+  linkLabelEn?: string;
+}
+
+export interface BlueprintSecretFieldHint {
+  placeholder?: string;
+  placeholderEn?: string;
+  defaultValue?: string;
+  secret?: boolean;
+  hint?: string;
+  hintEn?: string;
+}
+
 export interface JobBlueprint {
   id: string;
   label: string;
@@ -8,6 +34,9 @@ export interface JobBlueprint {
   tagsEn?: string[];
   desc: string;
   descEn?: string;
+  requires: BlueprintRequirementBadge[];
+  notes?: BlueprintNote[];
+  secretHints?: Record<string, BlueprintSecretFieldHint>;
   hcl: string;
 }
 
@@ -23,6 +52,35 @@ export function getBlueprintDesc(bp: JobBlueprint, locale: Locale = 'zh'): strin
   return locale === 'en' && bp.descEn ? bp.descEn : bp.desc;
 }
 
+export function getBlueprintRequires(
+  bp: JobBlueprint,
+  locale: Locale = 'zh',
+): Array<{ kind: BlueprintRequirementBadge['kind']; label: string }> {
+  return (bp.requires || []).map((r) => ({
+    kind: r.kind,
+    label: locale === 'en' ? r.labelEn : r.label,
+  }));
+}
+
+export function getBlueprintNotes(
+  bp: JobBlueprint,
+  locale: Locale = 'zh',
+): Array<{
+  title: string;
+  detail: string;
+  optional: boolean;
+  linkTo?: string;
+  linkLabel?: string;
+}> {
+  return (bp.notes || []).map((n) => ({
+    title: locale === 'en' ? n.titleEn : n.title,
+    detail: locale === 'en' ? n.detailEn : n.detail,
+    optional: Boolean(n.optional),
+    linkTo: n.linkTo,
+    linkLabel: n.linkTo ? (locale === 'en' ? n.linkLabelEn || n.linkLabel : n.linkLabel) : undefined,
+  }));
+}
+
 export const STARTER_SAMPLES: JobBlueprint[] = [
   {
     id: 'docker',
@@ -32,8 +90,10 @@ export const STARTER_SAMPLES: JobBlueprint[] = [
     tagsEn: ['Docker', 'Starter'],
     desc: '标准 Docker Web 容器示例，无需额外前置配置即可在 Nomad Client 运行',
     descEn: 'Standard Docker web container example ready to run on any Docker-enabled Nomad Client',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+    ],
     hcl: `job "hello" {
-  # 前置依赖：Nomad Client 节点已安装并启用 docker 驱动。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -61,10 +121,27 @@ export const STARTER_SAMPLES: JobBlueprint[] = [
     tagsEn: ['Docker', 'Gateway'],
     desc: '轻量级 Web 服务器与自动 HTTPS 反向代理，内置 nomadService 动态发现示例并暴露 80 / 443 端口',
     descEn: 'Lightweight web server & automatic HTTPS reverse proxy with nomadService upstream example and ports 80/443',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 80 / 443', labelEn: 'Ports 80 / 443' },
+    ],
+    notes: [
+      {
+        title: '生产持久化 ACME 证书',
+        titleEn: 'Persist ACME certificates in production',
+        detail: '默认使用 ephemeral_disk 暂存证书数据；生产环境建议将 local/caddy-data 替换为 Host Volume，防止重调度丢失 ACME 凭据。',
+        detailEn: 'Uses ephemeral_disk by default; replace local/caddy-data with a Host Volume in production so ACME credentials survive rescheduling.',
+        optional: false,
+      },
+      {
+        title: '启用自动 HTTPS 与 nomadService 反向代理',
+        titleEn: 'Enable auto HTTPS & nomadService upstream',
+        detail: '在 local/Caddyfile 中用真实域名替换 :80 即可自动签发 HTTPS；启用反向代理示例时，请确保目标后端已在 Nomad 注册同名 service。',
+        detailEn: 'Replace :80 with your domain in local/Caddyfile for automatic HTTPS, and ensure the target backend registers the matching Nomad service name.',
+        optional: true,
+      },
+    ],
     hcl: `job "caddy" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 80 / 443 未被占用（需防火墙放行）。
-  # 2. 若启用反向代理示例中的 nomadService，需确保目标后端服务已在 Nomad 注册同名 service。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -82,7 +159,6 @@ export const STARTER_SAMPLES: JobBlueprint[] = [
       }
     }
 
-    # 生产环境建议将 local/caddy-data 替换为 Host Volume 持久化证书，防止重调度丢失 ACME 凭据。
     ephemeral_disk {
       size   = 256
       sticky = true
@@ -116,7 +192,7 @@ export const STARTER_SAMPLES: JobBlueprint[] = [
         destination = "local/Caddyfile"
         change_mode = "restart"
         data        = <<EOT
-# 用真实域名替换 :80 即可自动签发 HTTPS；反向代理可用 nomadService 自动发现后端地址：
+# Replace :80 with your domain for automatic HTTPS; use nomadService to discover backends:
 # app.example.com {
 #   reverse_proxy {{ range nomadService "app" }}{{ .Address }}:{{ .Port }}{{ end }}
 # }
@@ -143,13 +219,45 @@ EOT
     tagsEn: ['Docker', 'Gateway'],
     desc: '云原生边缘网关，含 80 / 443 入口、8080 面板、Nomad 服务发现与 ACME DNS-01 (alidns) 自动 HTTPS 模板',
     descEn: 'Cloud-native edge router with 80/443 entrypoints, 8080 dashboard, Nomad provider, and ACME DNS-01 (alidns) template',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 80 / 443 / 8080', labelEn: 'Ports 80 / 443 / 8080' },
+    ],
+    notes: [
+      {
+        title: '可选：启用 Nomad 服务发现 (providers.nomad)',
+        titleEn: 'Optional: Enable Nomad service discovery (providers.nomad)',
+        detail: '在「Nomad 集群 → 治理 → ACL Policies」建只读 Policy（namespace "*" read + node read），再到「ACL Tokens & Roles → 签发 Client Token」获取 Secret ID；若需校验 Nomad TLS，挂载 /opt/nomad-deck/nomad/etc/nomad.d/tls/ca.pem 并取消 traefik.yml 中 nomad provider 注释。',
+        detailEn: 'Create a read-only ACL Policy (namespace "*" read + node read) under Nomad Cluster -> Governance -> ACL Policies, issue a Client Token, mount the Nomad CA if using TLS, and uncomment providers.nomad in traefik.yml.',
+        optional: true,
+        linkTo: '/nomad',
+        linkLabel: '前往 Nomad ACL 治理',
+        linkLabelEn: 'Open Nomad ACL',
+      },
+      {
+        title: '可选：通过 Vault 注入 NOMAD_TOKEN 与阿里云 DNS-01 (alidns)',
+        titleEn: 'Optional: Inject NOMAD_TOKEN & Alibaba DNS-01 via Vault',
+        detail: '在「Vault 集群 → KV v2」的 secret/apps/traefik 写入 nomad_token、ali_key、ali_secret，在「集群联动」新建 Role "traefik"（授权 secret/apps/traefik）并点击「应用联动」，随后取消 HCL 中 vault / template 与 certificatesResolvers.alidns 注释。',
+        detailEn: 'Write nomad_token, ali_key, ali_secret at secret/apps/traefik in Vault KV v2, create Role "traefik" for secret/apps/traefik in Integrations and apply it, then uncomment the vault/template and alidns blocks.',
+        optional: true,
+        linkTo: '/integrations',
+        linkLabel: '前往集群联动',
+        linkLabelEn: 'Open Integrations',
+      },
+      {
+        title: '生产持久化 acme.json',
+        titleEn: 'Persist acme.json in production',
+        detail: '生产环境建议将 local/acme 替换为 Host Volume，避免重调度重复签发证书触发 CA 限流。',
+        detailEn: 'Replace local/acme with a Host Volume in production to avoid re-issuing certs and hitting ACME rate limits.',
+        optional: false,
+      },
+    ],
+    secretHints: {
+      nomad_token: { secret: true, placeholder: 'Nomad 只读 Client Token', placeholderEn: 'Nomad read-only Client Token' },
+      ali_key: { secret: true, placeholder: 'Alibaba Cloud AccessKey ID', placeholderEn: 'Alibaba Cloud AccessKey ID' },
+      ali_secret: { secret: true, placeholder: 'Alibaba Cloud AccessKey Secret', placeholderEn: 'Alibaba Cloud AccessKey Secret' },
+    },
     hcl: `job "traefik" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 80 / 443 / 8080 未被占用。
-  # 2. 若启用 providers.nomad 或 ACME DNS-01：
-  #    - 获取 Nomad 只读 Token：到「Nomad 集群 → 治理 (Namespace / Pool / ACL) → ACL Policies」新建 Policy（如 traefik-readonly，规则：namespace "*" { policy = "read" } 与 node { policy = "read" }），再到「ACL Tokens & Roles」点「签发 Client Token」关联该 Policy 并复制 Secret ID。
-  #    - 写入 Vault 密钥：到「Vault 集群 → Auth / Policy / KV → 应用密钥 · KV v2」在 secret/apps/traefik 写入 nomad_token（即上一步 Secret ID）、ali_key、ali_secret。
-  #    - 创建联动 Role：到「集群联动 → Role 与 Policy」新建 Role "traefik"（Policy 模式：explicit，路径：secret/apps/traefik）并点击「应用联动」；同时按需挂载 Nomad CA（/opt/nomad-deck/nomad/etc/nomad.d/tls/ca.pem）。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -171,7 +279,6 @@ EOT
       }
     }
 
-    # 生产环境建议将 local/acme 替换为 Host Volume 持久化 acme.json，避免重启重复签发触及限流。
     ephemeral_disk {
       size   = 256
       sticky = true
@@ -200,16 +307,12 @@ EOT
           "local/traefik.yml:/etc/traefik/traefik.yml",
           "local/dynamic.yml:/etc/traefik/dynamic.yml",
           "local/acme:/acme",
-          # 启用 providers.nomad 时如需严格校验 Nomad TLS，可取消下方注释挂载 Nomad 节点 CA：
+          # Optional: mount Nomad CA for strict TLS verification with providers.nomad:
           # "/opt/nomad-deck/nomad/etc/nomad.d/tls/ca.pem:/etc/ssl/nomad-ca.pem:ro",
         ]
       }
 
-      # 如需从 Vault 注入 Nomad 只读 Token 与阿里云 DNS AK/SK，请先完成：
-      # - Nomad 只读 Token：在「Nomad 集群 → 治理 → ACL Policies」建只读 Policy（namespace "*" { policy = "read" } + node { policy = "read" }），再到「ACL Tokens & Roles → 签发 Client Token」生成并复制 Secret ID
-      # - Vault 密钥（Vault 集群 → KV v2）：在 secret/apps/traefik 写入 nomad_token、ali_key、ali_secret
-      # - 联动 Role（集群联动 → Role 与 Policy）：新建 Role "traefik"（explicit 模式，路径 secret/apps/traefik）并点击「应用联动」
-      # 完成后取消下方 vault / template 注释：
+      # Optional: inject NOMAD_TOKEN and ALICLOUD_ACCESS_KEY/SECRET_KEY from Vault (Role "traefik"):
       # vault {
       #   role = "traefik"
       #   env  = false
@@ -235,7 +338,7 @@ EOT
 entryPoints:
   web:
     address: ":80"
-    # 开启全站 HTTP 自动跳转 HTTPS 时取消下方注释：
+    # Optional HTTP -> HTTPS redirect:
     # http:
     #   redirections:
     #     entryPoint:
@@ -257,17 +360,15 @@ providers:
   file:
     filename: /etc/traefik/dynamic.yml
     watch: true
-  # 开启 Nomad 服务自动发现（配合可视化编排中的 Traefik 路由标签与只读 NOMAD_TOKEN）：
-  # 注意：默认 bridge 容器内 127.0.0.1 指容器自身，请替换为 Nomad 节点内网 IP（如 https://10.0.0.10:4646）：
+  # Optional Nomad service discovery (replace 10.0.0.10 with your Nomad node IP):
   # nomad:
   #   exposedByDefault: false
   #   endpoint:
   #     address: "https://10.0.0.10:4646"
   #     tls:
   #       ca: /etc/ssl/nomad-ca.pem
-  #       # 若未挂载 Nomad CA，可改用 insecureSkipVerify: true
 
-# 开启阿里云 DNS-01 自动申请通配符证书（需注入 ALICLOUD_ACCESS_KEY / ALICLOUD_SECRET_KEY）：
+# Optional Alibaba DNS-01 wildcard certs (requires ALICLOUD_ACCESS_KEY / ALICLOUD_SECRET_KEY):
 # certificatesResolvers:
 #   alidns:
 #     acme:
@@ -306,11 +407,31 @@ EOT
     tagsEn: ['Docker', 'Gateway', 'Vault'],
     desc: '标准 Nginx 反向代理网关，支持 nomadService 动态上游与 Vault 证书 SIGHUP 无缝热加载（无需 Lua 时的轻量首选）',
     descEn: 'Standard Nginx reverse proxy with nomadService dynamic upstreams and Vault cert SIGHUP hot-reload (lightweight alternative to OpenResty)',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 80 / 443', labelEn: 'Ports 80 / 443' },
+      { kind: 'vault', label: '可选 Vault HTTPS', labelEn: 'Optional Vault HTTPS' },
+    ],
+    notes: [
+      {
+        title: '可选：启用 HTTPS 与 Vault 证书 SIGHUP 热加载',
+        titleEn: 'Optional: Enable HTTPS with Vault cert SIGHUP hot-reload',
+        detail: '在「集群联动」创建 Role "nginx-gateway"（explicit 模式，路径 secret/certs/tls）并点击「应用联动」，通过 acme-cert-sync 或手动在 Vault secret/certs/tls 写入 fullchain 与 privkey，再取消 HCL 中的 vault / cert template 与 443 server 注释（取消后体检会自动核对 Role 与密钥）。',
+        detailEn: 'Create Role "nginx-gateway" (explicit path secret/certs/tls) in Integrations and apply it, populate fullchain & privkey at secret/certs/tls (via acme-cert-sync or manually), then uncomment the vault, cert templates, and 443 server block.',
+        optional: true,
+        linkTo: '/integrations',
+        linkLabel: '前往集群联动',
+        linkLabelEn: 'Open Integrations',
+      },
+      {
+        title: '可选：启用 nomadService 动态上游',
+        titleEn: 'Optional: Enable nomadService dynamic upstream',
+        detail: '取消 nginx.conf 中的 upstream app_backend 注释并将 "app" 替换为目标后端在 Nomad 注册的 service 名称。',
+        detailEn: 'Uncomment upstream app_backend in nginx.conf and replace "app" with your backend Nomad service name.',
+        optional: true,
+      },
+    ],
     hcl: `job "nginx-gateway" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 80 / 443 未被占用。
-  # 2. 若启用 HTTPS（443）：需先到「集群联动 → Role 与 Policy」创建 Role "nginx-gateway"（Policy 模式：explicit，路径：secret/certs/tls）并「应用联动」，并由 acme-cert-sync（或手动在「Vault 集群 → KV v2」）在 secret/certs/tls 写入 fullchain 与 privkey。
-  # 3. 若启用动态上游 upstream：需有已在 Nomad 注册同名 service 的后端任务。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -351,10 +472,7 @@ EOT
         ]
       }
 
-      # 搭配 acme-cert-sync 使用 HTTPS：
-      # - 联动 Role："nginx-gateway"，Policy 模式：explicit，允许路径：secret/certs/tls（需点击「应用联动」）
-      # - Vault 密钥（secret/certs/tls）：fullchain、privkey（可由 acme-cert-sync 自动推送）
-      # 准备好后取消下方注释并启用 443 server 块：
+      # Optional HTTPS certs from Vault (Role "nginx-gateway", path secret/certs/tls):
       # vault {
       #   role = "nginx-gateway"
       #   env  = false
@@ -401,7 +519,7 @@ http {
     ""      close;
   }
 
-  # 通过 nomadService 自动发现后端（按需将 "app" 替换为你的服务名）：
+  # Optional nomadService dynamic upstream (replace "app" with your service name):
   # upstream app_backend {
   #   server 127.0.0.1:9 down;
   #   {{- range nomadService "app" }}
@@ -419,14 +537,14 @@ http {
       return 200 "ok\n";
     }
 
-    # 开启 Vault 证书后可改为 301 跳转 HTTPS：
+    # Optional HTTP -> HTTPS redirect:
     # location / { return 301 https://$host$request_uri; }
     location / {
       return 200 "NomadDeck Nginx Gateway ready\n";
     }
   }
 
-  # 启用 Vault 证书热加载后取消下方注释：
+  # Optional HTTPS server (enable with Vault cert templates above):
   # server {
   #   listen 443 ssl http2;
   #   server_name app.example.com;
@@ -468,11 +586,31 @@ EOT
     tagsEn: ['Docker', 'Gateway', 'OpenResty', 'Vault'],
     desc: '基于 openresty/openresty:alpine，内置 nomadService 动态上游、Lua 敏感路径封禁与 Vault 证书 SIGHUP 热加载',
     descEn: 'OpenResty gateway with nomadService dynamic upstreams, Lua sensitive-path WAF protection, and Vault cert SIGHUP hot-reload',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 80 / 443', labelEn: 'Ports 80 / 443' },
+      { kind: 'vault', label: '可选 Vault HTTPS', labelEn: 'Optional Vault HTTPS' },
+    ],
+    notes: [
+      {
+        title: '可选：启用 HTTPS 与 Vault 证书 SIGHUP 热加载',
+        titleEn: 'Optional: Enable HTTPS with Vault cert SIGHUP hot-reload',
+        detail: '在「集群联动」创建 Role "openresty-gateway"（explicit 模式，路径 secret/certs/tls）并点击「应用联动」，通过 acme-cert-sync 或手动在 Vault secret/certs/tls 写入 fullchain 与 privkey，再取消 HCL 中的 vault / cert template 与 443 server 注释。',
+        detailEn: 'Create Role "openresty-gateway" (explicit path secret/certs/tls) in Integrations and apply it, populate fullchain & privkey at secret/certs/tls, then uncomment the vault, cert templates, and 443 server block.',
+        optional: true,
+        linkTo: '/integrations',
+        linkLabel: '前往集群联动',
+        linkLabelEn: 'Open Integrations',
+      },
+      {
+        title: '可选：启用 nomadService 动态上游',
+        titleEn: 'Optional: Enable nomadService dynamic upstream',
+        detail: '取消 nginx.conf 中的 upstream app_backend 注释并将 "app" 替换为目标后端在 Nomad 注册的 service 名称。',
+        detailEn: 'Uncomment upstream app_backend in nginx.conf and replace "app" with your backend Nomad service name.',
+        optional: true,
+      },
+    ],
     hcl: `job "openresty-gateway" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 80 / 443 未被占用。
-  # 2. 若启用 HTTPS（443）：需先到「集群联动 → Role 与 Policy」创建 Role "openresty-gateway"（Policy 模式：explicit，路径：secret/certs/tls）并「应用联动」，并由 acme-cert-sync（或手动在「Vault 集群 → KV v2」）在 secret/certs/tls 写入 fullchain 与 privkey。
-  # 3. 若启用动态上游 upstream：需有已在 Nomad 注册同名 service 的后端任务。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -515,10 +653,7 @@ EOT
         ]
       }
 
-      # 搭配 acme-cert-sync 使用 HTTPS：
-      # - 联动 Role："openresty-gateway"，Policy 模式：explicit，允许路径：secret/certs/tls（需点击「应用联动」）
-      # - Vault 密钥（secret/certs/tls）：fullchain、privkey（可由 acme-cert-sync 自动推送）
-      # 准备好后取消下方注释并启用 443 server 块：
+      # Optional HTTPS certs from Vault (Role "openresty-gateway", path secret/certs/tls):
       # vault {
       #   role = "openresty-gateway"
       #   env  = false
@@ -614,7 +749,7 @@ http {
     ""      close;
   }
 
-  # 通过 nomadService 自动发现后端（按需将 "app" 替换为你的服务名）：
+  # Optional nomadService dynamic upstream (replace "app" with your service name):
   # upstream app_backend {
   #   server 127.0.0.1:9 down;
   #   {{- range nomadService "app" }}
@@ -639,7 +774,7 @@ http {
     }
   }
 
-  # 启用 Vault 证书热加载后取消下方注释：
+  # Optional HTTPS server (enable with Vault cert templates above):
   # server {
   #   listen 443 ssl http2;
   #   server_name app.example.com;
@@ -681,26 +816,46 @@ EOT
     labelEn: 'ACME Cert Renewal (Vault Sync)',
     tags: ['Docker', '证书', 'Vault', '定时任务'],
     tagsEn: ['Docker', 'TLS', 'Vault', 'Periodic'],
-    desc: '需先创建 acme-cert-sync Role（读取 secret/certs/dns 并写入 secret/certs/tls），定时续期通配符证书并推送 Vault KV 触发网关 SIGHUP 热加载',
-    descEn: 'Requires acme-cert-sync Role (read secret/certs/dns & write secret/certs/tls); renews wildcard certs on schedule and pushes to Vault KV for gateway SIGHUP reload',
+    desc: '需先配置 acme-cert-sync 读写 Role 与 secret/certs/dns，定时续期通配符证书并推送 Vault KV 触发网关 SIGHUP 热加载',
+    descEn: 'Requires acme-cert-sync read/write Role & secret/certs/dns; renews wildcard certs on schedule and pushes to Vault KV for gateway SIGHUP reload',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'vault', label: 'Role: acme-cert-sync (读写)', labelEn: 'Role: acme-cert-sync (R/W)' },
+      { kind: 'vault', label: 'KV: secret/certs/dns', labelEn: 'KV: secret/certs/dns' },
+      { kind: 'network', label: '外网访问 ACME / DNS API', labelEn: 'Internet: ACME & DNS API' },
+    ],
+    notes: [
+      {
+        title: '外网连通性与持久化建议',
+        titleEn: 'Internet access & state persistence',
+        detail: '容器需能访问外网 Alpine APK 源、ACME CA（Let\'s Encrypt 等）与 DNS 服务商 API；生产环境建议将 /acme.sh 挂载到 Host Volume，避免重调度重复签发。',
+        detailEn: 'Container requires outbound access to Alpine APK repos, ACME CA, and your DNS provider API. Mount /acme.sh on a Host Volume in production to avoid re-issuing on reschedule.',
+        optional: false,
+      },
+      {
+        title: '自定义读写 Policy 说明',
+        titleEn: 'Custom read/write Policy note',
+        detail: '任务需读取 secret/data/certs/dns 并写入 secret/data/certs/tls（create/update/read）；点击下方体检项中的「一键创建并应用 Role」会自动生成完整自定义 Policy HCL。',
+        detailEn: 'Reads secret/data/certs/dns and writes secret/data/certs/tls (create/update/read). Clicking "Create & Apply Role" in the preflight panel auto-generates the required custom Policy HCL.',
+        optional: false,
+        linkTo: '/integrations',
+        linkLabel: '查看集群联动',
+        linkLabelEn: 'View Integrations',
+      },
+    ],
+    secretHints: {
+      domain: { placeholder: '*.example.com', placeholderEn: '*.example.com', hint: '主证书域名', hintEn: 'Primary certificate domain' },
+      vault_addr: { placeholder: 'https://10.0.0.10:8200', placeholderEn: 'https://10.0.0.10:8200', hint: '可在「Vault 集群 → 集群状态详情」查看', hintEn: 'Find under Vault Cluster -> Status' },
+      ali_key: { secret: true, placeholder: '阿里云 AccessKey ID', placeholderEn: 'Alibaba Cloud AccessKey ID', hint: '默认 dns_ali 所需', hintEn: 'Required for default dns_ali' },
+      ali_secret: { secret: true, placeholder: '阿里云 AccessKey Secret', placeholderEn: 'Alibaba Cloud AccessKey Secret', hint: '默认 dns_ali 所需', hintEn: 'Required for default dns_ali' },
+      dns_provider: { defaultValue: 'dns_ali', placeholder: 'dns_ali', placeholderEn: 'dns_ali' },
+      acme_ca: { defaultValue: 'letsencrypt', placeholder: 'letsencrypt', placeholderEn: 'letsencrypt' },
+      acme_email: { placeholder: 'admin@example.com', placeholderEn: 'admin@example.com' },
+      alt_domains: { placeholder: 'example.com', placeholderEn: 'example.com', hint: '逗号分隔的附加 SAN 域名', hintEn: 'Comma-separated SAN domains' },
+      vault_kv_path: { defaultValue: 'secret/data/certs/tls', placeholder: 'secret/data/certs/tls', placeholderEn: 'secret/data/certs/tls' },
+      vault_skip_verify: { defaultValue: 'false', placeholder: 'false', placeholderEn: 'false' },
+    },
     hcl: `job "acme-cert-sync" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，容器可访问外网 Alpine APK 源、ACME CA（Let's Encrypt 等）与 DNS 服务商 API。
-  # 2. 已完成 Nomad-Vault 联动（应用联动后控制面会自动下发 /opt/nomad-deck/nomad/etc/nomad.d/tls/vault-ca.crt 到 Nomad 节点；若使用非 TLS 测试 Vault 请移除对应挂载或设 vault_skip_verify = "true"）。
-  # 3. 联动 Role 与自定义 Policy HCL（因需回写证书到 secret/certs/tls，须在「集群联动 → Role 与 Policy」新建 Role "acme-cert-sync" 并在高级选项填写下方自定义 Policy，再点击「应用联动」）：
-  #      path "secret/data/certs/dns" {
-  #        capabilities = ["read"]
-  #      }
-  #      path "secret/data/certs/tls" {
-  #        capabilities = ["create", "update", "read"]
-  #      }
-  #      path "secret/metadata/certs/*" {
-  #        capabilities = ["read", "list"]
-  #      }
-  # 4. 在「Vault 集群 → Auth / Policy / KV → 应用密钥 · KV v2」的 secret/certs/dns 预先写入字段：
-  #    - 必填：domain（如 *.example.com）、vault_addr（可在「Vault 集群 → 集群状态详情」查看，如 https://10.0.0.10:8200）
-  #    - DNS 鉴权（按 dns_provider 填写，默认 dns_ali）：ali_key、ali_secret
-  #    - 可选：alt_domains、dns_provider、acme_ca（默认 letsencrypt）、acme_email、vault_kv_path（默认 secret/data/certs/tls）、vault_skip_verify、vault_cacert
   datacenters = ["dc1"]
   type        = "batch"
 
@@ -713,7 +868,6 @@ EOT
   group "acme" {
     count = 1
 
-    # 建议将 /acme.sh 挂载到 Host Volume（如 acme_state），避免每次重调度重新向 CA 申请证书。
     ephemeral_disk {
       size   = 128
       sticky = true
@@ -727,12 +881,10 @@ EOT
         args       = ["/local/sync.sh"]
         volumes = [
           "local/acme-home:/acme.sh",
-          # 联动后控制面已自动将 Vault CA 分发到 Nomad 节点此路径；如使用非 TLS 测试 Vault 请移除此行
           "/opt/nomad-deck/nomad/etc/nomad.d/tls/vault-ca.crt:/etc/ssl/vault-ca.crt:ro",
         ]
       }
 
-      # 需读 secret/data/certs/dns 并写 secret/data/certs/tls（详见文件顶部自定义 Policy HCL 说明）
       vault {
         role = "acme-cert-sync"
         env  = true
@@ -758,7 +910,6 @@ Ali_Secret={{ or .Data.data.ali_secret "" | toJSON }}
 EOT
       }
 
-      # 默认已挂载 Nomad 节点下发的 /etc/ssl/vault-ca.crt；若需覆写 CA，也可在 secret/data/certs/dns 填入 vault_cacert。
       template {
         destination = "secrets/vault-ca.crt"
         perms       = "0644"
@@ -791,7 +942,7 @@ mkdir -p "$OUT_DIR"
 ISSUED=0
 if [ -f "$CERT_DIR/$DOMAIN.cer" ]; then
   acme.sh --renew -d "$DOMAIN" --ecc --home /acme.sh || ISSUED=$?
-  # acme.sh 返回码 2 表示证书尚未到期无需续期
+  # acme.sh exit code 2 means cert is not due for renewal yet
   if [ "$ISSUED" -ne 0 ] && [ "$ISSUED" -ne 2 ]; then
     exit "$ISSUED"
   fi
@@ -859,13 +1010,29 @@ EOT
     labelEn: 'PostgreSQL + Vault Secrets',
     tags: ['Docker', 'Vault', '数据库'],
     tagsEn: ['Docker', 'Vault', 'Database'],
-    desc: '需先配置 postgres Role 与 secret/apps/postgres（username、password、database），自动挂载 0600 密码文件与环境变量',
-    descEn: 'Requires postgres Role & secret/apps/postgres (username, password, database); mounts 0600 secret file & env',
+    desc: '自动从 Vault 注入 0600 密码文件与账号环境变量（支持体检面板一键补齐 Role 与密钥）',
+    descEn: 'Injects 0600 password file & credentials from Vault (supports one-click Role & secret setup in preflight)',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 5432', labelEn: 'Port 5432' },
+      { kind: 'vault', label: 'Role: postgres', labelEn: 'Role: postgres' },
+      { kind: 'vault', label: 'KV: secret/apps/postgres', labelEn: 'KV: secret/apps/postgres' },
+    ],
+    notes: [
+      {
+        title: '生产数据持久化建议',
+        titleEn: 'Persist database storage in production',
+        detail: '示例使用 sticky ephemeral_disk，数据保留在当前 Allocation；生产环境建议替换为 Host Volume 或 CSI 持久卷并定期备份。',
+        detailEn: 'Uses a sticky ephemeral_disk for quick starts; switch to a Host Volume or CSI volume with backups for production.',
+        optional: false,
+      },
+    ],
+    secretHints: {
+      username: { defaultValue: 'postgres', placeholder: 'postgres', placeholderEn: 'postgres' },
+      password: { secret: true, placeholder: '强密码（可点右侧随机生成）', placeholderEn: 'Strong password (or click generate)' },
+      database: { defaultValue: 'app', placeholder: 'app', placeholderEn: 'app' },
+    },
     hcl: `job "postgres" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 5432 未被占用。
-  # 2. 在「集群联动 → Role 与 Policy」创建 Role "postgres"（Policy 模式：explicit，路径：secret/apps/postgres）并「应用联动」。
-  # 3. 在「Vault 集群 → Auth / Policy / KV → 应用密钥 · KV v2」的 secret/apps/postgres 写入字段：username、password、database。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -878,7 +1045,6 @@ EOT
       }
     }
 
-    # 数据保留在当前 Allocation，重新调度前需配置持久卷与备份。
     ephemeral_disk {
       size   = 1024
       sticky = true
@@ -892,7 +1058,6 @@ EOT
         volumes = ["local/pgdata:/var/lib/postgresql/data"]
       }
 
-      # 依赖 Role "postgres"（explicit 只读 secret/apps/postgres）
       vault {
         role = "postgres"
         env  = false
@@ -937,13 +1102,30 @@ EOT
     labelEn: 'MySQL 8 + Vault Secrets',
     tags: ['Docker', 'Vault', '数据库'],
     tagsEn: ['Docker', 'Vault', 'Database'],
-    desc: '需先配置 mysql Role 与 secret/apps/mysql（root_password、username、password、database），自动注入 0600 密码文件',
-    descEn: 'Requires mysql Role & secret/apps/mysql (root_password, username, password, database); injects 0600 password files',
+    desc: '自动从 Vault 注入 0600 密码文件与业务库账号（支持体检面板一键补齐 Role 与密钥）',
+    descEn: 'Injects 0600 root & user password files from Vault (supports one-click Role & secret setup in preflight)',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 3306', labelEn: 'Port 3306' },
+      { kind: 'vault', label: 'Role: mysql', labelEn: 'Role: mysql' },
+      { kind: 'vault', label: 'KV: secret/apps/mysql', labelEn: 'KV: secret/apps/mysql' },
+    ],
+    notes: [
+      {
+        title: '生产数据持久化建议',
+        titleEn: 'Persist database storage in production',
+        detail: '示例使用 sticky ephemeral_disk；生产环境建议改用 Host Volume 或 CSI 持久卷。',
+        detailEn: 'Uses a sticky ephemeral_disk by default; switch to a Host Volume or CSI volume for production.',
+        optional: false,
+      },
+    ],
+    secretHints: {
+      root_password: { secret: true, placeholder: 'Root 强密码', placeholderEn: 'Strong root password' },
+      username: { defaultValue: 'app', placeholder: 'app', placeholderEn: 'app' },
+      password: { secret: true, placeholder: '业务用户强密码', placeholderEn: 'Strong app password' },
+      database: { defaultValue: 'app', placeholder: 'app', placeholderEn: 'app' },
+    },
     hcl: `job "mysql" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 3306 未被占用。
-  # 2. 在「集群联动 → Role 与 Policy」创建 Role "mysql"（Policy 模式：explicit，路径：secret/apps/mysql）并「应用联动」。
-  # 3. 在「Vault 集群 → Auth / Policy / KV → 应用密钥 · KV v2」的 secret/apps/mysql 写入字段：root_password、username、password、database。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -956,7 +1138,6 @@ EOT
       }
     }
 
-    # 数据保留在当前 Allocation，生产环境建议改用 Host Volume 或 CSI 持久卷。
     ephemeral_disk {
       size   = 2048
       sticky = true
@@ -970,7 +1151,6 @@ EOT
         volumes = ["local/mysql:/var/lib/mysql"]
       }
 
-      # 依赖 Role "mysql"（explicit 只读 secret/apps/mysql）
       vault {
         role = "mysql"
         env  = false
@@ -1025,13 +1205,18 @@ EOT
     labelEn: 'Redis + Vault Secrets',
     tags: ['Docker', 'Vault', '缓存'],
     tagsEn: ['Docker', 'Vault', 'Cache'],
-    desc: '需先配置 redis Role 与 secret/apps/redis（含 password 字段），通过 0600 内存密码文件安全注入 requirepass',
-    descEn: 'Requires redis Role & secret/apps/redis (password field); injects requirepass safely from a 0600 tmpfs file',
+    desc: '通过 0600 内存密码文件安全注入 requirepass（支持体检面板一键补齐 Role 与密钥）',
+    descEn: 'Injects requirepass safely from a 0600 Vault tmpfs file (supports one-click Role & secret setup in preflight)',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 6379', labelEn: 'Port 6379' },
+      { kind: 'vault', label: 'Role: redis', labelEn: 'Role: redis' },
+      { kind: 'vault', label: 'KV: secret/apps/redis', labelEn: 'KV: secret/apps/redis' },
+    ],
+    secretHints: {
+      password: { secret: true, placeholder: 'Redis 访问密码', placeholderEn: 'Redis requirepass password' },
+    },
     hcl: `job "redis" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 6379 未被占用。
-  # 2. 在「集群联动 → Role 与 Policy」创建 Role "redis"（Policy 模式：explicit，路径：secret/apps/redis）并「应用联动」。
-  # 3. 在「Vault 集群 → Auth / Policy / KV → 应用密钥 · KV v2」的 secret/apps/redis 写入字段：password。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -1058,7 +1243,6 @@ EOT
         args       = ["exec docker-entrypoint.sh redis-server --bind 0.0.0.0 --port 6379 --appendonly yes --requirepass \\"$(cat /secrets/redis-password)\\""]
       }
 
-      # 依赖 Role "redis"（explicit 只读 secret/apps/redis）
       vault {
         role = "redis"
         env  = false
@@ -1088,13 +1272,19 @@ EOT
     labelEn: 'RabbitMQ + Vault Secrets',
     tags: ['Docker', 'Vault', '消息队列'],
     tagsEn: ['Docker', 'Vault', 'Message Queue'],
-    desc: '需先配置 rabbitmq Role 与 secret/apps/rabbitmq（username、password），含 AMQP (5672) 与 Web 管理面板 (15672)',
-    descEn: 'Requires rabbitmq Role & secret/apps/rabbitmq (username, password); exposes AMQP (5672) and Web UI (15672)',
+    desc: '含 AMQP (5672) 与 Web 管理面板 (15672)，账号密码由 Vault 注入（支持体检面板一键补齐）',
+    descEn: 'Exposes AMQP (5672) & Web UI (15672) with Vault-injected credentials (supports one-click setup in preflight)',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 5672 / 15672', labelEn: 'Ports 5672 / 15672' },
+      { kind: 'vault', label: 'Role: rabbitmq', labelEn: 'Role: rabbitmq' },
+      { kind: 'vault', label: 'KV: secret/apps/rabbitmq', labelEn: 'KV: secret/apps/rabbitmq' },
+    ],
+    secretHints: {
+      username: { defaultValue: 'admin', placeholder: 'admin', placeholderEn: 'admin' },
+      password: { secret: true, placeholder: '管理账号强密码', placeholderEn: 'Strong RabbitMQ password' },
+    },
     hcl: `job "rabbitmq" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 5672（AMQP）/ 15672（Web 控制台）未被占用。
-  # 2. 在「集群联动 → Role 与 Policy」创建 Role "rabbitmq"（Policy 模式：explicit，路径：secret/apps/rabbitmq）并「应用联动」。
-  # 3. 在「Vault 集群 → Auth / Policy / KV → 应用密钥 · KV v2」的 secret/apps/rabbitmq 写入字段：username、password。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -1137,7 +1327,6 @@ EOT
         volumes = ["local/rabbitmq:/var/lib/rabbitmq"]
       }
 
-      # 依赖 Role "rabbitmq"（explicit 只读 secret/apps/rabbitmq）
       vault {
         role = "rabbitmq"
         env  = false
@@ -1172,10 +1361,21 @@ EOT
     tagsEn: ['Docker', 'Message Queue'],
     desc: '同 Group 协同运行 NameServer (9876) 与 Broker (10911)，内建 broker.conf 模板与持久化存储目录',
     descEn: 'Runs NameServer (9876) and Broker (10911) together with a built-in broker.conf template and persistent disk',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 9876 / 10909-10912', labelEn: 'Ports 9876 / 10909-10912' },
+      { kind: 'network', label: '节点 IP 直连 & ≥1.2G 内存', labelEn: 'Direct Node IP & >=1.2G RAM' },
+    ],
+    notes: [
+      {
+        title: '资源与网络直连要求',
+        titleEn: 'Resource & client network requirements',
+        detail: '同 Group 两个 Task 共需至少 500 MHz CPU 与 1152 MiB 内存；brokerIP1 使用 NOMAD_IP_broker，需确保生产者/消费者可直连该节点 IP。',
+        detailEn: 'Requires at least 500 MHz CPU and 1152 MiB RAM on one node. brokerIP1 advertises NOMAD_IP_broker, so producers and consumers must reach that node IP.',
+        optional: false,
+      },
+    ],
     hcl: `job "rocketmq" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 9876 / 10909 / 10911 / 10912 未被占用。
-  # 2. 同 Group 两个 Task 共需至少 500 MHz CPU 与 1152 MiB 内存；brokerIP1 使用 NOMAD_IP_broker，需确保生产者/消费者可直连该节点 IP。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -1286,13 +1486,23 @@ EOT
     tagsEn: ['Docker', 'Monitoring'],
     desc: '时序指标采集与告警引擎，内置 prometheus.yml 模板（含 Nomad Telemetry 抓取示例）与 9090 端口',
     descEn: 'Time-series metrics & alerting engine with built-in prometheus.yml template (including Nomad Telemetry) on port 9090',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 9090', labelEn: 'Port 9090' },
+    ],
+    notes: [
+      {
+        title: '可选：采集 Nomad 集群 Prometheus 指标',
+        titleEn: 'Optional: Scrape Nomad Telemetry metrics',
+        detail: '先在「Nomad 集群 → 集群配置 → 运行指标采集」勾选 prometheus_metrics；若启用了 ACL，在「治理 → ACL Policies」建含 agent { policy = "read" } 的策略并「签发 Client Token」填入 bearer_token；若启用了 TLS，挂载 /opt/nomad-deck/nomad/etc/nomad.d/tls/ca.pem 并配置 scheme: https。',
+        detailEn: 'Enable prometheus_metrics under Nomad Cluster -> Config -> Telemetry. If ACL is enabled, create a Policy with agent { policy = "read" } and issue a Client Token for bearer_token; if TLS is enabled, mount the Nomad CA and set scheme: https.',
+        optional: true,
+        linkTo: '/nomad',
+        linkLabel: '前往 Nomad 集群配置',
+        linkLabelEn: 'Open Nomad Config',
+      },
+    ],
     hcl: `job "prometheus" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 9090 未被占用。
-  # 2. 若启用下方 Nomad 指标抓取：
-  #    - 到「Nomad 集群 → 集群配置 → 运行指标采集」勾选「暴露 Prometheus 指标 (prometheus_metrics)」并保存。
-  #    - 若 Nomad 启用了 ACL：到「Nomad 集群 → 治理 (Namespace / Pool / ACL) → ACL Policies」新建含 agent { policy = "read" } 的 Policy，再到「ACL Tokens & Roles」点「签发 Client Token」复制 Secret ID 填入下方 bearer_token。
-  #    - 若 Nomad 启用了 TLS：挂载节点 CA（/opt/nomad-deck/nomad/etc/nomad.d/tls/ca.pem:/etc/ssl/nomad-ca.pem:ro）并在下方配置 scheme: https 与 tls_config.ca_file。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -1354,16 +1564,15 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # 若需采集 Nomad 集群指标，请取消注释并替换为实际节点地址（需在「Nomad 集群 → 集群配置」开启 prometheus_metrics）：
+  # Optional Nomad telemetry scrape target (replace 10.0.0.10 with your Nomad node IP):
   # - job_name: "nomad"
   #   metrics_path: "/v1/metrics"
   #   params:
   #     format: ["prometheus"]
-  #   # 若 Nomad 启用了 TLS 与 ACL，按需取消下方注释并挂载 /opt/nomad-deck/nomad/etc/nomad.d/tls/ca.pem：
   #   # scheme: https
   #   # tls_config:
   #   #   ca_file: /etc/ssl/nomad-ca.pem
-  #   # bearer_token: "<在 Nomad 集群 → 治理 → 签发 Client Token（关联 agent read Policy）获取>"
+  #   # bearer_token: "<Nomad Client Token with agent read policy>"
   #   static_configs:
   #     - targets: ["10.0.0.10:4646"]
 EOT
@@ -1384,13 +1593,31 @@ EOT
     labelEn: 'Grafana + Vault Secrets',
     tags: ['Docker', 'Vault', '监控'],
     tagsEn: ['Docker', 'Vault', 'Monitoring'],
-    desc: '需先配置 grafana Role 与 secret/apps/grafana（admin_user、admin_password），可配合系统设置中的 Grafana 跳转链接使用',
-    descEn: 'Requires grafana Role & secret/apps/grafana (admin_user, admin_password); pairs with System Settings Grafana URL',
+    desc: '管理员账号密码由 Vault 注入（支持体检面板一键补齐），可配合系统设置中的 Grafana 跳转链接使用',
+    descEn: 'Injects admin credentials from Vault (supports one-click setup in preflight); pairs with System Settings Grafana URL',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 3000', labelEn: 'Port 3000' },
+      { kind: 'vault', label: 'Role: grafana', labelEn: 'Role: grafana' },
+      { kind: 'vault', label: 'KV: secret/apps/grafana', labelEn: 'KV: secret/apps/grafana' },
+    ],
+    notes: [
+      {
+        title: '可选：配置控制台快捷跳转链接',
+        titleEn: 'Optional: Configure quick link in System Settings',
+        detail: '运行后可在「系统设置 → 集群与快照 → Grafana 跳转链接模板」填入 Grafana 地址，方便在总览与监控页面一键跳转。',
+        detailEn: 'Set the Grafana URL template under System Settings to enable quick links from cluster monitoring views.',
+        optional: true,
+        linkTo: '/settings',
+        linkLabel: '前往系统设置',
+        linkLabelEn: 'Open Settings',
+      },
+    ],
+    secretHints: {
+      admin_user: { defaultValue: 'admin', placeholder: 'admin', placeholderEn: 'admin' },
+      admin_password: { secret: true, placeholder: '管理员强密码', placeholderEn: 'Strong admin password' },
+    },
     hcl: `job "grafana" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 3000 未被占用。
-  # 2. 在「集群联动 → Role 与 Policy」创建 Role "grafana"（Policy 模式：explicit，路径：secret/apps/grafana）并「应用联动」。
-  # 3. 在「Vault 集群 → Auth / Policy / KV → 应用密钥 · KV v2」的 secret/apps/grafana 写入字段：admin_user、admin_password（可选在「系统设置 → 集群与快照 → Grafana 跳转链接模板」填入地址便于快捷跳转）。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -1430,7 +1657,6 @@ EOT
         volumes = ["local/grafana:/var/lib/grafana"]
       }
 
-      # 依赖 Role "grafana"（explicit 只读 secret/apps/grafana）
       vault {
         role = "grafana"
         env  = false
@@ -1476,10 +1702,23 @@ EOT
     tagsEn: ['Docker', 'Registry'],
     desc: '私有容器镜像仓库与内网镜像缓存（5000 端口），支持删除镜像及切换为 Pull-through Cache',
     descEn: 'Private container registry and pull-through cache (port 5000) with image deletion enabled',
+    requires: [
+      { kind: 'driver', label: 'Docker 驱动', labelEn: 'Docker Driver' },
+      { kind: 'port', label: '端口 5000', labelEn: 'Port 5000' },
+    ],
+    notes: [
+      {
+        title: 'HTTP 推拉镜像或挂载 HTTPS 网关',
+        titleEn: 'Configure insecure-registries or HTTPS gateway',
+        detail: '若宿主机通过 HTTP（非 HTTPS）直接推拉镜像，需在「Docker 引擎」为 daemon.json 配置 insecure-registries，或前方配合网关挂 HTTPS；生产环境建议替换为 Host Volume / CSI 持久卷。',
+        detailEn: 'If pushing/pulling over plain HTTP, configure insecure-registries under Docker Engine, or place an HTTPS gateway in front. Use a persistent volume in production.',
+        optional: false,
+        linkTo: '/docker',
+        linkLabel: '前往 Docker 引擎',
+        linkLabelEn: 'Open Docker Engine',
+      },
+    ],
     hcl: `job "docker-registry" {
-  # 前置依赖：
-  # 1. Nomad Client 节点已启用 docker 驱动，且宿主端口 5000 未被占用。
-  # 2. 若客户端节点通过 HTTP（非 HTTPS）直接推拉镜像，需在「Docker 引擎 → 宿主机矩阵 / 集群策略与滚动升级」为 daemon.json 配置 insecure-registries，或前方配合网关挂 HTTPS。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -1493,7 +1732,6 @@ EOT
       }
     }
 
-    # 生产环境建议将 local/registry 替换为 Host Volume 或 CSI 持久卷。
     ephemeral_disk {
       size   = 4096
       sticky = true
@@ -1522,7 +1760,7 @@ EOT
 
       env {
         REGISTRY_STORAGE_DELETE_ENABLED = "true"
-        # 若用作 Docker Hub 拉取缓存代理，可取消下方注释：
+        # Optional Docker Hub pull-through cache:
         # REGISTRY_PROXY_REMOTEURL = "https://registry-1.docker.io"
       }
 
@@ -1543,8 +1781,10 @@ EOT
     tagsEn: ['raw_exec', 'Lightweight'],
     desc: '无需 Docker，直接在节点运行轻量脚本（需先在节点插件配置中开启 raw_exec 驱动）',
     descEn: 'Runs a lightweight script directly on the host without Docker (requires raw_exec enabled on the Client node)',
+    requires: [
+      { kind: 'driver', label: '需开启 raw_exec 驱动', labelEn: 'Requires raw_exec Driver' },
+    ],
     hcl: `job "hello-shell" {
-  # 前置依赖：需到「Nomad 集群 → 集群配置 → 任务驱动插件」开启「启用 raw_exec」（默认关闭，未开启会卡在 Pending）。
   datacenters = ["dc1"]
   type        = "service"
 
@@ -1573,8 +1813,10 @@ EOT
     tagsEn: ['batch', 'raw_exec'],
     desc: '执行完即退出的短任务示例，可搭配定时周期调度（需开启 raw_exec 驱动）',
     descEn: 'Short-lived batch job example that exits upon completion, pairable with periodic scheduling (requires raw_exec)',
+    requires: [
+      { kind: 'driver', label: '需开启 raw_exec 驱动', labelEn: 'Requires raw_exec Driver' },
+    ],
     hcl: `job "hello-batch" {
-  # 前置依赖：需到「Nomad 集群 → 集群配置 → 任务驱动插件」开启「启用 raw_exec」（默认关闭，未开启会卡在 Pending）。
   datacenters = ["dc1"]
   type        = "batch"
 

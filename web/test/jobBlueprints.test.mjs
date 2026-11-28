@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { STARTER_SAMPLES } from '../src/lib/jobBlueprints.ts';
+import { getBlueprintNotes, getBlueprintRequires, STARTER_SAMPLES } from '../src/lib/jobBlueprints.ts';
 
-test('STARTER_SAMPLES include all expected built-in blueprints with unique ids and valid HCL envelopes', () => {
+test('STARTER_SAMPLES include all expected built-in blueprints with structured prerequisites and clean HCL', () => {
   const ids = STARTER_SAMPLES.map((s) => s.id);
   assert.equal(new Set(ids).size, ids.length, 'blueprint ids must be unique');
 
@@ -31,26 +31,36 @@ test('STARTER_SAMPLES include all expected built-in blueprints with unique ids a
     assert.ok(sample.label.trim().length > 0, `${sample.id} missing label`);
     assert.ok(sample.desc.trim().length > 0, `${sample.id} missing desc`);
     assert.ok(sample.tags.length > 0, `${sample.id} missing tags`);
+    assert.ok(sample.requires.length > 0, `${sample.id} must declare structured requires badges`);
     assert.match(sample.hcl, /^job\s+"[^"]+"\s+\{/, `${sample.id} must start with job block`);
-    assert.ok(sample.hcl.includes('前置依赖'), `${sample.id} must document prerequisite dependencies in HCL comments`);
+    assert.equal(sample.hcl.includes('前置依赖'), false, `${sample.id} should keep prerequisites in structured metadata, not HCL comment walls`);
     assert.ok(!sample.hcl.includes('undefined'), `${sample.id} contains unexpected undefined`);
   }
 
-  for (const id of ['traefik', 'nginx-gateway', 'openresty-gateway', 'acme-cert-sync', 'postgres', 'mysql', 'redis', 'rabbitmq', 'grafana']) {
+  // Vault-backed blueprints declare Vault role/KV requirements in structured metadata and HCL.
+  for (const id of ['acme-cert-sync', 'postgres', 'mysql', 'redis', 'rabbitmq', 'grafana']) {
     const bp = STARTER_SAMPLES.find((s) => s.id === id);
-    assert.ok(bp?.hcl.includes('Role') && bp?.hcl.includes('应用联动'), `${id} must document Vault Role and Apply Integration step`);
+    assert.ok(bp, `missing ${id}`);
+    const reqs = getBlueprintRequires(bp, 'zh');
+    assert.ok(reqs.some((r) => r.kind === 'vault'), `${id} must declare vault requirement badge`);
+    assert.ok(bp.hcl.includes('vault {'), `${id} must include vault block`);
   }
 
+  // Optional advanced gateway / telemetry setup guides live in structured notes.
   const traefik = STARTER_SAMPLES.find((s) => s.id === 'traefik');
+  assert.ok(traefik);
+  const traefikNotes = getBlueprintNotes(traefik, 'zh').map((n) => n.detail).join('\n');
   assert.ok(
-    traefik?.hcl.includes('签发 Client Token') && traefik?.hcl.includes('ACL Policies'),
-    'traefik must document how to issue a Nomad read-only token',
+    traefikNotes.includes('签发 Client Token') && traefikNotes.includes('ACL Policies'),
+    'traefik structured notes must document how to issue a Nomad read-only token',
   );
 
   const prometheus = STARTER_SAMPLES.find((s) => s.id === 'prometheus');
+  assert.ok(prometheus);
+  const promNotes = getBlueprintNotes(prometheus, 'zh').map((n) => n.detail).join('\n');
   assert.ok(
-    prometheus?.hcl.includes('prometheus_metrics') && prometheus?.hcl.includes('签发 Client Token'),
-    'prometheus must document telemetry setting and ACL token acquisition',
+    promNotes.includes('prometheus_metrics') && promNotes.includes('签发 Client Token'),
+    'prometheus structured notes must document telemetry setting and ACL token acquisition',
   );
 
   const rocketmq = STARTER_SAMPLES.find((s) => s.id === 'rocketmq');
@@ -61,10 +71,10 @@ test('STARTER_SAMPLES include all expected built-in blueprints with unique ids a
   const openrestyGw = STARTER_SAMPLES.find((s) => s.id === 'openresty-gateway');
   assert.ok(openrestyGw?.hcl.includes('openresty/openresty:alpine') && openrestyGw?.hcl.includes('ban-check.lua'), 'openresty-gateway must include Lua WAF');
   const acmeSync = STARTER_SAMPLES.find((s) => s.id === 'acme-cert-sync');
-  assert.ok(acmeSync?.hcl.includes('periodic') && acmeSync?.hcl.includes('acme.sh'), 'acme-cert-sync must be a periodic acme.sh job');
+  assert.ok(acmeSync && acmeSync.hcl.includes('periodic') && acmeSync.hcl.includes('acme.sh'), 'acme-cert-sync must be a periodic acme.sh job');
   assert.ok(
-    acmeSync?.hcl.includes('secret/data/certs/tls') && acmeSync?.hcl.includes('"create", "update", "read"'),
-    'acme-cert-sync must document custom Policy HCL in comments',
+    getBlueprintNotes(acmeSync, 'zh').some((n) => n.detail.includes('secret/data/certs/tls')),
+    'acme-cert-sync notes must explain read/write custom policy',
   );
 
   for (const id of ['caddy', 'traefik', 'nginx-gateway', 'openresty-gateway', 'rabbitmq', 'rocketmq', 'prometheus', 'grafana', 'docker_registry']) {

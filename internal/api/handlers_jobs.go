@@ -260,8 +260,13 @@ func (a *API) jobOp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		warns = appendLintWarnings(warns, a.Jobs.InspectJobWarnings(ctx, clusterID, j))
-		preflightErrs := a.Jobs.PreflightJob(ctx, clusterID, j)
-		writeJSON(w, http.StatusOK, map[string]any{"job": j, "warnings": warns, "preflight_errors": preflightErrs})
+		preflightErrs, preflightChecks := a.Jobs.PreflightJobDetailed(ctx, clusterID, j)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"job":              j,
+			"warnings":         warns,
+			"preflight_errors": preflightErrs,
+			"preflight_checks": preflightChecks,
+		})
 	case "plan":
 		var in jobs.PlanInput
 		if !decodeJSON(w, r, &in) {
@@ -432,12 +437,14 @@ func NewVaultInspector(d *db.DB, ints *integration.Service, vlt *vault.Service) 
 				continue
 			}
 			ref := jobs.VaultIntegrationRef{
-				Name:             i.Name,
-				Status:           i.Status,
-				NomadSideEnabled: i.NomadSideEnabled,
-				TargetClusterID:  i.TargetClusterID,
-				ConfigDrifted:    i.ConfigDrifted,
-				DriftReasons:     i.DriftReasons,
+				ID:                i.ID,
+				Name:              i.Name,
+				Status:            i.Status,
+				NomadSideEnabled:  i.NomadSideEnabled,
+				TargetClusterID:   i.TargetClusterID,
+				TargetClusterName: i.TargetCluster,
+				ConfigDrifted:     i.ConfigDrifted,
+				DriftReasons:      i.DriftReasons,
 			}
 			if d != nil {
 				if dst, err := db.GetCluster(ctx, d.Reader, i.TargetClusterID); err == nil && dst != nil {
@@ -456,12 +463,15 @@ func NewVaultInspector(d *db.DB, ints *integration.Service, vlt *vault.Service) 
 			}
 			for _, ro := range i.Roles {
 				ref.Roles = append(ref.Roles, jobs.VaultRoleRef{
+					ID:              ro.ID,
 					RoleName:        ro.RoleName,
+					PolicyName:      ro.PolicyName,
 					Status:          ro.Status,
 					BoundNamespace:  ro.BoundClaims["nomad_namespace"],
 					PolicyMode:      ro.PolicyMode,
 					SecretPaths:     ro.SecretPaths,
 					CustomPolicyHCL: ro.CustomPolicy,
+					TokenPeriod:     ro.TokenPeriod,
 				})
 			}
 			refs = append(refs, ref)

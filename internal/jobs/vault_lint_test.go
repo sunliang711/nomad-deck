@@ -227,3 +227,133 @@ certificatesResolvers:
 		t.Fatalf("expected NOMAD_TOKEN ACL warning for traefik providers.nomad, got: %+v", rep)
 	}
 }
+
+func TestAnalyzeJobRequirementsStructuredChecksAndFixActions(t *testing.T) {
+	// Multi-template job reading the same secret path (like postgres blueprint).
+	pgJob := Job{
+		"Namespace": "default",
+		"TaskGroups": []any{
+			map[string]any{
+				"Name": "database",
+				"Tasks": []any{
+					map[string]any{
+						"Name":  "postgres",
+						"Vault": map[string]any{"Role": "postgres"},
+						"Templates": []any{
+							map[string]any{
+								"DestPath":     "secrets/postgres-password",
+								"EmbeddedTmpl": `{{ with secret "secret/data/apps/postgres" }}{{ .Data.data.password }}{{ end }}`,
+							},
+							map[string]any{
+								"DestPath": "secrets/postgres.env",
+								"EmbeddedTmpl": `{{ with secret "secret/data/apps/postgres" }}
+POSTGRES_USER={{ .Data.data.username | toJSON }}
+POSTGRES_DB={{ .Data.data.database | toJSON }}
+EXTRA={{ or .Data.data.extra_note "" | toJSON }}
+{{ end }}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	igs := []VaultIntegrationRef{{
+		ID:                "ig-1",
+		Name:              "nomad-vault",
+		Status:            "applied",
+		NomadSideEnabled:  true,
+		TargetClusterID:   "vault-1",
+		TargetClusterName: "prod-vault",
+		KVMountsQueried:   true,
+		KVMounts:          []string{"secret"},
+		Roles:             nil,
+	}}
+
+	// Role missing, secret partially exists (only username).
+	rep := AnalyzeJobRequirements(pgJob, igs, "default", func(_, _, _ string) (map[string]bool, bool, error) {
+		return map[string]bool{"username": true}, true, nil
+	}, false)
+
+	var igChk, roleChk, kvChk *PreflightCheck
+	for i := range rep.Checks {
+		switch rep.Checks[i].Kind {
+		case "vault_integration":
+			igChk = &rep.Checks[i]
+		case "vault_role":
+			roleChk = &rep.Checks[i]
+		case "vault_kv_secret":
+			kvChk = &rep.Checks[i]
+		}
+	}
+	if igChk == nil || igChk.Status != "ok" {
+		t.Fatalf("expected ok vault_integration check, got: %+v", igChk)
+	}
+	if roleChk == nil || roleChk.Status != "error" || roleChk.FixAction == nil {
+		t.Fatalf("expected error vault_role check with fix_action, got: %+v", roleChk)
+	}
+	if roleChk.FixAction.Type != "vault_role" || roleChk.FixAction.IntegrationID != "ig-1" || roleChk.FixAction.RoleName != "postgres" {
+		t.Fatalf("unexpected role fix_action: %+v", roleChk.FixAction)
+	}
+	if len(roleChk.FixAction.SecretPaths) != 1 || roleChk.FixAction.SecretPaths[0] != "secret/apps/postgres" {
+		t.Fatalf("expected role secret_paths [secret/apps/postgres], got: %+v", roleChk.FixAction.SecretPaths)
+	}
+	if kvChk == nil || kvChk.Status != "error" || kvChk.FixAction == nil {
+		t.Fatalf("expected error vault_kv_secret check with fix_action, got: %+v", kvChk)
+	}
+	if kvChk.FixAction.Type != "vault_kv" || kvChk.FixAction.VaultClusterID != "vault-1" || kvChk.FixAction.Mount != "secret" || kvChk.FixAction.SecretPath != "apps/postgres" {
+		t.Fatalf("unexpected kv fix_action: %+v", kvChk.FixAction)
+	}
+	// Aggregated required keys across BOTH templates: database, password, username.
+	if got := strings.Join(kvChk.FixAction.RequiredKeys, ","); got != "database,password,username" {
+		t.Fatalf("expected aggregated required_keys database,password,username, got: %s", got)
+	}
+	if got := strings.Join(kvChk.FixAction.MissingKeys, ","); got != "database,password" {
+		t.Fatalf("expected missing_keys database,password, got: %s", got)
+	}
+	if got := strings.Join(kvChk.FixAction.OptionalKeys, ","); got != "extra_note" {
+		t.Fatalf("expected optional_keys extra_note, got: %s", got)
+	}
+
+	// acme-cert-sync write role should synthesize custom_policy_hcl with read + create/update.
+	acmeJob := Job{
+		"Namespace": "default",
+		"TaskGroups": []any{map[string]any{
+			"Name": "acme",
+			"Tasks": []any{map[string]any{
+				"Name":  "renew",
+				"Vault": map[string]any{"Role": "acme-cert-sync"},
+				"Templates": []any{
+					map[string]any{
+						"DestPath": "secrets/acme.env",
+						"EmbeddedTmpl": `{{ with secret "secret/data/certs/dns" }}
+DOMAIN={{ .Data.data.domain | toJSON }}
+VAULT_KV_PATH={{ or .Data.data.vault_kv_path "secret/data/certs/tls" | toJSON }}
+{{ end }}`,
+					},
+					map[string]any{
+						"DestPath":     "local/sync.sh",
+						"EmbeddedTmpl": `curl -fsS -X POST -H "X-Vault-Token: $VAULT_TOKEN" "$BASE_URL/v1/$VAULT_KV_PATH"`,
+					},
+				},
+			}},
+		}},
+	}
+	rep = AnalyzeJobRequirements(acmeJob, igs, "default", func(_, _, _ string) (map[string]bool, bool, error) {
+		return nil, false, nil
+	}, false)
+	var acmeRoleChk *PreflightCheck
+	for i := range rep.Checks {
+		if rep.Checks[i].Kind == "vault_role" {
+			acmeRoleChk = &rep.Checks[i]
+		}
+	}
+	if acmeRoleChk == nil || acmeRoleChk.FixAction == nil {
+		t.Fatalf("expected acme role check with fix action, got: %+v", rep.Checks)
+	}
+	pol := acmeRoleChk.FixAction.CustomPolicyHCL
+	if !strings.Contains(pol, `"secret/data/certs/dns"`) || !strings.Contains(pol, `"secret/data/certs/tls"`) || !strings.Contains(pol, `"create"`) {
+		t.Fatalf("expected synthesized custom policy HCL for acme-cert-sync, got:\n%s", pol)
+	}
+}

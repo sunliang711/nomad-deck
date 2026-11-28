@@ -17,6 +17,8 @@ import {
   STARTER_SAMPLES,
   getBlueprintDesc,
   getBlueprintLabel,
+  getBlueprintNotes,
+  getBlueprintRequires,
   getBlueprintTags,
 } from '../src/lib/jobBlueprints.ts';
 
@@ -75,6 +77,16 @@ describe('i18n helpers', () => {
       assert.equal(/[\u4e00-\u9fff]/.test(labelEn), false, `Han in labelEn for ${bp.id}`);
       assert.equal(/[\u4e00-\u9fff]/.test(descEn), false, `Han in descEn for ${bp.id}`);
       assert.equal(tagsEn.some((t) => /[\u4e00-\u9fff]/.test(t)), false, `Han in tagsEn for ${bp.id}`);
+      for (const req of getBlueprintRequires(bp, 'en')) {
+        assert.equal(/[\u4e00-\u9fff]/.test(req.label), false, `Han in requires labelEn for ${bp.id}: ${req.label}`);
+      }
+      for (const note of getBlueprintNotes(bp, 'en')) {
+        assert.equal(/[\u4e00-\u9fff]/.test(note.title), false, `Han in note titleEn for ${bp.id}: ${note.title}`);
+        assert.equal(/[\u4e00-\u9fff]/.test(note.detail), false, `Han in note detailEn for ${bp.id}: ${note.detail}`);
+        if (note.linkLabel) {
+          assert.equal(/[\u4e00-\u9fff]/.test(note.linkLabel), false, `Han in note linkLabelEn for ${bp.id}: ${note.linkLabel}`);
+        }
+      }
     }
   });
 });

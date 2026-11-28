@@ -41,6 +41,18 @@ test('STARTER_SAMPLES include all expected built-in blueprints with unique ids a
     assert.ok(bp?.hcl.includes('Role') && bp?.hcl.includes('应用联动'), `${id} must document Vault Role and Apply Integration step`);
   }
 
+  const traefik = STARTER_SAMPLES.find((s) => s.id === 'traefik');
+  assert.ok(
+    traefik?.hcl.includes('签发 Client Token') && traefik?.hcl.includes('ACL Policies'),
+    'traefik must document how to issue a Nomad read-only token',
+  );
+
+  const prometheus = STARTER_SAMPLES.find((s) => s.id === 'prometheus');
+  assert.ok(
+    prometheus?.hcl.includes('prometheus_metrics') && prometheus?.hcl.includes('签发 Client Token'),
+    'prometheus must document telemetry setting and ACL token acquisition',
+  );
+
   const rocketmq = STARTER_SAMPLES.find((s) => s.id === 'rocketmq');
   assert.ok(rocketmq?.hcl.includes('${NOMAD_ADDR_namesrv}'), 'rocketmq broker must reference NOMAD_ADDR_namesrv');
 

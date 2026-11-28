@@ -33,6 +33,19 @@ describe('parseKVPath', () => {
 });
 
 describe('buildCustomPolicyPreset', () => {
+  it('accepts multiline paths mixed with commas and blank lines', () => {
+    const res = buildCustomPolicyPreset('from-paths', {
+      policyMode: 'explicit',
+      secretPaths: ' secret/apps/postgres\r\n\r\nsecret/data/apps/mysql, secret/apps/redis\n ',
+    });
+    const expected = buildCustomPolicyPreset('from-paths', {
+      policyMode: 'explicit',
+      secretPaths: 'secret/apps/postgres,secret/data/apps/mysql,secret/apps/redis',
+    });
+    assert.equal(res.hcl, expected.hcl);
+    assert.equal((res.hcl.match(/path "/g) || []).length, 6);
+  });
+
   it('converts explicit paths above into read-only data and metadata HCL blocks', () => {
     const res = buildCustomPolicyPreset('from-paths', {
       fallbackMount: 'kv',

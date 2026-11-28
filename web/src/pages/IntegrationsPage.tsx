@@ -390,7 +390,7 @@ export function IntegrationsPage() {
     setRoleForm({
       role_name: r.role_name || '',
       policy_mode: r.policy_mode || 'explicit',
-      secret_paths: (r.secret_paths || []).join(', '),
+      secret_paths: (r.secret_paths || []).join(r.policy_mode === 'templated' ? ', ' : '\n'),
       custom_policy_hcl: r.custom_policy_hcl || '',
       bound_namespace: r.bound_claims?.nomad_namespace || 'default',
       token_period: r.token_period || '1h',
@@ -418,7 +418,7 @@ export function IntegrationsPage() {
     }
     setRoleForm((prev) => ({
       ...prev,
-      ...(!prev.secret_paths.trim() && suggestedSecretPaths ? { secret_paths: suggestedSecretPaths } : {}),
+      ...(!prev.secret_paths.trim() && suggestedSecretPaths ? { secret_paths: suggestedSecretPaths.split(',').map((p) => p.trim()).join(prev.policy_mode === 'templated' ? ', ' : '\n') } : {}),
       custom_policy_hcl: hcl,
     }));
   };
@@ -430,7 +430,7 @@ export function IntegrationsPage() {
     setErr('');
     try {
       const rawPaths = roleForm.secret_paths
-        .split(',')
+        .split(/[,\r\n]+/)
         .map((s) => s.trim())
         .filter(Boolean);
       const normalizedPaths = roleForm.policy_mode === 'explicit'
@@ -695,7 +695,7 @@ export function IntegrationsPage() {
 
   // Role form live path preview
   const roleParsedPreviews = roleForm.secret_paths
-    .split(',')
+    .split(/[,\r\n]+/)
     .map((s) => s.trim())
     .filter(Boolean)
     .map((raw) => parseKVPath(raw, vaultMounts[0] || 'secret', locale));
@@ -1468,29 +1468,41 @@ export function IntegrationsPage() {
           <Select
             label={tr('授权方式（Policy 模式）', 'Policy Mode')}
             value={roleForm.policy_mode}
-            onChange={(e) => setRoleForm({ ...roleForm, policy_mode: e.target.value })}
+            onChange={(e) => setRoleForm({
+              ...roleForm,
+              policy_mode: e.target.value,
+              secret_paths: roleForm.secret_paths.split(/[,\r\n]+/).map((p) => p.trim()).filter(Boolean).join(e.target.value === 'templated' ? ', ' : '\n'),
+            })}
           >
             <option value="explicit">{tr('指定固定密钥路径（推荐新手，按路径精确授权）', 'Explicit secret paths (recommended, grant exact paths)')}</option>
             <option value="templated">{tr('按任务名自动隔离（读取 挂载/Namespace/Job名 下的密钥）', 'Templated per-job isolation (<mount>/<namespace>/<job>)')}</option>
           </Select>
 
           <div className="space-y-1.5">
-            <Input
-              label={roleForm.policy_mode === 'templated' ? tr('KV 存储空间名称', 'KV Mount Name') : tr('允许读取的 Secret 路径', 'Allowed Secret Paths')}
-              placeholder={
-                roleForm.policy_mode === 'templated'
-                  ? tr('例如 secret', 'e.g. secret')
-                  : tr('例如 secret/apps/postgres（多路径用逗号分隔，目录通配写 secret/apps/*）', 'e.g. secret/apps/postgres (comma-separated, or secret/apps/*)')
-              }
-              hint={
-                roleForm.policy_mode === 'templated'
-                  ? tr('填写 Vault KV v2 挂载名（如 secret），多个用逗号分隔。', 'Vault KV v2 mount name (e.g. secret), comma-separated.')
-                  : tr('格式「挂载名/密钥路径」，多个用逗号分隔（不要写 data/）。注意：路径按精确匹配生效，不会自动包含子路径（如填 secret/apps 只能读 apps 本身，读不到 secret/apps/app）；需读子路径请写全路径，或末尾加 /* 放行整目录（如 secret/apps/*）。', 'Format: "<mount>/<path>", comma-separated (omit data/). Exact paths do not cover nested keys; use /* at the end (e.g. secret/apps/*) to allow a directory.')
-              }
-              required={roleForm.policy_mode === 'explicit' && !roleForm.custom_policy_hcl.trim()}
-              value={roleForm.secret_paths}
-              onChange={(e) => setRoleForm({ ...roleForm, secret_paths: e.target.value })}
-            />
+            {roleForm.policy_mode === 'templated' ? (
+              <Input
+                label={tr('KV 存储空间名称', 'KV Mount Name')}
+                placeholder={tr('例如 secret', 'e.g. secret')}
+                hint={tr('填写 Vault KV v2 挂载名（如 secret），多个用逗号分隔。', 'Vault KV v2 mount name (e.g. secret), comma-separated.')}
+                value={roleForm.secret_paths}
+                onChange={(e) => setRoleForm({ ...roleForm, secret_paths: e.target.value })}
+              />
+            ) : (
+              <label className="block space-y-1.5">
+                <span className="block text-xs font-medium text-slate-700 dark:text-slate-300">{tr('允许读取的 Secret 路径', 'Allowed Secret Paths')}</span>
+                <textarea
+                  className="w-full resize-y rounded-lg border border-[#dce3ee] bg-white px-3 py-2 font-mono text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  rows={4}
+                  placeholder={'secret/apps/postgres\nsecret/apps/mysql\nsecret/apps/*'}
+                  required={!roleForm.custom_policy_hcl.trim()}
+                  value={roleForm.secret_paths}
+                  onChange={(e) => setRoleForm({ ...roleForm, secret_paths: e.target.value })}
+                />
+                <span className="block text-xs text-slate-500">
+                  {tr('格式「挂载名/密钥路径」，每行一条，也支持逗号分隔（不要写 data/）。注意：路径按精确匹配生效，不会自动包含子路径（如填 secret/apps 只能读 apps 本身，读不到 secret/apps/app）；需读子路径请写全路径，或末尾加 /* 放行整目录（如 secret/apps/*）。', 'Format: "<mount>/<path>", one per line or comma-separated (omit data/). Exact paths do not cover nested keys; use /* at the end (e.g. secret/apps/*) to allow a directory.')}
+                </span>
+              </label>
+            )}
             {vaultMounts.length > 0 && (
               <div className="flex flex-wrap items-center gap-1 text-[11px] text-slate-500">
                 <span>{tr('Vault 已有挂载：', 'Available KV Mounts: ')}</span>
@@ -1519,7 +1531,7 @@ export function IntegrationsPage() {
                   onClick={() =>
                     setRoleForm({
                       ...roleForm,
-                      secret_paths: roleParsedPreviews.map((p) => p.rolePath).filter(Boolean).join(', '),
+                      secret_paths: roleParsedPreviews.map((p) => p.rolePath).filter(Boolean).join('\n'),
                     })
                   }
                 >
@@ -1544,7 +1556,7 @@ export function IntegrationsPage() {
                       secret_paths: roleParsedPreviews
                         .map((p) => (p.hasTrailingSlash && p.path && !p.isWildcard ? `${p.rolePath}/*` : p.rolePath))
                         .filter(Boolean)
-                        .join(', '),
+                        .join('\n'),
                     })
                   }
                 >

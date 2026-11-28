@@ -225,7 +225,7 @@ export function buildCustomPolicyPreset(
   const app = (opts.roleName || '').trim().replace(/^\/+|\/+$/g, '') || 'app';
   const defaultAppPath = `apps/${app}`;
   const rawList = (opts.secretPaths || '')
-    .split(',')
+    .split(/[,\r\n]+/)
     .map((s) => s.trim())
     .filter(Boolean);
   const parsedList = rawList.map((raw) => parseKVPath(raw, fallbackMount));
